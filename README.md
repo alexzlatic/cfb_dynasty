@@ -63,6 +63,25 @@ Open the same league in two windows and sim a day in one: the other updates live
 - **Importer** (`importer/`): builds `data/seed/2026wk1/` from CFBD. Team strength is as of Aug 24,
   2026, from the backtest's preseason prior; no 2026 result feeds the sim.
 
+## M1 so far: rated players
+
+- **Players** (`packages/core/src/players.ts`): every player on the 2026 FBS and FCS rosters has 3 to 7
+  position attributes on a 0 to 99 scale (75 = median FBS starter, 8 points = one standard deviation),
+  plus stamina, injury proneness, toughness, discipline, hidden potential and work ethic, and
+  tendencies (QB scramble rate, carry and target shares). Overall is for display only.
+- **Rating real players** (`npm run seed:players`, `packages/core/scripts/rate-players.ts`): a recruiting
+  prior (composite within the class, seasons on the field), 2025 stats with 2024 at half weight
+  (standardized against regulars at the position, discounted for Group of Five and FCS), shrunk by
+  sample size, then each team anchored to its preseason strength: the starters' unit ratings move (by at
+  most 0.9 SD) toward what the team's measured rates need, and the rest stays as the team's scheme
+  offset. Writes `data/seed/2026wk1/players.json` (ratings only; identity stays in `rosters.json`).
+  Depth charts open with each team's real starting QB from its first 2026 game.
+- **Ratings compiler** (`packages/core/src/compiler.ts`): the depth chart's players become the engine's
+  unit rates, named runners and receivers, scramble rate and kicking. With every player at 75 it returns
+  the FBS rates; with each team's seed depth chart it returns that team's preseason ratings exactly, so
+  the season plays at the same strength as M0 while injuries and depth-chart changes now matter.
+- **Checks**: `npm run check:seasons` sims full seasons and counts FBS players reaching real season marks.
+
 ## Data notes
 
 - Logos are fetched from the CFBD CDN by the server and cached in `.logo-cache/`; they are not in the

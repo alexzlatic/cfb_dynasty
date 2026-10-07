@@ -1,3 +1,5 @@
+import type { DepthChart, SchemeOffsets } from "./compiler.ts";
+import type { RatedPlayer } from "./players.ts";
 import type { DriveRecord, PlayRecord, TeamBox, TeamRatings } from "@cfb/engine";
 import type { ISODate } from "./dates.ts";
 
@@ -126,4 +128,13 @@ export interface SeedBundle {
   schedule: ScheduledGame[];
   ratings: Record<string, { source: string; ratings: TeamRatings; points?: number }>;
   power: Record<string, number>;
+  /** Rated players, auto depth charts and scheme offsets by team (players.json); absent in old seeds. */
+  players?: Record<string, TeamPlayers>;
+}
+
+export interface TeamPlayers {
+  scheme: SchemeOffsets;
+  kicking: { fg_skill: number; punt_gross: number };
+  depth: DepthChart;
+  players: RatedPlayer[];
 }

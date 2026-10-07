@@ -1,4 +1,6 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
+import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
+import type { RatedPlayer } from "./players.ts";
 import { addDays, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
@@ -43,6 +45,8 @@ export interface SeasonState {
   stars: Record<number, string>;
   champion: number | null;
   next_game_id: number;
+  /** Depth charts changed from the seed's, by team. */
+  depth?: Record<number, DepthChart>;
 }
 
 export interface DayReport {
@@ -65,11 +69,39 @@ export class Season {
   readonly teams: Team[];
   readonly teamById: Map<number, Team>;
   private ratings: Map<number, TeamRatings>;
+  private seed: SeedBundle;
+  readonly playerById = new Map<number, RatedPlayer>();
+  private compiled = new Map<number, TeamRatings>();
 
   constructor(public state: SeasonState, seed: SeedBundle) {
+    this.seed = seed;
     this.teams = seed.teams;
     this.teamById = new Map(seed.teams.map((t) => [t.id, t]));
     this.ratings = new Map(Object.entries(seed.ratings).map(([k, v]) => [Number(k), v.ratings]));
+    for (const t of Object.values(seed.players ?? {})) for (const p of t.players) this.playerById.set(p.id, p);
+    state.depth ??= {};
+  }
+
+  /** A team's rated players (empty with a seed that has none). */
+  roster(teamId: number): RatedPlayer[] { return this.seed.players?.[teamId]?.players ?? []; }
+  depthChart(teamId: number): DepthChart { return this.state.depth?.[teamId] ?? this.seed.players?.[teamId]?.depth ?? {}; }
+
+  setDepth(teamId: number, depth: DepthChart): void {
+    this.state.depth![teamId] = depth;
+    this.compiled.delete(teamId);
+  }
+
+  /** What the engine plays: the team's lineup compiled into rates, or its team ratings without players. */
+  teamRatings(teamId: number): TeamRatings | undefined {
+    const base = this.ratings.get(teamId);
+    const tp = this.seed.players?.[teamId];
+    if (!base || !tp) return base;
+    let r = this.compiled.get(teamId);
+    if (!r) {
+      r = compileTeam(base, lineup(this.depthChart(teamId), this.playerById), tp.scheme, tp.kicking);
+      this.compiled.set(teamId, r);
+    }
+    return r;
   }
 
   /** A new league on the seed's start date. */
@@ -242,7 +274,7 @@ export class Season {
 
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
-    const home = this.ratings.get(g.home_id), away = this.ratings.get(g.away_id);
+    const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
     if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
     const sim = new GameSim(home, away, { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true }).play();

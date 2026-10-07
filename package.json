@@ -21,7 +21,9 @@
     "season:run": "tsx packages/server/src/cli.ts run-season",
     "bench": "tsx packages/engine/bench.ts",
     "results:check": "tsx packages/core/scripts/results-check.ts",
-    "seed:power": "tsx packages/core/scripts/power.ts"
+    "seed:power": "tsx packages/core/scripts/power.ts",
+    "seed:players": "tsx packages/core/scripts/rate-players.ts",
+    "check:seasons": "tsx packages/core/scripts/season-counts.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
