@@ -65,7 +65,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
           champion: s.champion, upcoming, my_next_game: myGames.find((g) => g.status !== "final") ?? null,
-          ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], cfp_field: s.cfp_field,
+          ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], playoff: s.playoff,
           news: s.news.slice(-12).reverse(),
         };
       }
@@ -99,7 +99,26 @@ export function startServer(opts: ServerOptions, port: number): Server {
       }
       case route === "standings": return lg.standings();
       case route === "polls": return s.polls.map((x) => ({ ...x, ranks: x.ranks.slice(0, 25) }));
-      case route === "news": return s.news.slice(-Number(url.searchParams.get("limit") || 100)).reverse();
+      case route === "news": {
+        const kind = url.searchParams.get("kind"), author = url.searchParams.get("author"), team = url.searchParams.get("team");
+        const skipStories = url.searchParams.get("stories") === "0";
+        return s.news.filter((n) => (!kind || n.kind === kind) && (!author || n.author === Number(author)) &&
+          (!team || n.team_ids.includes(Number(team))) && (!skipStories || n.kind !== "story"))
+          .slice(-Number(url.searchParams.get("limit") || 100)).reverse();
+      }
+      case route === "writers": return s.writers.map(({ voter, ...w }) => ({ ...w, homer: voter.homer }));
+      case p[2] === "writers" && p.length === 4: {
+        const w = s.writers.find((x) => x.id === Number(p[3]));
+        if (!w) throw new HttpError(404, "no such writer");
+        const ballots = (lg.db.prepare("SELECT date, team_ids FROM ballots WHERE writer_id = ? AND poll = 'ap' ORDER BY date").all(w.id) as { date: string; team_ids: string }[])
+          .map((b) => ({ date: b.date, team_ids: JSON.parse(b.team_ids) as number[] }));
+        const { voter, ...profile } = w;
+        return { writer: { ...profile, homer: voter.homer }, ballots, stories: s.news.filter((n) => n.author === w.id).reverse() };
+      }
+      case p[2] === "ballots" && p.length === 4: {
+        const rows = lg.db.prepare("SELECT writer_id, team_ids FROM ballots WHERE date = ? AND poll = 'ap' ORDER BY writer_id").all(p[3]) as { writer_id: number; team_ids: string }[];
+        return rows.map((r) => ({ writer_id: r.writer_id, team_ids: JSON.parse(r.team_ids) }));
+      }
       case route === "calendar": {
         const from = url.searchParams.get("from") || s.date.slice(0, 7) + "-01", to = url.searchParams.get("to") || "9999";
         return { date: s.date, events: s.events.filter((e) => (e.end_date ?? e.date) >= from && e.date <= to) };

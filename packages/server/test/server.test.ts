@@ -32,7 +32,7 @@ describe("full season gate", () => {
     expect(s.games.every((g) => g.status === "final")).toBe(true);
     const byId = new Map(s.games.map((g) => [g.id, g]));
     for (const g of seed.schedule) expect(byId.get(g.id)?.date).toBe(g.date);
-    expect(s.games.filter((g) => g.kind === "cfp_final")).toHaveLength(1);
+    expect(s.games.filter((g) => g.title)).toHaveLength(1);
     expect(s.champion).not.toBeNull();
     expect(lg.season.done).toBe(true);
   });

@@ -1,0 +1,46 @@
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team } from "@cfb/core";
+
+export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team };
+export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
+
+export interface LeagueState {
+  id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
+  champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
+  cfp_field: { seed: number; team_id: number }[] | null; news: NewsItem[];
+}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(path, init);
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body as T;
+}
+
+export const api = {
+  leagues: () => req<{ id: string; name: string; date: string; user_team_id: number | null }[]>("/api/leagues"),
+  seedTeams: () => req<Team[]>("/api/seed/teams"),
+  createLeague: (name: string, team_id: number | null) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id }) }),
+  state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
+  teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
+  team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null }>(`/api/leagues/${id}/teams/${tid}`),
+  schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
+  game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null }>(`/api/leagues/${id}/games/${gid}`),
+  standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
+  polls: (id: string) => req<Poll[]>(`/api/leagues/${id}/polls`),
+  news: (id: string) => req<NewsItem[]>(`/api/leagues/${id}/news?limit=300`),
+  calendar: (id: string, from: string, to: string) => req<{ date: string; events: CalEvent[] }>(`/api/leagues/${id}/calendar?from=${from}&to=${to}`),
+  act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),
+};
+
+/** Live updates: calls `onChange` whenever any client changes this league. */
+export function subscribe(league: string, onChange: (msg: any) => void): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  const connect = () => {
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws?league=${league}`);
+    ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type !== "hello") onChange(m); };
+    ws.onclose = () => { if (!closed) setTimeout(connect, 1500); };
+  };
+  connect();
+  return () => { closed = true; ws?.close(); };
+}

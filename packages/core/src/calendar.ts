@@ -1,5 +1,6 @@
 import { addDays, nthWeekday, weekday, type ISODate } from "./dates.ts";
-import type { CalEvent, EventType, ScheduledGame } from "./types.ts";
+import { mainRounds } from "./playoff.ts";
+import type { CalEvent, EventType, PlayoffSettings, ScheduledGame } from "./types.ts";
 
 interface Rule {
   type: EventType;
@@ -24,20 +25,11 @@ const sundays = (from: ISODate, to: ISODate) => {
  */
 export const RULES: Rule[] = [
   { type: "ap_poll", label: "AP poll", active: true, dates: (y, c) => sundays(`${y}-08-30`, addDays(c.lastRegular, 8)) },
-  {
-    type: "cfp_rankings", label: "CFP rankings", approx: true, active: true,
-    dates: (y) => { const out = []; for (let d = nthWeekday(y, 11, 2, 1); d <= `${y}-12-01`; d = addDays(d, 7)) out.push({ date: d }); return out; },
-  },
   { type: "early_signing", label: "Early signing period", dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
   { type: "conf_championships", label: "Conference championships", active: true, dates: (y) => [{ date: nthWeekday(y, 12, 6, 1) }] },
-  { type: "cfp_selection", label: "CFP selection", active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 1) }] },
-  { type: "cfp_first_round", label: "CFP first round", approx: true, active: true, dates: (y) => [{ date: `${y}-12-18`, end: `${y}-12-19` }] },
   { type: "bowls", label: "Bowl season", approx: true, dates: (y) => [{ date: `${y}-12-19`, end: `${y + 1}-01-04` }] },
-  { type: "cfp_quarterfinals", label: "CFP quarterfinals", approx: true, active: true, dates: (y) => [{ date: `${y}-12-31`, end: `${y + 1}-01-01` }] },
   { type: "portal_window", label: "Transfer portal window", dates: (y) => [{ date: `${y + 1}-01-02`, end: `${y + 1}-01-16` }] },
-  { type: "cfp_semifinals", label: "CFP semifinals", approx: true, active: true, dates: (y) => [{ date: `${y + 1}-01-08`, end: `${y + 1}-01-09` }] },
   { type: "draft_deadline", label: "NFL draft declaration deadline", approx: true, dates: (y) => [{ date: `${y + 1}-01-15` }] },
-  { type: "cfp_final", label: "CFP national championship", approx: true, active: true, dates: (y) => [{ date: `${y + 1}-01-25` }] },
   { type: "season_end", label: "Season complete", active: true, dates: (y) => [{ date: `${y + 1}-01-26` }] },
   { type: "spring_practice", label: "Spring practice", dates: (y) => [{ date: `${y + 1}-03-01`, end: `${y + 1}-04-25` }] },
   { type: "nfl_draft", label: "NFL draft", approx: true, dates: (y) => [{ date: nthWeekday(y + 1, 4, 4, 4), end: addDays(nthWeekday(y + 1, 4, 4, 4), 2) }] },
@@ -45,8 +37,40 @@ export const RULES: Rule[] = [
   { type: "fall_camp", label: "Fall camp opens", dates: (y) => [{ date: nthWeekday(y + 1, 8, 1, 1) }] },
 ];
 
+/** Postseason round dates counted back from the title game (approx. until the real calendar is set). */
+const ROUND_DATES = (y: number): { date: ISODate; end?: ISODate }[] => [
+  { date: `${y + 1}-01-25` }, { date: `${y + 1}-01-08`, end: `${y + 1}-01-09` }, { date: `${y}-12-31`, end: `${y + 1}-01-01` },
+  { date: `${y}-12-18`, end: `${y}-12-19` }, { date: `${y}-12-11`, end: `${y}-12-12` },
+];
+
+/** Rankings, selection and round events for the chosen postseason format. */
+export function postseasonEvents(year: number, p: PlayoffSettings): CalEvent[] {
+  const mk = (type: EventType, label: string, date: ISODate, end: ISODate | null, extra: Partial<CalEvent> = {}): CalEvent => ({
+    id: `${year}:${type}:${date}`, date, end_date: end, type, scope: "league", label, status: "upcoming", needs_you: false,
+    approx: true, active: true, ...extra,
+  });
+  const champDay = nthWeekday(year, 12, 6, 1);
+  const out: CalEvent[] = [];
+  if (p.format === "playoff") {
+    for (let d = nthWeekday(year, 11, 2, 1); d < champDay; d = addDays(d, 7)) out.push(mk("cfp_rankings", "CFP rankings", d, null));
+    out.push(mk("selection", `Selection day: ${p.teams}-team playoff`, addDays(champDay, 1), null, { approx: false }));
+    const rounds = (p.byes > 0 ? 1 : 0) + mainRounds(p.teams, p.byes);
+    const names = ["National championship", "Playoff semifinals", "Playoff quarterfinals", "Playoff second round", "Playoff first round"];
+    for (let r = 0; r < rounds; r++) {
+      const { date, end } = ROUND_DATES(year)[r];
+      const label = r === rounds - 1 && r >= 3 ? "Playoff first round" : names[r];
+      out.push(mk(r === 0 ? "title_game" : "playoff_round", label, date, end ?? null, { rounds_from_end: r }));
+    }
+  } else if (p.format === "bcs") {
+    for (let d = nthWeekday(year, 10, 0, 3); d <= addDays(champDay, 1); d = addDays(d, 7)) out.push(mk("bcs_standings", "BCS standings", d, null));
+    out.push(mk("selection", "BCS selection", addDays(champDay, 1), null, { approx: false }));
+    out.push(mk("title_game", "BCS National Championship", ROUND_DATES(year)[0].date, null, { rounds_from_end: 0 }));
+  }
+  return out;
+}
+
 /** Every dated event for the season starting `start` (dynasty start, game days, then the rules). */
-export function seasonEvents(year: number, start: ISODate, schedule: ScheduledGame[]): CalEvent[] {
+export function seasonEvents(year: number, start: ISODate, schedule: ScheduledGame[], playoff: PlayoffSettings): CalEvent[] {
   const lastRegular = schedule.reduce((m, g) => (g.date > m ? g.date : m), start);
   const ev: CalEvent[] = [{
     id: `${year}:dynasty_start`, date: start, end_date: null, type: "dynasty_start", scope: "league",
@@ -64,5 +88,10 @@ export function seasonEvents(year: number, start: ISODate, schedule: ScheduledGa
         status: "upcoming", needs_you: false, approx: !!r.approx, active: !!r.active });
     }
   }
+  ev.push(...postseasonEvents(year, playoff));
+  return sortEvents(ev);
+}
+
+export function sortEvents(ev: CalEvent[]): CalEvent[] {
   return ev.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
 }

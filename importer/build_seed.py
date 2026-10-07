@@ -302,6 +302,30 @@ def calibrate_scale(games: int = 3000) -> float:
     return (out[20.0] - out[-20.0]) / 40.0
 
 
+# ---- brand prestige -------------------------------------------------------------------------
+def add_prestige(teams, refresh: bool) -> None:
+    """0-100 brand score that poll voters lean on: 2021-25 win % and 2022-26 recruiting class points,
+    each as a percentile among FBS teams, weighted 45/55. FCS programs sit at 5-25 by win %."""
+    wins, recs = defaultdict(lambda: [0, 0]), defaultdict(list)
+    for y in range(2021, 2026):
+        for r in pull(f"/records?year={y}", refresh):
+            wins[r.get("teamId")][0] += r["total"]["wins"]
+            wins[r.get("teamId")][1] += r["total"]["games"]
+    for y in range(2022, 2027):
+        for r in pull(f"/recruiting/teams?year={y}", refresh):
+            recs[r["team"]].append(r["points"])
+    wp = {t["id"]: wins[t["id"]][0] / max(1, wins[t["id"]][1]) for t in teams}
+    rp = {t["id"]: statistics.mean(recs[t["school"]]) if recs[t["school"]] else 0.0 for t in teams}
+    fbs = [t for t in teams if t["level"] == "fbs"]
+    pct = lambda vals, v: sum(1 for x in vals if x < v) / max(1, len(vals) - 1)  # noqa: E731
+    wv, rv = [wp[t["id"]] for t in fbs], [rp[t["id"]] for t in fbs]
+    for t in teams:
+        if t["level"] == "fbs":
+            t["prestige"] = round(100 * (0.45 * pct(wv, wp[t["id"]]) + 0.55 * pct(rv, rp[t["id"]])), 1)
+        else:
+            t["prestige"] = round(5 + 20 * wp[t["id"]], 1)
+
+
 # ---- main -------------------------------------------------------------------------------------
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -345,6 +369,7 @@ def main() -> None:
                                 "ratings": scaled_team(pts, t["school"], t["abbr"], rosters.get(t["id"], []))}
     write("team_ratings_all.json", {"season": SEASON, "as_of": "2026-08-24", "teams": ratings})
 
+    add_prestige(teams, args.refresh)
     write("teams.json", teams)
     write("conferences.json", conferences)
     write("rosters.json", {str(k): v for k, v in rosters.items()})

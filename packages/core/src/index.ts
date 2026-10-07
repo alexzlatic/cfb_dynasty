@@ -6,3 +6,6 @@ export * from "./ranking.ts";
 export * from "./season.ts";
 export * from "./controls.ts";
 export * from "./seed.ts";
+export * from "./polls.ts";
+export * from "./playoff.ts";
+export * from "./writers.ts";

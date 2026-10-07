@@ -34,6 +34,14 @@ const MIGRATIONS: string[] = [
   CREATE TABLE actions (seq INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, user TEXT, team_id INTEGER, type TEXT NOT NULL,
                         payload TEXT NOT NULL, created_at TEXT NOT NULL);
   `,
+  // 2: AP voters are beat writers with ballots and stories
+  `
+  CREATE TABLE writers (id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+  CREATE TABLE ballots (date TEXT NOT NULL, poll TEXT NOT NULL, writer_id INTEGER NOT NULL, team_ids TEXT NOT NULL, PRIMARY KEY (date, poll, writer_id));
+  CREATE INDEX ballots_writer ON ballots(writer_id);
+  ALTER TABLE news ADD COLUMN author INTEGER;
+  CREATE INDEX news_author ON news(author);
+  `,
 ];
 
 export function openDb(path: string): DatabaseSync {

@@ -19,7 +19,8 @@ export type Push =
   | { type: "days"; from: string; to: string; played: number; stop: string | null; news: { headline: string; body: string; date: string }[] };
 
 const j = JSON.stringify;
-const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "conf_champs", "cfp_field", "champion", "next_game_id"] as const;
+const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
+  "champion", "next_game_id", "stars"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -47,6 +48,7 @@ export class League {
       ins("INSERT INTO team_strength (team_id, as_of, source, data) VALUES (?, ?, ?, ?)",
         Object.entries(seed.ratings).map(([tid, r]) => [Number(tid), seed.start_date, r.source, j(r.ratings)]));
       lg.writeMeta(); lg.db.prepare("INSERT INTO meta (key, value) VALUES ('name', ?)").run(j(opts.name));
+      ins("INSERT INTO writers (id, data) VALUES (?, ?)", lg.season.state.writers.map((w) => [w.id, j(w)]));
       const g = db.prepare("INSERT INTO games (id, date, kind, home_id, away_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)");
       for (const x of lg.season.state.games) g.run(x.id, x.date, x.kind, x.home_id, x.away_id, x.status, j(x));
       const e = db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?)");
@@ -70,7 +72,9 @@ export class League {
     const all = <T>(sql: string) => (db.prepare(sql).all() as { data: string }[]).map((r) => JSON.parse(r.data) as T);
     const state: SeasonState = {
       year: meta.year, seed: meta.seed, date: meta.date, settings: meta.settings, user_team_id: meta.user_team_id, power: meta.power,
-      conf_champs: meta.conf_champs, cfp_field: meta.cfp_field, champion: meta.champion, next_game_id: meta.next_game_id,
+      preseason_power: meta.preseason_power, poll_memory: meta.poll_memory, conf_champs: meta.conf_champs, playoff: meta.playoff,
+      champion: meta.champion, next_game_id: meta.next_game_id, stars: meta.stars ?? {},
+      writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
       polls: all("SELECT data FROM polls ORDER BY id"),
@@ -107,7 +111,12 @@ export class League {
     const logged = tx(this.db, () => {
       const l = this.log(a, user);
       if (a.type === "set_user_team") s.user_team_id = a.payload.team_id;
-      if (a.type === "update_settings") s.settings = { ...s.settings, ...a.payload };
+      if (a.type === "update_settings") {
+        this.season.updateSettings(a.payload);
+        this.db.exec("DELETE FROM events");
+        const e = this.db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?)");
+        for (const x of s.events) e.run(x.id, x.date, x.type, x.status, j(x));
+      }
       if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       this.writeMeta();
       return l;
@@ -141,8 +150,10 @@ export class League {
     for (const x of [...r.fired, ...r.new_events, ...touched]) e.run(x.id, x.date, x.type, x.status, j(x));
     const p = db.prepare("INSERT INTO polls (date, type, data) VALUES (?, ?, ?)");
     for (const x of r.polls) p.run(x.date, x.type, j(x));
-    const n = db.prepare("INSERT OR REPLACE INTO news (id, date, kind, data) VALUES (?, ?, ?, ?)");
-    for (const x of r.news) n.run(x.id, x.date, x.kind, j(x));
+    const n = db.prepare("INSERT OR REPLACE INTO news (id, date, kind, author, data) VALUES (?, ?, ?, ?, ?)");
+    for (const x of r.news) n.run(x.id, x.date, x.kind, x.author ?? null, j(x));
+    const b = db.prepare("INSERT OR REPLACE INTO ballots (date, poll, writer_id, team_ids) VALUES (?, ?, ?, ?)");
+    for (const x of r.ballots) b.run(x.date, x.poll, x.writer_id, j(x.team_ids));
   }
 
   // ---- reads ---------------------------------------------------------------------------------

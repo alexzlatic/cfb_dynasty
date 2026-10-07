@@ -1,12 +1,26 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { addDays, type ISODate } from "./dates.ts";
-import { seasonEvents } from "./calendar.ts";
+import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
-import { rankTeams, records, updatePower } from "./ranking.ts";
+import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
+import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
+import { records, updatePower } from "./ranking.ts";
+import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
-  DEFAULT_SETTINGS, type CalEvent, type Game, type GameDetail, type GameKind, type NewsItem, type Poll, type SeedBundle,
+  DEFAULT_SETTINGS, type Ballot, type CalEvent, type Game, type GameDetail, type GameKind, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team,
 } from "./types.ts";
+
+export interface Seeded { seed: number; team_id: number }
+
+export interface PlayoffState {
+  format: Settings["playoff"]["format"];
+  field: Seeded[];
+  /** Rounds in the whole event, the last one built, and the teams still alive in bracket order. */
+  rounds: number;
+  round: number;
+  alive: Seeded[] | null;
+}
 
 /** Everything that changes as the season runs. Plain data, so the server can persist and reload it. */
 export interface SeasonState {
@@ -20,8 +34,13 @@ export interface SeasonState {
   polls: Poll[];
   news: NewsItem[];
   power: Record<number, number>;
+  preseason_power: Record<number, number>;
+  poll_memory: Record<string, PanelMemory>;
   conf_champs: Record<string, number>;
-  cfp_field: { seed: number; team_id: number }[] | null;
+  playoff: PlayoffState | null;
+  /** AP voters, and a line on each team's best player in its latest game (for their stories). */
+  writers: Writer[];
+  stars: Record<number, string>;
   champion: number | null;
   next_game_id: number;
 }
@@ -34,6 +53,7 @@ export interface DayReport {
   new_games: Game[];
   new_events: CalEvent[];
   polls: Poll[];
+  ballots: Ballot[];
   news: NewsItem[];
   stop: string | null;
 }
@@ -61,17 +81,21 @@ export class Season {
     }));
     const power: Record<number, number> = {};
     for (const t of seed.teams) power[t.id] = seed.power[t.id] ?? 0;
+    const settings: Settings = { ...DEFAULT_SETTINGS, ...opts.settings, playoff: { ...DEFAULT_SETTINGS.playoff, ...opts.settings?.playoff } };
+    const bad = validatePlayoff(settings.playoff);
+    if (bad) throw new Error(bad);
     const state: SeasonState = {
-      year: seed.season, seed: opts.seed >>> 0, date: seed.start_date, settings: { ...DEFAULT_SETTINGS, ...opts.settings },
-      user_team_id: opts.user_team_id ?? null, games, events: seasonEvents(seed.season, seed.start_date, seed.schedule),
-      polls: [], news: [], power, conf_champs: {}, cfp_field: null, champion: null, next_game_id: 9_000_001,
+      year: seed.season, seed: opts.seed >>> 0, date: seed.start_date, settings,
+      user_team_id: opts.user_team_id ?? null, games, events: seasonEvents(seed.season, seed.start_date, seed.schedule, settings.playoff),
+      polls: [], news: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      next_game_id: 9_000_001, writers: generateWriters(seed.teams, seed.rosters, opts.seed >>> 0), stars: {},
     };
     return new Season(state, seed);
   }
 
   get done(): boolean { return this.state.events.some((e) => e.type === "season_end" && e.status === "done"); }
   team(id: number): Team { return this.teamById.get(id)!; }
-  latestPoll(type: "ap" | "cfp" = "ap"): Poll | null {
+  latestPoll(type: Poll["type"] = "ap"): Poll | null {
     for (let i = this.state.polls.length - 1; i >= 0; i--) if (this.state.polls[i].type === type) return this.state.polls[i];
     return null;
   }
@@ -81,11 +105,31 @@ export class Season {
     return i >= 0 && i < 25 ? i + 1 : null;
   }
 
+  /**
+   * Change settings. Playoff format changes rebuild the postseason calendar until selection day;
+   * after that they apply from next season.
+   */
+  updateSettings(patch: Partial<Settings>): void {
+    const s = this.state;
+    const next: Settings = { ...s.settings, ...patch, playoff: { ...s.settings.playoff, ...patch.playoff } };
+    const bad = validatePlayoff(next.playoff);
+    if (bad) throw new Error(bad);
+    if (JSON.stringify(next.playoff) !== JSON.stringify(s.settings.playoff)) {
+      if (s.playoff || s.events.some((e) => e.type === "selection" && e.status === "done")) {
+        throw new Error("the postseason has started; playoff changes apply from next season");
+      }
+      const POST = new Set(["cfp_rankings", "bcs_standings", "selection", "playoff_round", "title_game"]);
+      s.events = sortEvents([...s.events.filter((e) => !POST.has(e.type) || e.status === "done"),
+        ...postseasonEvents(s.year, next.playoff).filter((e) => e.date >= s.date)]);
+    }
+    s.settings = next;
+  }
+
   /** Run today in the fixed order (morning events, actions, day processing, evening games), then move to tomorrow. */
   advanceDay(): DayReport {
     const s = this.state;
     const today = s.date;
-    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], news: [], stop: null };
+    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], ballots: [], news: [], stop: null };
 
     // 1. Morning: scheduled events fire.
     for (const e of s.events) {
@@ -108,42 +152,83 @@ export class Season {
   }
 
   // ---- events --------------------------------------------------------------------------------
+  private poll(type: "ap" | "coaches" | "cfp", date: ISODate, spec: PanelSpec, champion: number | null = null, rep?: DayReport): Poll {
+    const s = this.state;
+    const { ballots, ...poll } = runPoll({ voters: type === "ap" ? s.writers.map((w) => w.voter) : undefined,
+      date, type, teams: this.teams, games: s.games, power: s.power, preseason: s.preseason_power,
+      champs: new Set(Object.values(s.conf_champs)), hfa: s.settings.home_field_points, seed: s.seed, spec,
+      memory: (s.poll_memory[type] ??= {}), biasScale: s.settings.poll_bias, noiseScale: s.settings.poll_noise, champion,
+    });
+    s.polls.push(poll);
+    if (type === "ap" && rep) ballots.forEach((team_ids, i) => rep.ballots.push({ date, poll: "ap", writer_id: s.writers[i].id, team_ids }));
+    return poll;
+  }
+
+  /** Every writer files a story on their beat after the AP poll. */
+  private stories(poll: Poll, prev: Poll | null, rep: DayReport): void {
+    const s = this.state;
+    const recs = records(s.games, this.teams);
+    for (const w of s.writers) {
+      const ballot = rep.ballots.find((b) => b.writer_id === w.id && b.date === poll.date)?.team_ids ?? [];
+      const st = writeStory(w, { date: poll.date, teams: this.teamById, games: s.games, poll, prev, ballot, records: recs, stars: s.stars, seed: s.seed });
+      const n = this.news(poll.date, "story", st.headline, st.body, st.team_ids);
+      n.author = w.id;
+      rep.news.push(n);
+    }
+  }
+
+  private top(poll: Poll, n: number): string {
+    return poll.ranks.slice(0, n).map((r, i) => `${i + 1}. ${this.team(r.team_id).school}`).join(", ");
+  }
+
   private fire(e: CalEvent, rep: DayReport): void {
     const s = this.state;
     switch (e.type) {
       case "dynasty_start":
       case "ap_poll": {
-        const poll: Poll = { date: e.date, type: "ap", ranks: rankTeams(this.teams, s.games, s.power, new Set(Object.values(s.conf_champs))) };
         const prev = this.latestPoll("ap");
-        s.polls.push(poll);
-        rep.polls.push(poll);
+        const poll = this.poll("ap", e.date, AP_PANEL, null, rep);
+        rep.polls.push(poll, this.poll("coaches", e.date, { ...AP_PANEL, size: 66 }));
         const top = this.team(poll.ranks[0].team_id);
-        const prevTop = prev?.ranks[0].team_id;
-        rep.news.push(this.news(e.date, "poll", prev ? (prevTop === top.id ? `${top.school} stays No. 1 in the AP poll` : `${top.school} takes over No. 1 in the AP poll`)
-          : `${top.school} opens the season No. 1 in the AP poll`, poll.ranks.slice(0, 5).map((r, i) => `${i + 1}. ${this.team(r.team_id).school}`).join(", "), [top.id]));
+        const firsts = poll.ranks[0].first ?? 0;
+        rep.news.push(this.news(e.date, "poll", prev ? (prev.ranks[0].team_id === top.id ? `${top.school} stays No. 1 in the AP poll` : `${top.school} takes over No. 1 in the AP poll`)
+          : `${top.school} opens the season No. 1 in the AP poll`, `${firsts} of ${poll.voters} first-place votes. ${this.top(poll, 5)}`, [top.id]));
+        this.stories(poll, prev, rep);
         break;
       }
       case "cfp_rankings": {
-        const poll: Poll = { date: e.date, type: "cfp", ranks: rankTeams(this.teams, s.games, s.power, new Set(Object.values(s.conf_champs))) };
-        s.polls.push(poll);
+        const poll = this.poll("cfp", e.date, COMMITTEE_PANEL);
         rep.polls.push(poll);
-        rep.news.push(this.news(e.date, "cfp", `CFP rankings: ${this.team(poll.ranks[0].team_id).school} is No. 1`,
-          poll.ranks.slice(0, 12).map((r, i) => `${i + 1}. ${this.team(r.team_id).school}`).join(", "), [poll.ranks[0].team_id]));
+        rep.news.push(this.news(e.date, "cfp", `CFP rankings: ${this.team(poll.ranks[0].team_id).school} is No. 1`, this.top(poll, 12), [poll.ranks[0].team_id]));
         break;
       }
-      case "cfp_selection": this.selectPlayoff(e.date, rep); break;
+      case "bcs_standings": {
+        const poll = this.bcs(e.date);
+        rep.polls.push(poll);
+        rep.news.push(this.news(e.date, "bcs", `BCS standings: ${this.team(poll.ranks[0].team_id).school} is No. 1`, this.top(poll, 10), [poll.ranks[0].team_id]));
+        break;
+      }
+      case "selection": this.select(e.date, rep); break;
       case "season_end": {
-        if (s.champion != null) {
-          const poll: Poll = { date: e.date, type: "ap", ranks: rankTeams(this.teams, s.games, s.power, new Set(Object.values(s.conf_champs))) };
-          const i = poll.ranks.findIndex((r) => r.team_id === s.champion);
-          if (i > 0) poll.ranks.unshift(...poll.ranks.splice(i, 1));
-          s.polls.push(poll);
-          rep.polls.push(poll);
+        const poll = this.poll("ap", e.date, AP_PANEL, s.champion, rep);
+        if (s.champion == null) {
+          s.champion = poll.ranks[0].team_id;
+          rep.news.push(this.news(e.date, "champion", `${this.team(s.champion).school} is the AP national champion`, this.top(poll, 5), [s.champion]));
         }
+        rep.polls.push(poll);
         break;
       }
       default: break;
     }
+  }
+
+  private bcs(date: ISODate): Poll {
+    const s = this.state;
+    const ap = this.latestPoll("ap") ?? this.poll("ap", date, AP_PANEL);
+    const co = this.latestPoll("coaches") ?? this.poll("coaches", date, { ...AP_PANEL, size: 66 });
+    const poll = bcsStandings(date, ap, co, this.teams, s.games, s.power);
+    s.polls.push(poll);
+    return poll;
   }
 
   // ---- games ---------------------------------------------------------------------------------
@@ -172,8 +257,12 @@ export class Season {
       home_q: r.home.qscores, away_q: r.away.qscores, drives: r.drives ?? [], plays: this.keepPlays(g) ? r.plays ?? null : null,
     });
     updatePower(s.power, g, s.settings.home_field_points);
+    for (const [id, side] of [[g.home_id, r.home], [g.away_id, r.away]] as const) {
+      const line = starLine(side.players as Record<string, Record<string, number>>, this.team(id).school);
+      if (line) s.stars[id] = line;
+    }
     this.recap(g, rankH, rankA, rep);
-    if (g.kind === "cfp_final") {
+    if (g.title) {
       s.champion = g.home_score! > g.away_score! ? g.home_id : g.away_id;
       const c = this.team(s.champion);
       rep.news.push(this.news(g.date, "champion", `${c.school} wins the national championship`, this.scoreLine(g), [c.id]));
@@ -230,35 +319,35 @@ export class Season {
   private eventDate(type: CalEvent["type"]): ISODate {
     return this.state.events.find((e) => e.type === type)!.date;
   }
-  private eventEnd(type: CalEvent["type"]): ISODate {
-    const e = this.state.events.find((x) => x.type === type)!;
-    return e.end_date ?? e.date;
-  }
   private has(kind: GameKind): Game[] { return this.state.games.filter((g) => g.kind === kind); }
 
   private buildPostseason(rep: DayReport): void {
     const s = this.state;
-    // Conference title games, once every conference game is final.
-    // Conference games after championship weekend (Army-Navy) do not hold up the title games, as in real life.
+    // Conference title games, once every conference game before championship weekend is final
+    // (Army-Navy, a conference game played after it, does not hold them up, as in real life).
     const champDay = this.eventDate("conf_championships");
     if (s.settings.conf_title_games && this.has("conf_champ").length === 0 && s.date < champDay &&
         s.games.every((g) => g.kind !== "regular" || !g.conference_game || g.date >= champDay || g.status === "final")) {
       this.buildConfTitles(rep);
     }
-    // Conference champions (no title game: best conference record).
     const titles = this.has("conf_champ");
-    if (Object.keys(s.conf_champs).length === 0 && s.date >= this.eventDate("conf_championships") &&
-        titles.every((g) => g.status === "final") && (titles.length > 0 || !s.settings.conf_title_games)) {
+    if (Object.keys(s.conf_champs).length === 0 && s.date > champDay && titles.every((g) => g.status === "final")) {
       this.crownChampions(titles, rep);
     }
-    // Playoff rounds.
-    const r1 = this.has("cfp_r1"), qf = this.has("cfp_qf"), sf = this.has("cfp_sf");
-    if (s.cfp_field && r1.length && r1.every((g) => g.status === "final") && qf.length === 0) this.buildQuarterfinals(r1, rep);
-    if (qf.length && qf.every((g) => g.status === "final") && sf.length === 0) this.buildSemifinals(qf, rep);
-    if (sf.length && sf.every((g) => g.status === "final") && this.has("cfp_final").length === 0) {
-      const [a, b] = sf.map((g) => this.winnerSeed(g));
-      const [hi, lo] = a.seed < b.seed ? [a, b] : [b, a];
-      this.addGame(rep, { kind: "cfp_final", date: this.eventDate("cfp_final"), home_id: hi.team_id, away_id: lo.team_id, neutral: true, venue: null, label: "CFP National Championship", home_seed: hi.seed, away_seed: lo.seed });
+    // Next playoff round once the current one is final.
+    const p = s.playoff;
+    if (p && p.round > 0 && p.round < p.rounds) {
+      const cur = s.games.filter((g) => g.kind === "playoff" && g.round === p.round);
+      if (cur.length && cur.every((g) => g.status === "final")) {
+        if (p.alive == null) {
+          // After the opening round: byes keep their slots, winners take their higher seed's slot.
+          const winners = new Map(cur.map((g) => [g.home_seed!, this.winner(g)]));
+          p.alive = bracketOrder(slotCount(p.field.length, s.settings.playoff.byes)).map((seed) => winners.get(seed) ?? p.field[seed - 1]);
+        } else {
+          p.alive = cur.sort((a, b) => a.id - b.id).map((g) => this.winner(g));
+        }
+        this.buildRound(rep);
+      }
     }
   }
 
@@ -299,7 +388,7 @@ export class Season {
 
   private crownChampions(titles: Game[], rep: DayReport): void {
     const s = this.state;
-    for (const g of titles) s.conf_champs[this.team(g.home_id).conference] = g.home_score! > g.away_score! ? g.home_id : g.away_id;
+    for (const g of titles) s.conf_champs[this.team(g.home_id).conference] = this.winner(g).team_id;
     if (titles.length === 0) {
       const confs = new Set(this.teams.filter((t) => t.level === "fbs" && t.conference !== INDEPENDENT).map((t) => t.conference));
       for (const c of confs) s.conf_champs[c] = this.confStandings(c, this.teams.filter((t) => t.conference === c))[0].t.id;
@@ -309,57 +398,67 @@ export class Season {
     }
   }
 
-  private selectPlayoff(date: ISODate, rep: DayReport): void {
+  private select(date: ISODate, rep: DayReport): void {
     const s = this.state;
+    const p = s.settings.playoff;
     if (Object.keys(s.conf_champs).length === 0) this.crownChampions(this.has("conf_champ").filter((g) => g.status === "final"), rep);
+    if (p.format === "bowls") {
+      rep.news.push(this.news(date, "selection", "Bowl pairings are announced", "Bowl games are simulated from M1; the final AP poll crowns the champion.", []));
+      return;
+    }
+    if (p.format === "bcs") {
+      const st = this.bcs(date);
+      rep.polls.push(st);
+      const [a, b] = st.ranks;
+      s.playoff = { format: "bcs", field: [{ seed: 1, team_id: a.team_id }, { seed: 2, team_id: b.team_id }], rounds: 1, round: 0, alive: null };
+      s.playoff.alive = s.playoff.field;
+      rep.news.push(this.news(date, "selection", `${this.team(a.team_id).school} and ${this.team(b.team_id).school} will play for the BCS title`, this.top(st, 10), [a.team_id, b.team_id]));
+      this.buildRound(rep);
+      return;
+    }
+    const ranking = this.poll("cfp", date, COMMITTEE_PANEL);
+    rep.polls.push(ranking);
     const champs = new Set(Object.values(s.conf_champs));
-    const ranks = rankTeams(this.teams, s.games, s.power, champs);
-    const poll: Poll = { date, type: "cfp", ranks };
-    s.polls.push(poll);
-    rep.polls.push(poll);
-    const n = s.settings.cfp_teams;
-    const auto = ranks.filter((r) => champs.has(r.team_id)).slice(0, s.settings.cfp_auto_bids).map((r) => r.team_id);
+    const auto = ranking.ranks.filter((r) => champs.has(r.team_id)).slice(0, p.auto_bids).map((r) => r.team_id);
     const field = [...auto];
-    for (const r of ranks) { if (field.length >= n) break; if (!field.includes(r.team_id)) field.push(r.team_id); }
-    // Straight seeding by ranking (the 2025 rule), with the guaranteed champions kept in the field.
-    const order = new Map(ranks.map((r, i) => [r.team_id, i]));
+    for (const r of ranking.ranks) { if (field.length >= p.teams) break; if (!field.includes(r.team_id)) field.push(r.team_id); }
+    // Straight seeding by the committee's ranking (the 2025 rule), with the guaranteed champions kept in.
+    const order = new Map(ranking.ranks.map((r, i) => [r.team_id, i]));
     field.sort((a, b) => order.get(a)! - order.get(b)!);
-    s.cfp_field = field.map((team_id, i) => ({ seed: i + 1, team_id }));
-    rep.news.push(this.news(date, "cfp_field", `The ${n}-team playoff field is set; ${this.team(field[0]).school} is the No. 1 seed`,
-      s.cfp_field.map((f) => `${f.seed}. ${this.team(f.team_id).school}`).join(", "), field));
-    if (n !== 12 || s.settings.cfp_byes !== 4) throw new Error("M0 builds the 12-team bracket with 4 byes only");
-    const start = this.eventDate("cfp_first_round"), end = this.eventEnd("cfp_first_round");
-    const pairs: [number, number][] = [[8, 9], [5, 12], [7, 10], [6, 11]];
-    pairs.forEach(([hi, lo], i) => {
-      const H = s.cfp_field![hi - 1], A = s.cfp_field![lo - 1];
-      this.addGame(rep, { kind: "cfp_r1", date: i < 2 ? start : end, home_id: H.team_id, away_id: A.team_id, neutral: false, venue: null, label: "CFP First Round", home_seed: hi, away_seed: lo });
-    });
+    const seeded = field.map((team_id, i) => ({ seed: i + 1, team_id }));
+    const rounds = (p.byes > 0 ? 1 : 0) + mainRounds(p.teams, p.byes);
+    s.playoff = { format: "playoff", field: seeded, rounds, round: 0, alive: p.byes > 0 ? null : bracketOrder(p.teams).map((x) => seeded[x - 1]) };
+    rep.news.push(this.news(date, "selection", `The ${p.teams}-team playoff field is set; ${this.team(field[0]).school} is the No. 1 seed`,
+      seeded.map((f) => `${f.seed}. ${this.team(f.team_id).school}`).join(", "), field));
+    this.buildRound(rep);
   }
 
-  private winnerSeed(g: Game): { seed: number; team_id: number } {
+  private winner(g: Game): Seeded {
     return g.home_score! > g.away_score! ? { seed: g.home_seed!, team_id: g.home_id } : { seed: g.away_seed!, team_id: g.away_id };
   }
 
-  private buildQuarterfinals(r1: Game[], rep: DayReport): void {
-    const s = this.state;
-    const w = new Map<string, { seed: number; team_id: number }>();
-    for (const g of r1) w.set(`${g.home_seed}-${g.away_seed}`, this.winnerSeed(g));
-    const start = this.eventDate("cfp_quarterfinals"), end = this.eventEnd("cfp_quarterfinals");
-    const slots: [number, string, string][] = [[1, "8-9", "Rose Bowl"], [2, "7-10", "Sugar Bowl"], [3, "6-11", "Orange Bowl"], [4, "5-12", "Cotton Bowl"]];
-    slots.forEach(([top, key, bowl], i) => {
-      const T = s.cfp_field![top - 1], O = w.get(key)!;
-      this.addGame(rep, { kind: "cfp_qf", date: i < 2 ? start : end, home_id: T.team_id, away_id: O.team_id, neutral: true, venue: bowl, label: `CFP Quarterfinal (${bowl})`, home_seed: top, away_seed: O.seed });
-    });
-  }
-
-  private buildSemifinals(qf: Game[], rep: DayReport): void {
-    const bySlot = new Map(qf.map((g) => [g.home_seed!, this.winnerSeed(g)]));
-    const start = this.eventDate("cfp_semifinals"), end = this.eventEnd("cfp_semifinals");
-    const pairs: [number, number, string][] = [[1, 4, "Fiesta Bowl"], [2, 3, "Peach Bowl"]];
-    pairs.forEach(([x, y, bowl], i) => {
-      const a = bySlot.get(x)!, b = bySlot.get(y)!;
-      const [hi, lo] = a.seed < b.seed ? [a, b] : [b, a];
-      this.addGame(rep, { kind: "cfp_sf", date: i === 0 ? start : end, home_id: hi.team_id, away_id: lo.team_id, neutral: true, venue: bowl, label: `CFP Semifinal (${bowl})`, home_seed: hi.seed, away_seed: lo.seed });
+  /** Build the next playoff round from `playoff.alive` (or the opening round when there are byes). */
+  private buildRound(rep: DayReport): void {
+    const s = this.state, p = s.playoff!;
+    p.round++;
+    const fromEnd = p.rounds - p.round;
+    const ev = s.events.find((e) => (e.type === "playoff_round" || e.type === "title_game") && e.rounds_from_end === fromEnd)!;
+    const pairs: [Seeded, Seeded][] = [];
+    if (p.alive == null) {
+      for (const [hi, lo] of openingPairs(p.field.length, s.settings.playoff.byes)) pairs.push([p.field[hi - 1], p.field[lo - 1]]);
+    } else {
+      for (let i = 0; i < p.alive.length; i += 2) pairs.push([p.alive[i], p.alive[i + 1]]);
+    }
+    const BOWLS: Record<number, string[]> = { 2: ["Rose Bowl", "Sugar Bowl", "Orange Bowl", "Cotton Bowl"], 1: ["Fiesta Bowl", "Peach Bowl"] };
+    const name = p.format === "bcs" ? "BCS National Championship" : fromEnd === 0 ? "National Championship" : ev.label.replace(/s$/, "");
+    pairs.forEach(([x, y], i) => {
+      const [hi, lo] = x.seed < y.seed ? [x, y] : [y, x];
+      const bowl = BOWLS[fromEnd]?.[i] ?? null;
+      const neutral = fromEnd <= 2 || !s.settings.playoff.campus_first_round;
+      this.addGame(rep, {
+        kind: "playoff", date: i < pairs.length / 2 || !ev.end_date ? ev.date : ev.end_date, home_id: hi.team_id, away_id: lo.team_id,
+        neutral, venue: bowl, label: bowl ? `${name} (${bowl})` : name, home_seed: hi.seed, away_seed: lo.seed, round: p.round, title: fromEnd === 0,
+      });
     });
   }
 }
