@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, runSim, records, type CalEvent, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, runSim, records, SLOT_POS, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -10,7 +10,9 @@ export type Action =
   | { type: "create"; payload: { name: string; seed: number; user_team_id: number | null; settings?: Partial<Settings> } }
   | { type: "sim"; payload: SimCommand }
   | { type: "set_user_team"; payload: { team_id: number | null } }
-  | { type: "update_settings"; payload: Partial<Settings> };
+  | { type: "update_settings"; payload: Partial<Settings> }
+  /** A team's depth chart; null puts back the opening depth chart. */
+  | { type: "set_depth"; payload: { team_id: number; depth: DepthChart | null } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -101,12 +103,25 @@ export class League {
     return (this.db.prepare("SELECT * FROM actions ORDER BY seq").all() as any[]).map((r) => ({ ...r, payload: JSON.parse(r.payload) }));
   }
 
+  /** A depth chart may only list the team's own players, each at a position that can play the slot. */
+  private checkDepth(teamId: number, depth: DepthChart | null): void {
+    if (!this.season.teamById.has(teamId)) throw new Error("unknown team");
+    if (!depth) return;
+    const mine = new Map(this.season.roster(teamId).map((p) => [p.id, p]));
+    for (const [slot, ids] of Object.entries(depth) as [Slot, number[]][]) {
+      if (!SLOT_POS[slot]) throw new Error(`unknown slot ${slot}`);
+      if (!Array.isArray(ids) || ids.length > 4 || new Set(ids).size !== ids.length) throw new Error(`bad list for ${slot}`);
+      for (const id of ids) if (!mine.has(id)) throw new Error(`player ${id} is not on this team`);
+    }
+  }
+
   /** Validate, log and apply one action; returns the day reports it produced. */
   apply(a: Action, user: string | null = null): DayReport[] {
     const s = this.season.state;
     if (a.type === "create") throw new Error("create is only valid as a league's first action");
     if (a.type === "set_user_team" && a.payload.team_id != null && !this.season.teamById.has(a.payload.team_id)) throw new Error("unknown team");
     if (a.type === "sim" && this.season.done) throw new Error("the season is over");
+    if (a.type === "set_depth") this.checkDepth(a.payload.team_id, a.payload.depth);
     let reports: DayReport[] = [];
     const logged = tx(this.db, () => {
       const l = this.log(a, user);
@@ -117,6 +132,7 @@ export class League {
         const e = this.db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?)");
         for (const x of s.events) e.run(x.id, x.date, x.type, x.status, j(x));
       }
+      if (a.type === "set_depth") this.season.setDepth(a.payload.team_id, a.payload.depth);
       if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       this.writeMeta();
       return l;

@@ -133,3 +133,30 @@ td.up { color: var(--up); } td.down { color: var(--down); } td.new { color: var(
 .continue .what strong { font-size: 1.25em; }
 .continue .go { background: var(--accent); color: #fff; padding: 8px 18px; border-radius: 6px; font-weight: 600; }
 .savesat { margin-top: 28px; word-break: break-all; }
+
+.rating { display: inline-block; min-width: 26px; text-align: center; font-weight: 700; border-radius: 4px; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.rating.big { font-size: 1.4em; min-width: 44px; padding: 2px 6px; }
+.r-elite { background: #1b7f3b; color: #fff; }
+.r-great { background: #4caf50; color: #fff; }
+.r-good { background: #c5e1a5; color: #18202a; }
+.r-ok { background: #fff3c4; color: #18202a; }
+.r-low { background: #f3d1cc; color: #18202a; }
+.attr { display: grid; grid-template-columns: 150px 1fr 34px; align-items: center; gap: 8px; margin: 3px 0; }
+.attr .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.attr .fill { display: block; height: 100%; background: var(--accent); }
+.filters { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; align-items: center; }
+.filters button { padding: 2px 8px; }
+.filters button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filters select { margin-left: auto; }
+.scrollx { overflow-x: auto; }
+table.roster tr.starter td:nth-child(2) { font-weight: 600; }
+tr.total td { font-weight: 700; border-top: 2px solid var(--line); }
+.pagehead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.pagehead h1 { margin: 0; }
+.pagehead .actions { margin-left: auto; display: flex; gap: 6px; }
+.cols.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+table.depth { table-layout: fixed; width: 100%; }
+table.depth th:first-child { width: 22%; }
+table.depth select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.warn { color: #b26a00; }
+@media (max-width: 900px) { .cols.even { grid-template-columns: 1fr; } .attr { grid-template-columns: 110px 1fr 34px; } }

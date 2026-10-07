@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { Game } from "@cfb/core";
+import { autoDepth, type Game } from "@cfb/core";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
 
@@ -97,7 +97,27 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ?").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         const coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id) };
+        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id] };
+      }
+      case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
+        const id = Number(p[3]);
+        return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id)), players: S.roster(id) };
+      }
+      case p[2] === "players" && p.length === 4: {
+        const pl = S.playerById.get(Number(p[3]));
+        if (!pl) throw new HttpError(404, "no such player");
+        const name = `${pl.first} ${pl.last}`.trim();
+        const depth = S.depthChart(pl.team_id);
+        const slots = Object.entries(depth).flatMap(([slot, ids]) => (ids ?? []).map((x, i) => (x === pl.id ? `${slot}${i ? ` (${i + 1})` : ""}` : null))).filter(Boolean);
+        // Game log: this player's line in each of his team's played games.
+        const log = s.games.filter((g) => g.status === "final" && (g.home_id === pl.team_id || g.away_id === pl.team_id)).flatMap((g) => {
+          const row = lg.db.prepare("SELECT data FROM game_details WHERE game_id = ?").get(g.id) as { data: string } | undefined;
+          if (!row) return [];
+          const d = JSON.parse(row.data);
+          const line = (g.home_id === pl.team_id ? d.home_players : d.away_players)?.[name];
+          return line ? [{ game: gameRow(g), line }] : [];
+        });
+        return { player: pl, team: S.team(pl.team_id), slots, log };
       }
       case route === "schedule": {
         const team = url.searchParams.get("team"), date = url.searchParams.get("date"), week = url.searchParams.get("week");

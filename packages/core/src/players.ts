@@ -80,3 +80,26 @@ export function overall(pos: Pos, attrs: Record<string, number>): number {
 }
 
 export const playerName = (p: { first: string; last: string }) => `${p.first} ${p.last}`.trim();
+
+export type Slot =
+  | "QB" | "RB1" | "RB2" | "WR_X" | "WR_Z" | "WR_SLOT" | "WR4" | "TE1" | "TE2" | "LT" | "LG" | "C" | "RG" | "RT"
+  | "DE1" | "DE2" | "DT1" | "DT2" | "LB1" | "LB2" | "CB1" | "CB2" | "NB" | "S1" | "S2" | "K" | "P" | "LS";
+
+/** Each slot lists player ids, starter first, then backups. */
+export type DepthChart = Partial<Record<Slot, number[]>>;
+
+export const OFFENSE_SLOTS: Slot[] = ["QB", "RB1", "RB2", "WR_X", "WR_Z", "WR_SLOT", "WR4", "TE1", "TE2", "LT", "LG", "C", "RG", "RT"];
+export const DEFENSE_SLOTS: Slot[] = ["DE1", "DE2", "DT1", "DT2", "LB1", "LB2", "CB1", "CB2", "NB", "S1", "S2"];
+export const SPECIAL_SLOTS: Slot[] = ["K", "P", "LS"];
+export const SLOT_LABELS: Record<Slot, string> = {
+  QB: "Quarterback", RB1: "Running back", RB2: "Running back 2", WR_X: "Wide receiver (X)", WR_Z: "Wide receiver (Z)", WR_SLOT: "Slot receiver",
+  WR4: "Fourth receiver", TE1: "Tight end", TE2: "Tight end 2", LT: "Left tackle", LG: "Left guard", C: "Center", RG: "Right guard", RT: "Right tackle",
+  DE1: "Defensive end", DE2: "Defensive end 2", DT1: "Defensive tackle", DT2: "Defensive tackle 2", LB1: "Linebacker", LB2: "Linebacker 2",
+  CB1: "Cornerback", CB2: "Cornerback 2", NB: "Nickel back", S1: "Safety", S2: "Safety 2", K: "Kicker", P: "Punter", LS: "Long snapper",
+};
+export const SLOT_POS: Record<Slot, Pos[]> = {
+  QB: ["QB"], RB1: ["RB"], RB2: ["RB"], WR_X: ["WR"], WR_Z: ["WR"], WR_SLOT: ["WR"], WR4: ["WR"], TE1: ["TE"], TE2: ["TE"],
+  LT: ["OL"], LG: ["OL"], C: ["OL"], RG: ["OL"], RT: ["OL"], DE1: ["DE", "DT"], DE2: ["DE", "DT"], DT1: ["DT", "DE"], DT2: ["DT", "DE"],
+  LB1: ["LB"], LB2: ["LB"], CB1: ["CB"], CB2: ["CB"], NB: ["CB", "S"], S1: ["S"], S2: ["S"], K: ["K", "P"], P: ["P", "K"], LS: ["LS", "OL", "TE"],
+};
+

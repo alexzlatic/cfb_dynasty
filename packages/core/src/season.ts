@@ -86,8 +86,10 @@ export class Season {
   roster(teamId: number): RatedPlayer[] { return this.seed.players?.[teamId]?.players ?? []; }
   depthChart(teamId: number): DepthChart { return this.state.depth?.[teamId] ?? this.seed.players?.[teamId]?.depth ?? {}; }
 
-  setDepth(teamId: number, depth: DepthChart): void {
-    this.state.depth![teamId] = depth;
+  /** Set a team's depth chart, or put back its opening one with null. */
+  setDepth(teamId: number, depth: DepthChart | null): void {
+    if (depth) this.state.depth![teamId] = depth;
+    else delete this.state.depth![teamId];
     this.compiled.delete(teamId);
   }
 
