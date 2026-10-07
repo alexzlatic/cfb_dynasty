@@ -10,6 +10,8 @@ export interface LeagueState {
   playoff: PlayoffState | null; news: NewsItem[];
 }
 
+export interface LeagueSummary { id: string; name: string; date: string; user_team_id: number | null; played_at: number }
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
   const body = await r.json();
@@ -18,7 +20,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  leagues: () => req<{ id: string; name: string; date: string; user_team_id: number | null }[]>("/api/leagues"),
+  leagues: () => req<LeagueSummary[]>("/api/leagues"),
+  health: () => req<{ ok: boolean; commit: string; saves: string; can_quit: boolean }>("/api/health"),
+  quit: () => req<{ ok: boolean }>("/api/quit", { method: "POST" }),
   seedTeams: () => req<Team[]>("/api/seed/teams"),
   createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings }) }),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
