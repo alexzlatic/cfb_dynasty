@@ -77,18 +77,18 @@ export function generateWriters(teams: Team[], rosters: Record<string, Player[]>
       : `${conference} ${pick(["Wire", "Notebook", "Digest", "Report"])}`;
     const k = (s: WriterStyle) => (style === s ? 1 : 0);
     const voter: Voter = {
-      noise: u(2, 3.5) * (1 + 0.6 * k("contrarian")),
+      noise: u(1.0, 1.8) * (1 + 0.5 * k("contrarian")),
       trust: k("numbers") ? u(0.75, 0.9) : u(0.45, 0.7),
       win: u(2.6, 3.4), loss: u(-5.5, -3.8) * (1 + 0.3 * k("recency_chaser")),
       sos: k("numbers") ? u(0.14, 0.2) : u(0.06, 0.12),
-      brand: k("brand_loyalist") ? u(0.12, 0.18) : k("numbers") ? u(0, 0.02) : k("contrarian") ? u(-0.03, 0.02) : u(0.03, 0.08),
-      recency: k("recency_chaser") ? u(0.45, 0.65) : k("steady") ? u(0.05, 0.12) : u(0.12, 0.3),
+      brand: k("brand_loyalist") ? u(0.08, 0.12) : k("numbers") ? u(0, 0.02) : k("contrarian") ? u(-0.03, 0.02) : u(0.03, 0.08),
+      recency: k("recency_chaser") ? u(0.3, 0.45) : k("steady") ? u(0.05, 0.12) : u(0.12, 0.3),
       inertia: k("steady") ? u(0.72, 0.82) : k("recency_chaser") ? u(0.2, 0.35) : u(0.4, 0.65),
       unbeaten: k("contrarian") ? u(0, 1) : u(1, 4), margin: k("numbers") ? u(0.06, 0.1) : u(0.02, 0.06), region: 0,
       lat: anchor.venue.lat ?? 39, lon: anchor.venue.lon ?? -95,
       team_id: team?.id ?? null, conference,
-      homer: team ? (k("homer") ? u(4, 7) : u(1, 2.5)) : 0,
-      conf_bias: conference ? (k("homer") ? u(1.5, 3) : u(0.5, 1.5)) : 0,
+      homer: team ? (k("homer") ? u(2, 3.5) : u(0.5, 1.2)) : 0,
+      conf_bias: conference ? (k("homer") ? u(0.8, 1.5) : u(0.2, 0.7)) : 0,
     };
     const alma = rng.random() < 0.35 && team ? team.id : pick(fbs).id;
     return {
