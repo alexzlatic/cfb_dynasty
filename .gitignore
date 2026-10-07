@@ -7,3 +7,5 @@ __pycache__/
 .env
 .DS_Store
 coverage/
+importer/.cache/
+.logo-cache/
