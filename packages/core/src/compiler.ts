@@ -1,5 +1,5 @@
 import { LEAGUE, type PlayerShare, type TeamRatings, type UnitRates } from "@cfb/engine";
-import { ATTRS, overall, playerName, z, type Pos, type RatedPlayer } from "./players.ts";
+import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, SPECIAL_SLOTS, overall, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
 
 /**
  * The ratings compiler: the players in a team's depth chart become the engine's unit rates.
@@ -11,21 +11,7 @@ import { ATTRS, overall, playerName, z, type Pos, type RatedPlayer } from "./pla
  * part of the team's measured strength the importer could not place on a player).
  */
 
-export type Slot =
-  | "QB" | "RB1" | "RB2" | "WR_X" | "WR_Z" | "WR_SLOT" | "WR4" | "TE1" | "TE2" | "LT" | "LG" | "C" | "RG" | "RT"
-  | "DE1" | "DE2" | "DT1" | "DT2" | "LB1" | "LB2" | "CB1" | "CB2" | "NB" | "S1" | "S2" | "K" | "P" | "LS";
-
-/** Each slot lists player ids, starter first, then backups. */
-export type DepthChart = Partial<Record<Slot, number[]>>;
-
-export const OFFENSE_SLOTS: Slot[] = ["QB", "RB1", "RB2", "WR_X", "WR_Z", "WR_SLOT", "WR4", "TE1", "TE2", "LT", "LG", "C", "RG", "RT"];
-export const DEFENSE_SLOTS: Slot[] = ["DE1", "DE2", "DT1", "DT2", "LB1", "LB2", "CB1", "CB2", "NB", "S1", "S2"];
-export const SPECIAL_SLOTS: Slot[] = ["K", "P", "LS"];
-export const SLOT_POS: Record<Slot, Pos[]> = {
-  QB: ["QB"], RB1: ["RB"], RB2: ["RB"], WR_X: ["WR"], WR_Z: ["WR"], WR_SLOT: ["WR"], WR4: ["WR"], TE1: ["TE"], TE2: ["TE"],
-  LT: ["OL"], LG: ["OL"], C: ["OL"], RG: ["OL"], RT: ["OL"], DE1: ["DE", "DT"], DE2: ["DE", "DT"], DT1: ["DT", "DE"], DT2: ["DT", "DE"],
-  LB1: ["LB"], LB2: ["LB"], CB1: ["CB"], CB2: ["CB"], NB: ["CB", "S"], S1: ["S"], S2: ["S"], K: ["K", "P"], P: ["P", "K"], LS: ["LS", "OL", "TE"],
-};
+export { DEFENSE_SLOTS, OFFENSE_SLOTS, SLOT_LABELS, SLOT_POS, SPECIAL_SLOTS, type DepthChart, type Slot } from "./players.ts";
 
 /** Rates the compiler sets, on the engine's scale. "log" rates are yards (multiplicative); the rest are probabilities. */
 export const RATES = ["comp_pct", "yds_per_comp", "sack_rate", "int_rate", "rush_stuff", "rush_explosive", "rush_ypc", "fumble_lost_rate"] as const;
@@ -83,7 +69,15 @@ export function lineup(depth: DepthChart, byId: Map<number, RatedPlayer>, out: S
   return { slot };
 }
 
-const at = (p: RatedPlayer | undefined, a: string) => (p && p.attrs[a] != null ? z(p.attrs[a]) : 0);
+/** A player's z on an attribute. Out of position (no such attribute) or an empty slot plays far below a starter. */
+const at = (p: RatedPlayer | undefined, a: string) => (!p ? -2.5 : p.attrs[a] != null ? z(p.attrs[a]) : -2);
+
+/** Backs and tight ends have no rating for some receiving skills; the closest one stands in. */
+const RECV_STAND_IN: Partial<Record<Pos, Record<string, string>>> = {
+  RB: { route: "hands", contested: "power", rac: "elusive" },
+  TE: { contested: "hands", rac: "speed" },
+};
+const recvAttr = (p: RatedPlayer | undefined, a: string) => (p && RECV_STAND_IN[p.pos]?.[a]) || a;
 
 /** The unit inputs the terms refer to, as z-scores. */
 export function units(l: Lineup): Record<string, number> {
@@ -91,12 +85,12 @@ export function units(l: Lineup): Record<string, number> {
   const qb = s.QB;
   const recv: [Slot, number][] = (Object.entries(TARGET_SHARE) as [Slot, number][]).filter(([k]) => s[k]);
   const tw = recv.reduce((a, [, w]) => a + w, 0) || 1;
-  const rv = (a: string) => recv.reduce((acc, [k, w]) => acc + w * at(s[k], a), 0) / tw;
+  const rv = (a: string) => recv.reduce((acc, [k, w]) => acc + w * at(s[k], recvAttr(s[k], a)), 0) / tw;
   const ol = (["LT", "LG", "C", "RG", "RT"] as Slot[]).map((k) => s[k]);
   const te = s.TE1;
   const runners: [Slot, number][] = (Object.entries(CARRY_SHARE) as [Slot, number][]).filter(([k]) => s[k]);
   const rw = runners.reduce((a, [, w]) => a + w, 0) || 1;
-  const touch = runners.reduce((a, [k, w]) => a + w * at(s[k], "security"), 0) / rw;
+  const touch = runners.reduce((a, [k, w]) => a + w * at(s[k], s[k]?.pos === "WR" ? "hands" : "security"), 0) / rw;
   const rb = s.RB1;
   const dl = (["DE1", "DE2", "DT1", "DT2"] as Slot[]).map((k) => s[k]);
   const lbs = (["LB1", "LB2"] as Slot[]).map((k) => s[k]);

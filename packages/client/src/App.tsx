@@ -14,6 +14,8 @@ import { TeamPage } from "./screens/Team.tsx";
 import { GamePage } from "./screens/Game.tsx";
 import { Postseason } from "./screens/Postseason.tsx";
 import { SettingsScreen } from "./screens/Settings.tsx";
+import { PlayerPage } from "./screens/Players.tsx";
+import { DepthScreen } from "./screens/Depth.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -96,6 +98,7 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
       <nav className="tabs">
         {NAV.map(([k, label]) => <a key={k} href={`#/l/${id}/${k}`} className={screen === k ? "on" : ""}>{label}</a>)}
         {my && <a href={`#/l/${id}/team/${my.id}`} className={screen === "team" && Number(arg) === my.id ? "on" : ""}>My team</a>}
+        {my && <a href={`#/l/${id}/depth/${my.id}`} className={screen === "depth" && Number(arg) === my.id ? "on" : ""}>Depth chart</a>}
       </nav>
       <main className="page">
         {screen === "home" && <Home />}
@@ -110,6 +113,8 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         {screen === "team" && arg && <TeamPage tid={Number(arg)} />}
         {screen === "game" && arg && <GamePage gid={Number(arg)} />}
         {screen === "settings" && <SettingsScreen />}
+        {screen === "player" && arg && <PlayerPage pid={Number(arg)} />}
+        {screen === "depth" && arg && <DepthScreen tid={Number(arg)} />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>

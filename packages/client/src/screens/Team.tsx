@@ -3,6 +3,7 @@ import { useLeague, useData } from "../App.tsx";
 import { api, type Player } from "../api.ts";
 import { Logo, heightStr, onColor } from "../util.tsx";
 import { GameTable, NewsList, Panel } from "./common.tsx";
+import { RosterTable } from "./Players.tsx";
 
 const POS_ORDER = ["QB", "RB", "WR", "TE", "OL", "DL", "EDGE", "LB", "DB", "CB", "S", "K", "P", "LS", "ATH"];
 const ROLE = { HC: "Head coach", OC: "Offensive coordinator", DC: "Defensive coordinator", STC: "Special teams coordinator" } as const;
@@ -40,19 +41,24 @@ export function TeamPage({ tid }: { tid: number }) {
       <div className="cols">
         <div>
           <Panel title="Schedule"><GameTable games={data.games} showDate /></Panel>
-          <Panel title={`Roster (${data.roster.length})`} right={
-            <select value={sort} onChange={(e) => setSort(e.target.value as never)}>
-              <option value="pos">By position</option><option value="name">By name</option><option value="class">By class</option><option value="jersey">By number</option>
-            </select>}>
-            <table className="grid tight">
-              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Class</th><th>Ht</th><th>Wt</th><th>Hometown</th></tr></thead>
-              <tbody>{roster.map((p) => (
-                <tr key={String(p.id)}><td className="num muted">{p.jersey ?? ""}</td><td>{p.first} {p.last}</td><td>{p.pos}</td><td>{p.class}</td>
-                  <td>{heightStr(p.height)}</td><td>{p.weight ?? ""}</td><td className="muted">{[p.home.city, p.home.state].filter(Boolean).join(", ")}</td></tr>
-              ))}</tbody>
-            </table>
-            <p className="muted small">Player ratings arrive in M1.</p>
-          </Panel>
+          {data.players.length ? (
+            <Panel title={`Roster (${data.players.length})`} right={<a href={`#/l/${id}/depth/${tid}`}>Depth chart</a>}>
+              <RosterTable players={data.players} depth={data.depth} />
+            </Panel>
+          ) : (
+            <Panel title={`Roster (${data.roster.length})`} right={
+              <select value={sort} onChange={(e) => setSort(e.target.value as never)}>
+                <option value="pos">By position</option><option value="name">By name</option><option value="class">By class</option><option value="jersey">By number</option>
+              </select>}>
+              <table className="grid tight">
+                <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Class</th><th>Ht</th><th>Wt</th><th>Hometown</th></tr></thead>
+                <tbody>{roster.map((p) => (
+                  <tr key={String(p.id)}><td className="num muted">{p.jersey ?? ""}</td><td>{p.first} {p.last}</td><td>{p.pos}</td><td>{p.class}</td>
+                    <td>{heightStr(p.height)}</td><td>{p.weight ?? ""}</td><td className="muted">{[p.home.city, p.home.state].filter(Boolean).join(", ")}</td></tr>
+                ))}</tbody>
+              </table>
+            </Panel>
+          )}
         </div>
         <div>
           <Panel title="Staff">

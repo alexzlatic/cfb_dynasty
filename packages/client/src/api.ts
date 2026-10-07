@@ -10,6 +10,11 @@ export interface LeagueState {
   playoff: PlayoffState | null; news: NewsItem[];
 }
 
+export type { RatedPlayer } from "@cfb/core";
+import type { RatedPlayer } from "@cfb/core";
+export type DepthChart = Record<string, number[]>;
+export type PlayerLine = Record<string, number>;
+
 export interface LeagueSummary { id: string; name: string; date: string; user_team_id: number | null; played_at: number }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -27,7 +32,10 @@ export const api = {
   createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings }) }),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
-  team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null }>(`/api/leagues/${id}/teams/${tid}`),
+  team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
+    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean }>(`/api/leagues/${id}/teams/${tid}`),
+  depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[] }>(`/api/leagues/${id}/teams/${tid}/depth`),
+  player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine }[] }>(`/api/leagues/${id}/players/${pid}`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),

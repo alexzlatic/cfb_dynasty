@@ -101,3 +101,33 @@ describe("launcher support", () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe("depth charts", () => {
+  it("serves rated rosters, applies a depth chart change, rejects other teams' players and replays", async () => {
+    const { id } = await post("/api/leagues", { name: "Depth", team_id: 2509, seed: 5 });
+    const d = await get(`/api/leagues/${id}/teams/2509/depth`);
+    expect(d.players.length).toBeGreaterThan(80);
+    expect(d.depth.QB.length).toBeGreaterThan(1);
+    const lg = manager.get(id);
+    const before = lg.season.teamRatings(2509)!;
+    // Start the backup QB.
+    const [q1, q2, ...rest] = d.depth.QB;
+    const ok = await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 2509, depth: { ...d.depth, QB: [q2, q1, ...rest] } } });
+    expect(ok.ok).toBe(true);
+    const after = lg.season.teamRatings(2509)!;
+    expect(after.qb).not.toBe(before.qb);
+    expect(after.offense.comp_pct).not.toBe(before.offense.comp_pct);
+    const other = (await get(`/api/leagues/${id}/teams/2509`)).custom_depth;
+    expect(other).toBe(true);
+    const bad = await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 2509, depth: { QB: [123456789] } } });
+    expect(bad.error).toMatch(/not on this team/);
+    await post(`/api/leagues/${id}/actions`, { type: "sim", payload: { kind: "date", date: "2026-09-08" } });
+    const p = await get(`/api/leagues/${id}/players/${q2}`);
+    expect(p.slots).toContain("QB");
+    expect(p.log.length).toBeGreaterThan(0);
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 2509, depth: null } });
+    expect(lg.season.teamRatings(2509)!.qb).toBe(before.qb);
+  });
+});
