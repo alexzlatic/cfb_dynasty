@@ -13,7 +13,9 @@
     "start": "npm run build -w @cfb/client && npm run start -w @cfb/server",
     "league:new": "tsx packages/server/src/cli.ts new",
     "season:run": "tsx packages/server/src/cli.ts run-season",
-    "bench": "tsx packages/engine/bench.ts"
+    "bench": "tsx packages/engine/bench.ts",
+    "results:check": "tsx packages/core/scripts/results-check.ts",
+    "seed:power": "tsx packages/core/scripts/power.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

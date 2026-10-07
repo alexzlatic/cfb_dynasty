@@ -60,7 +60,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
     const gameRow = (g: Game) => ({ ...g, home_rank: S.rankOf(g.home_id), away_rank: S.rankOf(g.away_id) });
     switch (true) {
       case route === "" || route === "state": {
-        const upcoming = s.events.filter((e) => e.date >= s.date && e.status !== "done").slice(0, 8);
+        const upcoming = s.events.filter((e) => e.date >= s.date && e.status !== "done" && e.type !== "game_day").slice(0, 8);
         const myGames = s.user_team_id == null ? [] : s.games.filter((g) => g.home_id === s.user_team_id || g.away_id === s.user_team_id);
         return {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
@@ -127,17 +127,27 @@ export function startServer(opts: ServerOptions, port: number): Server {
     }
   }
 
-  /** Logos are hotlinked from the CFBD CDN once and cached on disk, not committed to the repo. */
+  /**
+   * Logos are fetched from the CFBD CDN once and cached on disk, never committed to the repo. When the
+   * CDN cannot be reached, a badge in the team's colors stands in (and is not cached).
+   */
   async function logo(res: ServerResponse, file: string | undefined): Promise<void> {
     const m = /^(\d+)(-dark)?\.png$/.exec(file || "");
     if (!m) throw new HttpError(404, "not found");
+    const team = manager.seed().teams.find((t) => t.id === Number(m[1]));
+    if (!team) throw new HttpError(404, "no such team");
     const path = join(logoDir, file!);
     if (!existsSync(path)) {
-      const team = manager.seed().teams.find((t) => t.id === Number(m[1]));
-      const src = m[2] ? team?.logo_dark : team?.logo;
-      if (!src) throw new HttpError(404, "no logo");
-      const r = await fetch(src);
-      if (!r.ok) throw new HttpError(404, "no logo");
+      const src = m[2] ? team.logo_dark : team.logo;
+      const r = src ? await fetch(src).catch(() => null) : null;
+      if (!r?.ok) {
+        const esc = (x: string) => x.replace(/[^#A-Za-z0-9. -]/g, (ch) => (ch === "&" ? "&amp;" : ""));
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="${esc(team.color)}" stroke="${esc(team.alt_color)}" stroke-width="4"/>` +
+          `<text x="32" y="38" font-family="Arial,sans-serif" font-weight="700" font-size="${team.abbr.length > 3 ? 15 : 19}" text-anchor="middle" fill="${esc(team.alt_color)}">${esc(team.abbr)}</text></svg>`;
+        res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "no-store" });
+        res.end(svg);
+        return;
+      }
       writeFileSync(path, Buffer.from(await r.arrayBuffer()));
     }
     res.writeHead(200, { "content-type": "image/png", "cache-control": "public, max-age=604800" });

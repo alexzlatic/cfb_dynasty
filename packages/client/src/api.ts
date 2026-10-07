@@ -1,12 +1,13 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState } from "@cfb/core";
 
-export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team };
+export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
+export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
 
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
-  cfp_field: { seed: number; team_id: number }[] | null; news: NewsItem[];
+  playoff: PlayoffState | null; news: NewsItem[];
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -19,7 +20,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   leagues: () => req<{ id: string; name: string; date: string; user_team_id: number | null }[]>("/api/leagues"),
   seedTeams: () => req<Team[]>("/api/seed/teams"),
-  createLeague: (name: string, team_id: number | null) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id }) }),
+  createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings }) }),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
   team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null }>(`/api/leagues/${id}/teams/${tid}`),
@@ -27,7 +28,10 @@ export const api = {
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
   polls: (id: string) => req<Poll[]>(`/api/leagues/${id}/polls`),
-  news: (id: string) => req<NewsItem[]>(`/api/leagues/${id}/news?limit=300`),
+  news: (id: string, q: Record<string, string> = {}) => req<NewsItem[]>(`/api/leagues/${id}/news?` + new URLSearchParams({ limit: "300", ...q })),
+  writers: (id: string) => req<WriterProfile[]>(`/api/leagues/${id}/writers`),
+  writer: (id: string, wid: number) => req<{ writer: WriterProfile; ballots: { date: string; team_ids: number[] }[]; stories: NewsItem[] }>(`/api/leagues/${id}/writers/${wid}`),
+  ballots: (id: string, date: string) => req<{ writer_id: number; team_ids: number[] }[]>(`/api/leagues/${id}/ballots/${date}`),
   calendar: (id: string, from: string, to: string) => req<{ date: string; events: CalEvent[] }>(`/api/leagues/${id}/calendar?from=${from}&to=${to}`),
   act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),
 };
