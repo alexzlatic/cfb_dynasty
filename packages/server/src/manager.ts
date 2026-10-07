@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { loadSeed, type SeedBundle, type Settings } from "@cfb/core";
 import { League } from "./league.ts";
@@ -15,11 +15,14 @@ export class LeagueManager {
   seed(): SeedBundle { return (this.seedCache ??= loadSeed(this.seedDir)); }
   path(id: string): string { return join(this.dir, `${id}.sqlite`); }
 
-  list(): { id: string; name: string; date: string; user_team_id: number | null }[] {
+  /** Saved leagues, most recently played first. */
+  list(): { id: string; name: string; date: string; user_team_id: number | null; played_at: number }[] {
     return readdirSync(this.dir).filter((f) => f.endsWith(".sqlite")).map((f) => {
       const lg = this.get(f.replace(/\.sqlite$/, ""));
-      return { id: lg.id, name: lg.name, date: lg.season.state.date, user_team_id: lg.season.state.user_team_id };
-    });
+      const wal = this.path(lg.id) + "-wal";
+      const played_at = Math.max(statSync(this.path(lg.id)).mtimeMs, existsSync(wal) ? statSync(wal).mtimeMs : 0);
+      return { id: lg.id, name: lg.name, date: lg.season.state.date, user_team_id: lg.season.state.user_team_id, played_at };
+    }).sort((a, b) => b.played_at - a.played_at);
   }
 
   get(id: string): League {
