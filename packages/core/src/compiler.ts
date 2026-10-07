@@ -69,7 +69,7 @@ const soft = (xs: number[], tau: number) => (xs.length ? -tau * Math.log(mean(xs
 
 /** Default role shares by slot: targets for receivers and backs, carries for runners. */
 const TARGET_SHARE: Partial<Record<Slot, number>> = { WR_X: 0.2, WR_Z: 0.17, WR_SLOT: 0.15, WR4: 0.06, TE1: 0.12, TE2: 0.04, RB1: 0.08, RB2: 0.04 };
-const CARRY_SHARE: Partial<Record<Slot, number>> = { RB1: 0.38, RB2: 0.27, QB: 0.14, WR_SLOT: 0.02 };
+const CARRY_SHARE: Partial<Record<Slot, number>> = { RB1: 0.31, RB2: 0.27, QB: 0.15, WR_SLOT: 0.03 };
 
 export interface Lineup { slot: Partial<Record<Slot, RatedPlayer>> }
 
@@ -142,12 +142,12 @@ export function residual(rate: Rate, target: number, compiled: number): number {
   return LOG_RATES.has(rate) ? Math.log(target / compiled) : logit(target) - logit(compiled);
 }
 
-function shares(l: Lineup, table: Partial<Record<Slot, number>>, key: "carry" | "target", tilt: (p: RatedPlayer) => number,
+function shares(l: Lineup, table: Partial<Record<Slot, number>>, key: "carry" | "target", tilt: (p: RatedPlayer) => number, k: number,
   mults: (p: RatedPlayer) => { catch_mult: number; ypc_mult: number }): PlayerShare[] {
   const rows = (Object.entries(table) as [Slot, number][]).filter(([s]) => l.slot[s]).map(([s, w]) => {
     const p = l.slot[s]!;
     const t = p.tend[key];
-    return { p, w: (t != null ? 0.6 * w + 0.4 * t : w) * Math.exp(0.2 * tilt(p)) };
+    return { p, w: (t != null ? 0.6 * w + 0.4 * t : w) * Math.exp(k * tilt(p)) };
   });
   return rows.map(({ p, w }) => ({ name: playerName(p), pos: p.pos, share: Math.round(w * 1000) / 10, ...mults(p) }));
 }
@@ -176,10 +176,10 @@ export function compileTeam(base: TeamRatings, l: Lineup, scheme: SchemeOffsets,
     scramble_scale: qb ? Math.max(2.5, 4.85 + 1.2 * at(qb, "speed")) : 0,
     fg_skill: kicking.fg_skill + kickerSkill(k),
     punt_gross: kicking.punt_gross + punterSkill(p),
-    rushers: shares(l, CARRY_SHARE, "carry", runTilt, (x) => ({
+    rushers: shares(l, CARRY_SHARE, "carry", runTilt, 0.1, (x) => ({
       catch_mult: 1, ypc_mult: Math.exp(x.pos === "QB" ? 0.05 * at(x, "speed") : 0.05 * at(x, "vision") + 0.03 * at(x, "power") + 0.04 * at(x, "speed")),
     })),
-    receivers: shares(l, TARGET_SHARE, "target", recvTilt, (x) => ({
+    receivers: shares(l, TARGET_SHARE, "target", recvTilt, 0.2, (x) => ({
       catch_mult: Math.exp(0.05 * at(x, "hands") + 0.04 * at(x, "route")),
       ypc_mult: Math.exp(0.06 * at(x, "speed") + 0.04 * at(x, "rac") + (x.pos === "WR" ? 0.08 : x.pos === "TE" ? -0.05 : -0.3)),
     })),
