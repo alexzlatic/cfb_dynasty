@@ -89,3 +89,15 @@ describe("sync gate", () => {
     expect((await get(`/api/leagues/${id}/polls`))[0].ranks).toHaveLength(25);
   });
 });
+
+describe("launcher support", () => {
+  it("reports health, lists leagues most recent first and refuses quit unless enabled", async () => {
+    const h = await get("/api/health");
+    expect(h).toMatchObject({ ok: true, app: "cfb-dynasty", can_quit: false });
+    const list = await get("/api/leagues");
+    expect(list.length).toBeGreaterThan(0);
+    for (let i = 1; i < list.length; i++) expect(list[i - 1].played_at).toBeGreaterThanOrEqual(list[i].played_at);
+    const r = await fetch(base + "/api/quit", { method: "POST" });
+    expect(r.status).toBe(403);
+  });
+});

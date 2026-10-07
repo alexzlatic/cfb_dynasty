@@ -9,18 +9,35 @@ This is milestone **M0 (foundation)**: no player ratings, play calling, recruiti
 the plan doc for the roadmap (M1 ratings and one playable season, M1.5 online leagues, M2 money, M3
 talent pipeline, M4 staff and careers, M5 per-snap matchups).
 
-## Run it
+## Play it
 
-Node 22.13 or newer.
+Node 22.13 or newer. Once, from the game folder:
 
 ```sh
 npm install
+npm run install-app
+```
+
+That adds a **CFB Dynasty** app (macOS: `~/Applications`, so it shows in Spotlight and Launchpad and can
+be dragged to the Dock; Windows: a desktop and Start menu shortcut; Linux: the applications menu).
+Opening it pulls the latest code from `main`, starts the game server in the background if it is not
+already running and opens the game in its own window (a Chrome, Edge or Brave app window when one is
+installed, otherwise your default browser). The start screen has a **Continue** button for the league
+you played last. The server shuts itself down 20 minutes after the last game window closes, or right
+away with **Quit game** on the start screen.
+
+Saved leagues are SQLite files in `~/Documents/CFB Dynasty/leagues` (one per league), outside the code
+folder, so updates never touch them. Leagues saved in the old `leagues/` folder are copied there on
+first start. Logs are in `~/Documents/CFB Dynasty/logs`.
+
+`npm run play` does the same as the app from a terminal. For development:
+
+```sh
 npm start            # builds the client and serves http://localhost:8787
 npm run dev          # server with reload on :8787 plus Vite on :5173
 ```
 
-Leagues are SQLite files in `leagues/` (one per league). Open the same league in two browser windows
-and sim a day in one: the other updates live.
+Open the same league in two windows and sim a day in one: the other updates live.
 
 ## What's in M0
 

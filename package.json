@@ -3,14 +3,20 @@
   "private": true,
   "description": "OOTP-style college football management game built on the CFB Sim play-by-play engine",
   "type": "module",
-  "engines": { "node": ">=22.13" },
-  "workspaces": ["packages/*"],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:parity": "vitest run packages/engine/test/parity.test.ts",
     "dev": "npm run dev -w @cfb/server & npm run dev -w @cfb/client",
     "start": "npm run build -w @cfb/client && npm run start -w @cfb/server",
+    "play": "node scripts/launch.mjs",
+    "install-app": "node scripts/install-app.mjs",
     "league:new": "tsx packages/server/src/cli.ts new",
     "season:run": "tsx packages/server/src/cli.ts run-season",
     "bench": "tsx packages/engine/bench.ts",

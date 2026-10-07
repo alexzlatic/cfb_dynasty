@@ -1,22 +1,64 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type Team } from "../api.ts";
+import { api, subscribe, type LeagueSummary, type Team } from "../api.ts";
 import { go } from "../router.ts";
 import { Logo, fmtDate } from "../util.tsx";
 
+const ago = (ms: number) => {
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  if (m < 60 * 24) return `${Math.round(m / 60)} h ago`;
+  const d = Math.round(m / 1440);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+};
+
 export function Start() {
-  const [leagues, setLeagues] = useState<{ id: string; name: string; date: string; user_team_id: number | null }[] | null>(null);
-  useEffect(() => { api.leagues().then(setLeagues).catch(() => setLeagues([])); }, []);
+  const [leagues, setLeagues] = useState<LeagueSummary[] | null>(null);
+  const [teams, setTeams] = useState<Map<number, Team>>(new Map());
+  const [health, setHealth] = useState<{ saves: string; can_quit: boolean } | null>(null);
+  const [quit, setQuit] = useState(false);
+  useEffect(() => {
+    api.leagues().then(setLeagues).catch(() => setLeagues([]));
+    api.seedTeams().then((t) => setTeams(new Map(t.map((x) => [x.id, x])))).catch(() => {});
+    api.health().then(setHealth).catch(() => {});
+    // Keeps a launcher-started server awake while this window is open.
+    return subscribe("", () => {});
+  }, []);
+  if (quit) return <div className="page narrow"><h1>CFB Dynasty</h1><p>The game is closed and everything is saved. You can close this window.</p></div>;
+  const [last, ...rest] = leagues ?? [];
+  const t = last?.user_team_id != null ? teams.get(last.user_team_id) : undefined;
   return (
     <div className="page narrow">
       <h1>CFB Dynasty</h1>
       <p className="muted">The 2026 college football season, day by day.</p>
-      <button className="primary" onClick={() => go("new")}>New league</button>
-      <h2>Your leagues</h2>
-      {!leagues ? <p className="muted">Loading...</p> : !leagues.length ? <p className="muted">No leagues yet.</p> : (
-        <table className="grid"><tbody>{leagues.map((l) => (
-          <tr key={l.id}><td><a href={`#/l/${l.id}/home`}>{l.name}</a></td><td className="muted">{fmtDate(l.date, true)}</td></tr>
-        ))}</tbody></table>
+      {!leagues ? <p className="muted">Loading...</p> : last && (
+        <a className="continue" href={`#/l/${last.id}/home`} style={{ borderColor: t?.color }}>
+          {t && <Logo team={t} size={56} />}
+          <span className="what">
+            <span className="small muted">Continue</span>
+            <strong>{last.name}</strong>
+            <span className="small">{t ? `${t.school} · ` : ""}{fmtDate(last.date, true)} · played {ago(last.played_at)}</span>
+          </span>
+          <span className="go">Play</span>
+        </a>
       )}
+      <p><button className={last ? "" : "primary"} onClick={() => go("new")}>New league</button></p>
+      {rest.length > 0 && <>
+        <h2>Other saved leagues</h2>
+        <table className="grid"><tbody>{rest.map((l) => {
+          const lt = l.user_team_id != null ? teams.get(l.user_team_id) : undefined;
+          return (
+            <tr key={l.id}>
+              <td>{lt && <Logo team={lt} size={22} />}</td>
+              <td><a href={`#/l/${l.id}/home`}>{l.name}</a></td>
+              <td className="muted">{fmtDate(l.date, true)}</td>
+              <td className="muted small">played {ago(l.played_at)}</td>
+            </tr>
+          );
+        })}</tbody></table>
+      </>}
+      {health && <p className="small muted savesat">Saves are kept in {health.saves}</p>}
+      {health?.can_quit && <p><button onClick={() => api.quit().then(() => setQuit(true))}>Quit game</button></p>}
     </div>
   );
 }

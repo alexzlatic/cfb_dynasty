@@ -6,7 +6,15 @@ import type { Game } from "@cfb/core";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
 
-export interface ServerOptions { manager: LeagueManager; staticDir?: string; logoDir?: string }
+export interface ServerOptions {
+  manager: LeagueManager; staticDir?: string; logoDir?: string;
+  /** Code version the server started from; the launcher restarts a server whose code is out of date. */
+  commit?: string;
+  /** Shut down after this many minutes with no open game window (0 = never). */
+  idleExitMinutes?: number;
+  /** Called by POST /api/quit and by the idle timer. Without it, quitting is refused. */
+  onQuit?: () => void;
+}
 
 class HttpError extends Error { constructor(public status: number, msg: string) { super(msg); } }
 
@@ -44,6 +52,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
   });
 
   async function api(req: IncomingMessage, p: string[], url: URL): Promise<unknown> {
+    if (p[0] === "health") return { ok: true, app: "cfb-dynasty", commit: opts.commit ?? "dev", saves: manager.dir, can_quit: !!opts.onQuit };
+    if (p[0] === "quit" && req.method === "POST") {
+      if (!opts.onQuit) throw new HttpError(403, "quit is disabled");
+      setTimeout(opts.onQuit, 100);
+      return { ok: true };
+    }
     if (p[0] === "seed" && p[1] === "teams") return manager.seed().teams.filter((t) => t.level === "fbs");
     if (p[0] !== "leagues") throw new HttpError(404, "not found");
     if (p.length === 1) {
@@ -165,16 +179,26 @@ export function startServer(opts: ServerOptions, port: number): Server {
 
   // WebSocket: /ws?league=<id>. Every applied action and day advance is pushed to every client on that league.
   const wss = new WebSocketServer({ server, path: "/ws" });
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const armIdle = () => {
+    if (!opts.idleExitMinutes || !opts.onQuit || wss.clients.size > 0) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => wss.clients.size === 0 && opts.onQuit!(), opts.idleExitMinutes * 60_000);
+  };
+  armIdle();
   wss.on("connection", (ws: WebSocket, req) => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     const id = new URL(req.url || "", "http://x").searchParams.get("league") || "";
     let off: (() => void) | null = null;
-    try {
+    // A window on the league list connects with no league; it only keeps the server awake.
+    if (!id) ws.send(JSON.stringify({ type: "hello", league: null }));
+    else try {
       off = manager.get(id).subscribe((push) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(push)));
       ws.send(JSON.stringify({ type: "hello", league: id }));
     } catch {
       ws.close(1008, "no such league");
     }
-    ws.on("close", () => off?.());
+    ws.on("close", () => { off?.(); armIdle(); });
   });
 
   server.listen(port);
