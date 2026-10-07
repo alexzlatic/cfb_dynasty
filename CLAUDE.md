@@ -13,3 +13,6 @@
 - League schema changes are new entries at the end of `MIGRATIONS` in `packages/server/src/db.ts`;
   never edit an existing migration.
 - Never commit the CFBD API key or team logos.
+- Player ratings come from `npm run seed:players` (needs the CFBD pulls in `importer/.cache`). Rerun it after
+  changing `players.ts`, `compiler.ts` or the importer's seed files; the compiler test checks every team's
+  seed depth chart still compiles to its preseason ratings.

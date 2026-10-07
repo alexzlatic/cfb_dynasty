@@ -9,3 +9,5 @@ export * from "./seed.ts";
 export * from "./polls.ts";
 export * from "./playoff.ts";
 export * from "./writers.ts";
+export * from "./players.ts";
+export * from "./compiler.ts";
