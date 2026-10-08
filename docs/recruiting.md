@@ -86,7 +86,7 @@ Seed 7, the first three AI-recruited classes (2028-2030):
 | | real | 2028-2030 |
 |---|---|---|
 | Five-stars to top-10 classes | 70-90% | 79-94% |
-| Four-stars to power programs | 95%+ | 99.8-100% |
+| Four-stars to power programs | nearly all (a few to top Group of Six programs is fine) | 99.8-100% |
 | Three-stars to power programs (of FBS signees) | 48% | 54-57% |
 | Signees within 300 miles | 45-60% | 61-64% |
 | Class size, 10th/50th/90th percentile | 12/20/29 | 11-14/20-22/25-27 |
@@ -106,7 +106,7 @@ their own recruiting, with the program cycle and yearly coaching changes:
 |---|---|---|
 | Different champions | 10 | 10, 10, 11 |
 | Most titles by one school | 6 (Alabama) | 5, 4, 4 |
-| Schools with more than three titles | 1 | 1, 3, 2 |
+| Schools with more than three titles (several is fine if titles spread wide) | 1 | 1, 3, 2 |
 | Top-four schools' share of titles | about 60% | 65-70% |
 | Year-to-year strength correlation | 0.81 | 0.84 |
 | Top-10 teams still top 10 next year | 5.7 | 6.1-6.7 |

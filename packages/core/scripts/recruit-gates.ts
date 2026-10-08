@@ -42,7 +42,7 @@ for (let n = 1; n <= seasons; n++) {
   console.log(JSON.stringify({
     class: cls, secs: Math.round((Date.now() - t0) / 1000),
     "5* to top-10 class % (70-90)": pct(five.filter((p) => top10.has(p.commit!.team)).length, five.length),
-    "4* to P4 % (95+)": pct(four.filter((p) => isP4(p.commit!.team)).length, four.length),
+    "4* to P4 % (most; a few to top G6 ok)": pct(four.filter((p) => isP4(p.commit!.team)).length, four.length),
     // Real 2024-25: 41-42% of all signed three-stars, 48% of those who signed with FBS schools.
     "3* to P4 % of all (38-48)": pct(three.filter((p) => isP4(p.commit!.team)).length, three.length),
     "3* to P4 % of FBS (42-55)": pct(three.filter((p) => isP4(p.commit!.team)).length, three.filter((p) => fbs.has(p.commit!.team)).length),
