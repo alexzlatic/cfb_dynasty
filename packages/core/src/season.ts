@@ -495,7 +495,7 @@ export class Season {
     const next: RecruitingState = {
       prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0, svc_v: 2,
       user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0,
-        found: (u.found ?? []).filter((x) => live.has(x)), board: (u.board ?? []).filter((x) => live.has(x)) },
+        found: (u.found ?? []).filter((x) => live.has(x)), board: (u.board ?? []).filter((x) => live.has(x)), board_added: (u.board_added ?? []).filter((x) => live.has(x)) },
     };
     rateClasses(next.prospects, ny, s.date, 0, s.seed, rs.curve);
     return next;
@@ -1054,6 +1054,7 @@ export class Season {
     rateClasses(prospects, s.year, s.date, rerate, s.seed, rs.curve);
     s.recruiting = { prospects, next_id: next, classes, rerate, svc_v: 2, user: { auto: true, hours: {}, scout: [], regions: [], evals: {}, spend: 0, time: { ...SEASON_TIME }, board: [] } };
     this.seedFound();
+    this.boardCommits();
   }
 
   /**
@@ -1069,6 +1070,8 @@ export class Season {
       st.svc_v = 2;
     }
     if (s.user_team_id != null && st.user.found_team !== s.user_team_id) this.seedFound();
+    // ...and before your commits went on your big board.
+    if (!st.user.board_added) this.boardCommits();
   }
 
   /** Each prospect's true potential against his class (class standard deviations above its average). */
@@ -1207,6 +1210,20 @@ export class Season {
     }
     const ev = this.week.run({ st, year: s.year, date: today, schools, user: me, rng: new Rng(mixSeed(s.seed, s.year, today, "recruiting")) });
     this.recruitNews(ev, today, rep);
+    this.boardCommits();
+  }
+
+  /** Your commits go on your big board (after the prospects already there, best first), once each: one you take off stays off. */
+  private boardCommits(): void {
+    const s = this.state, st = s.recruiting, me = s.user_team_id;
+    if (!st || me == null) return;
+    const u = st.user, board = u.board ?? [], added = new Set(u.board_added ?? []), on = new Set(board);
+    const fresh = st.prospects.filter((p) => p.commit?.team === me && !added.has(p.id) && !on.has(p.id))
+      .sort((a, b) => a.cls - b.cls || (a.svc?.rank ?? Infinity) - (b.svc?.rank ?? Infinity) || a.id - b.id);
+    if (!fresh.length) return;
+    this.recruitRev++;
+    u.board = [...board, ...fresh.map((p) => p.id)];
+    u.board_added = [...added, ...fresh.map((p) => p.id)];
   }
 
   /** Your scouts' week: trips to the prospects on your list (as many as their hours allow), and the regional scouts' pay. */
