@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup,
+  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -55,7 +55,12 @@ export type Action =
   | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean } }
   /** The transfer portal: bid for a player (0 withdraws), or a pitch call. */
   | { type: "portal_offer"; payload: { pid: number; amount: number; years: number } }
-  | { type: "portal_pitch"; payload: { pid: number } };
+  | { type: "portal_pitch"; payload: { pid: number } }
+  /** Your staff: hire a coordinator (whoever holds the job is let go), or let one go. */
+  | { type: "hire_coach"; payload: { role: Role; coach_id: number } }
+  | { type: "fire_coach"; payload: { role: Role } }
+  /** Take a job offer, or turn it down. */
+  | { type: "answer_offer"; payload: { team_id: number; accept: boolean } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -69,7 +74,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign"] as const;
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -161,6 +166,12 @@ export class League {
     // Leagues saved before season stats and careers: rebuild stats from the box scores, and start the
     // career the way a new league would (as the school's real head coach).
     if (!("player_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));
+    // Leagues saved before the carousel: every coach starts where the league's seed put him, you among them.
+    if (!meta.coaching) {
+      const c = lg.season.state.career;
+      lg.season.startCoaching(c ? { mode: c.mode, first: c.coach.first, last: c.coach.last } : { mode: "real" }, lg.coaches(), seed?.coach_pool ?? []);
+    }
+    lg.season.upgradeCoaching();
     if (!("career" in meta)) lg.season.startCareer({ mode: "real" }, lg.coaches());
     // Leagues saved before hidden ratings: the truth comes from the league seed, so it is the same as if
     // it had been there from the start (games already played stay as they were).
@@ -279,6 +290,12 @@ export class League {
       if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep + t.opponent <= 0) throw new Error("staff time is four shares that add up to more than 0");
       a = { type: a.type, payload: t };
     }
+    if (a.type === "hire_coach" || a.type === "fire_coach") {
+      const role = a.payload?.role;
+      if (role !== "OC" && role !== "DC" && role !== "STC") throw new Error("you hire and fire coordinators (OC, DC, STC)");
+      a = a.type === "hire_coach" ? { type: a.type, payload: { role, coach_id: Number(a.payload.coach_id) } } : { type: a.type, payload: { role } };
+    }
+    if (a.type === "answer_offer") a = { type: a.type, payload: { team_id: Number(a.payload?.team_id), accept: !!a.payload?.accept } };
     if (a.type === "talk_player" || a.type === "portal_pitch") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
     if (a.type === "renewal_offer" || a.type === "portal_offer") {
       const x = { pid: Number(a.payload?.pid), amount: Number(a.payload?.amount), years: Math.round(Number(a.payload?.years ?? 1)) };
@@ -298,7 +315,7 @@ export class League {
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
     if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
-    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
+    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab" || a.type === "hire_coach" || a.type === "fire_coach" || a.type === "answer_offer")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
     let reports: DayReport[] = [];
     const logged = tx(this.db, () => {
@@ -347,6 +364,9 @@ export class League {
       if (a.type === "renewal_talk") this.season.setTalk(a.payload.pid, a.payload);
       if (a.type === "portal_offer") this.season.portalOffer(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "portal_pitch") this.season.portalPitch(a.payload.pid);
+      if (a.type === "hire_coach") this.season.hireCoach(a.payload.role, a.payload.coach_id);
+      if (a.type === "fire_coach") this.season.fireCoach(a.payload.role);
+      if (a.type === "answer_offer") this.season.answerOffer(a.payload.team_id, a.payload.accept);
       if (a.type === "sim") {
         // A sim after the season has ended starts the next one.
         if (this.season.done) this.nextSeason();

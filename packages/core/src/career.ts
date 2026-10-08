@@ -33,6 +33,10 @@ export interface Career {
   /** Security when the season started, 0 to 100. */
   start: number;
   meetings: Meeting[];
+  /** The day you took this job, when it was during the season (only games after it count). */
+  hired?: ISODate;
+  /** The day you were let go (you're out of work until a school hires you). */
+  out?: ISODate;
 }
 
 /** Win chance from an expected margin (about a 15.5-point standard deviation). */
@@ -96,7 +100,7 @@ export function securityTrail(c: Career, games: Game[], preseason: Record<number
   const me = c.team_id;
   let sec = c.start;
   const out: SecurityStep[] = [];
-  const mine = games.filter((g) => g.status === "final" && (g.home_id === me || g.away_id === me)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
+  const mine = games.filter((g) => g.status === "final" && (g.home_id === me || g.away_id === me) && (!c.hired || g.date >= c.hired) && (!c.out || g.date < c.out)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
   let wins = 0, reg = 0;
   const regTotal = games.filter((g) => g.kind === "regular" && (g.home_id === me || g.away_id === me)).length;
   for (const g of mine) {

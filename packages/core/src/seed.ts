@@ -29,6 +29,7 @@ export function loadSeed(dir = DEFAULT_SEED_DIR): SeedBundle {
     finances: existsSync(join(dir, "finances.json")) ? read(dir, "finances.json").teams : undefined,
     styles: existsSync(join(dir, "styles.json")) ? read(dir, "styles.json").teams : undefined,
     recruiting: loadRecruiting(dir, manifest.season),
+    coach_pool: existsSync(join(dir, "coach_pool.json")) ? read(dir, "coach_pool.json") : undefined,
   };
 }
 

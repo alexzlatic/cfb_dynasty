@@ -7,6 +7,7 @@ import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS,
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
+import { CAROUSEL_CLOSE, ROLE_NAMES, letGoChance, salaryFor, staffBudget, staffPay, staffRecs, type CoachRec } from "@cfb/core";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
 
@@ -90,6 +91,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
       const sec = S.security()!;
       return { ...c, security: sec, label: securityLabel(sec) };
     };
+    /** A coach as anyone sees him: his record, reputation and contract; his skills as your staff reads them. */
+    const coachView = (c: CoachRec) => {
+      const lg2 = c.seasons.filter((x) => x.role === "HC").reduce((a, x) => ({ w: a.w + x.w, l: a.l + x.l }), { w: 0, l: 0 });
+      return {
+        id: c.id, first: c.first, last: c.last, age: c.age, role: c.role, team_id: c.team_id, rep: c.rep, side: c.side, off: c.off, def: c.def,
+        since: c.since, salary: c.salary, through: c.through, seasons: c.seasons, prior: c.prior ?? null, left: c.left ?? null, source: c.source, user: !!c.user, gone: !!c.gone,
+        hc_record: { w: lg2.w + (c.prior?.w ?? 0), l: lg2.l + (c.prior?.l ?? 0) }, skills: S.scoutedSkills(c),
+      };
+    };
     const statRow = (pid: number, st: PlayerSeason) => {
       const pl = S.playerById.get(pid);
       return pl ? { pid, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr, ...st } : null;
@@ -122,7 +132,49 @@ export function startServer(opts: ServerOptions, port: number): Server {
       }
       case route === "career": {
         const byId = new Map(s.games.map((g) => [g.id, g]));
-        return { career: career(), trail: S.securityTrail().map((x) => ({ ...x, game: gameRow(byId.get(x.game_id)!) })) };
+        const u = S.userCoach(), co = s.coaching;
+        return { career: career(), trail: S.securityTrail().map((x) => ({ ...x, game: gameRow(byId.get(x.game_id)!) })),
+          coach: u ? coachView(u) : null, offers: (co?.offers ?? []).filter((o) => o.status === "open"), carousel: co ? { open: co.open, close: CAROUSEL_CLOSE(co.year) } : null };
+      }
+      case route === "staff": {
+        // Your staff (their real skills: you work with them), your openings and who you could hire.
+        const me = s.user_team_id, co = s.coaching;
+        if (me == null || !co) return { team_id: null };
+        const job = S.jobs().get(me)!;
+        const role = url.searchParams.get("role");
+        const members = staffRecs(co, me).map(coachView);
+        const open = (["OC", "DC", "STC"] as const).filter((r) => !members.some((m) => m.role === r));
+        return {
+          team_id: me, roles: ROLE_NAMES, members, open, budget: staffBudget(job), pay: staffPay(co, me), carousel: { open: co.open, close: CAROUSEL_CLOSE(co.year) },
+          in_season: !co.open && S.inSeason(s.date),
+          candidates: role === "OC" || role === "DC" || role === "STC" ? S.staffCandidates(role).map((x) => ({ ...coachView(x.coach), skills: x.scouted, ask: x.ask })) : [],
+        };
+      }
+      case route === "coaches": {
+        // The carousel: openings, this offseason's moves, every head coach and (in season) the hot seats.
+        const co = s.coaching;
+        if (!co) return { coaches: [] };
+        const years = S.teamYears(), jobs = S.jobs();
+        const hcs = co.coaches.filter((c) => c.role === "HC" && c.team_id != null && jobs.get(c.team_id)?.level !== "fcs").map((c) => {
+          const ty = years.get(c.team_id!), n = ty ? ty.w + ty.l : 0;
+          const hot = !c.user && ty && n >= 3 ? letGoChance({ wp: ty.w / n, exp: ty.exp, prev: ty.prev ?? ty.exp, tenure: s.year - c.since + 1, power: jobs.get(c.team_id!)!.level === "p4" }) : null;
+          return { ...coachView(c), hot: hot == null ? null : Math.round(hot * 1000) / 1000 };
+        });
+        const since = `${co.year}-11-01`;
+        return {
+          year: co.year, open: co.open, close: CAROUSEL_CLOSE(co.year), openings: co.openings.map((o) => ({ ...o, prev_name: o.prev != null ? co.coaches.find((c) => c.id === o.prev)?.first + " " + co.coaches.find((c) => c.id === o.prev)?.last : null })),
+          moves: co.moves.filter((m) => m.date >= since).reverse(), head_coaches: hcs,
+          past_years: [...new Set(co.moves.map((m) => Number(m.date.slice(0, 4)) - (m.date.slice(5) < "07-01" ? 1 : 0)))].sort((a, b) => b - a),
+        };
+      }
+      case route === "coaches/moves": {
+        const co = s.coaching, y = Number(url.searchParams.get("year") ?? co?.year);
+        return (co?.moves ?? []).filter((m) => m.date >= `${y}-07-01` && m.date < `${y + 1}-07-01`).reverse();
+      }
+      case p[2] === "coaches" && p.length === 4 && /^\d+$/.test(p[3]): {
+        const c = s.coaching?.coaches.find((x) => x.id === Number(p[3]));
+        if (!c) throw new HttpError(404, "no such coach");
+        return { ...coachView(c), moves: (s.coaching?.moves ?? []).filter((m) => m.coach === c.id).reverse() };
       }
       case route === "development": {
         // Your staff's read on your own team; nobody else's hidden scores are ever sent.
@@ -331,15 +383,16 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const team = S.team(id);
         if (!team) throw new HttpError(404, "no such team");
         const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ? AND status = 'active'").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
+        // The school's staff now (the carousel moves them); leagues without it show the seed's.
         let coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
-        // Your team's head coach is you.
         const c = s.career;
         if (c && c.team_id === id && c.mode === "fresh") coaches = coaches.map((x) => (x.role === "HC" ? { ...x, first: c.coach.first, last: c.coach.last, career: [], source: "you" } : x));
+        const staff = s.coaching ? staffRecs(s.coaching, id).map(coachView) : null;
         const stats = S.roster(id).flatMap((pl) => { const st = s.player_stats?.[pl.id]; return st ? [statRow(pl.id, st)!] : []; });
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
         // Personality classes are public (like OOTP's); the traits behind them stay a read until you talk with him.
         const personas = Object.fromEntries(S.roster(id).map((pl) => [pl.id, S.personaRead(pl.id).name]));
-        return { team, roster, coaches, schemes: S.schemes(id), games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats, personas };
+        return { team, roster, coaches, staff, schemes: S.schemes(id), games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats, personas };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
