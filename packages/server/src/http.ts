@@ -355,7 +355,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return { game: gameRow(g), detail, defenders };
       }
       case route === "standings": return lg.standings();
-      case route === "conferences": return { conferences: lg.season.conferences(), tie_ins: lg.season.state.tie_ins, champs: lg.season.state.conf_champs };
+      case route === "conferences": {
+        const st = lg.season.state;
+        return { conferences: lg.season.conferences(), tie_ins: st.tie_ins, champs: st.conf_champs, year: st.year, mode: st.settings.realignment ?? "market",
+          commissioner: !!st.settings.commissioner, can_edit: lg.season.canEditConferences(), deals: st.realign?.deals ?? {},
+          pending: st.realign?.pending ?? [], history: st.realign?.history ?? [], pcsa: !!st.settings.pcsa };
+      }
       case route === "polls": return s.polls.map((x) => ({ ...x, ranks: x.ranks.slice(0, 25) }));
       case route === "news": {
         const kind = url.searchParams.get("kind"), author = url.searchParams.get("author"), team = url.searchParams.get("team");

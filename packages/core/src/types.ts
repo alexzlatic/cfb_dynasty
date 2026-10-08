@@ -20,6 +20,8 @@ export interface Team {
   prestige: number;
   /** Set from the league's conferences: a power program (absent = the real power conferences and Notre Dame). */
   power?: boolean;
+  /** Set from the league's conferences: the conference TV deal's yearly payout to each school (absent = the real 2025-26 one). */
+  media?: number;
 }
 
 export interface Conference { id: number | null; name: string; short: string; abbr: string | null; level: string | null }
@@ -135,12 +137,17 @@ export interface Settings {
    * rule arrives with career moves.
    */
   pcsa: boolean;
+  /** How conferences change between seasons (chosen when a league starts; see realign.ts). */
+  realignment: "market" | "promotion" | "fixed";
+  /** Lets you rewrite the conferences in the offseason, before a season's first game. */
+  commissioner: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   playoff: { format: "playoff", teams: 12, auto_bids: 5, byes: 4, campus_first_round: true },
   conf_title_games: true, home_field_points: 2.5, poll_bias: 1, poll_noise: 1,
   stop_on: ["season_end"], keep_pbp: "mine_and_ranked", injuries: 1, pcsa: false,
+  realignment: "market", commissioner: false,
 };
 
 export interface SeedBundle {

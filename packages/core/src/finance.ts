@@ -36,21 +36,31 @@ export interface Budget {
 }
 
 /** A football program's own share of its conference's yearly distribution (media rights and bowls), 2025-26. */
-const CONF_MEDIA: Record<string, number> = {
+export const CONF_MEDIA: Record<string, number> = {
   "Big Ten": 42_000_000, SEC: 38_000_000, ACC: 31_000_000, "Big 12": 28_000_000, "Pac-12": 5_500_000, "American Athletic": 5_000_000,
   "Mountain West": 3_500_000, "Sun Belt": 2_500_000, "Mid-American": 1_500_000, "Conference USA": 1_200_000, "FBS Independents": 2_000_000,
 };
-const SCHOOL_MEDIA: Record<string, number> = { "Notre Dame": 25_000_000, Army: 4_000_000, Navy: 4_000_000 };
+export const SCHOOL_MEDIA: Record<string, number> = { "Notre Dame": 25_000_000, Army: 4_000_000, Navy: 4_000_000 };
 const r10k = (x: number) => Math.round(x / 10_000) * 10_000;
 
 /** A school's budget inputs: real lines where loaded, estimates for the rest. */
-export function budgetFor(t: Pick<Team, "school" | "conference" | "level" | "prestige" | "venue">,
+/**
+ * A school's conference TV money: its league deal's payout (`t.media`), else the real figure. Independents
+ * earn their own deals; Army and Navy's real numbers hold while they're in the American.
+ */
+function mediaFor(t: Pick<Team, "school" | "conference" | "media"> & { power?: boolean }): number {
+  if (t.conference === "FBS Independents") return SCHOOL_MEDIA[t.school] ?? 2_000_000;
+  if (t.conference === "American Athletic" && SCHOOL_MEDIA[t.school]) return SCHOOL_MEDIA[t.school];
+  return t.media ?? CONF_MEDIA[t.conference] ?? (isPower(t) ? 25_000_000 : 2_000_000);
+}
+
+export function budgetFor(t: Pick<Team, "school" | "conference" | "level" | "prestige" | "venue" | "media">,
   fin: { attendance: number | null; home_games?: number; lines?: Partial<Record<string, number>> | null } | undefined): Budget | null {
   if (t.level !== "fbs") return null;
   const p = (t.prestige ?? 0) / 100;
   const big = isPower(t);
   const est = {
-    media: SCHOOL_MEDIA[t.school] ?? CONF_MEDIA[t.conference] ?? (isPower(t) ? 25_000_000 : 2_000_000),
+    media: mediaFor(t),
     donors: big ? 6_000_000 + 30_000_000 * p * p : 800_000 + 5_000_000 * p * p,
     // Most Group of Five programs lean on their university and students to cover what football doesn't earn.
     support: big ? 500_000 : 4_000_000 + 3_000_000 * p,

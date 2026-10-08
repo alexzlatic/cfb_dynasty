@@ -118,8 +118,8 @@ export function validateSetup(setup: ConferenceSetup, teams: Team[], opts: { pcs
   return null;
 }
 
-/** Teams as the league's conferences place them: conference, division and power standing (FCS teams unchanged). */
-export function placeTeams(teams: Team[], confs: ConferenceDef[]): Team[] {
+/** Teams as the league's conferences place them: conference, division, power standing and, with deals, the TV money each gets (FCS teams unchanged). */
+export function placeTeams(teams: Team[], confs: ConferenceDef[], media?: Record<string, { per_school: number }>): Team[] {
   const at = new Map<number, { c: ConferenceDef; div: string | null }>();
   for (const c of confs) {
     for (const id of c.members) {
@@ -131,7 +131,8 @@ export function placeTeams(teams: Team[], confs: ConferenceDef[]): Team[] {
     const p = at.get(t.id);
     if (!p) return t;
     const power = p.c.tier === "power" || (p.c.tier === "independent" && t.school === "Notre Dame");
-    return { ...t, conference: p.c.name, division: p.div, power };
+    const pay = media?.[p.c.name]?.per_school;
+    return { ...t, conference: p.c.name, division: p.div, power, ...(pay != null ? { media: pay } : {}) };
   });
 }
 

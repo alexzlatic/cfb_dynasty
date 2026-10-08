@@ -1,6 +1,11 @@
 import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
 export type { ConferenceDef, ConferenceSetup, TieIns, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan };
+export type ConfMove = { team_id: number; from: string; to: string; announced: number; effective: number; fee: number; reason: string };
+export type ConferencesView = {
+  conferences: ConferenceDef[]; tie_ins: TieIns; champs: Record<string, number>; year: number; mode: Settings["realignment"]; commissioner: boolean; can_edit: boolean;
+  deals: Record<string, { per_school: number; expires: number }>; pending: ConfMove[]; history: ConfMove[]; pcsa: boolean;
+};
 export type CareerView = Career & { security: number; label: string };
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
@@ -160,7 +165,7 @@ export const api = {
   createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>, career?: CareerStart, conferences?: ConferenceSetup | null) =>
     req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings, career, conferences }) }),
   seedConferences: () => req<{ conferences: ConferenceDef[]; tie_ins: TieIns; bowls: { name: string; ny6: boolean; sides: [string[], string[]] }[]; pcsa_cap: number }>("/api/seed/conferences"),
-  conferences: (id: string) => req<{ conferences: ConferenceDef[]; tie_ins: TieIns; champs: Record<string, number> }>(`/api/leagues/${id}/conferences`),
+  conferences: (id: string) => req<ConferencesView>(`/api/leagues/${id}/conferences`),
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),

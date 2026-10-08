@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, subscribe, type ConferenceSetup, type LeagueSummary, type Team } from "../api.ts";
 import { ConferenceEditor, sortConfs } from "./Conferences.tsx";
+import { REALIGN } from "./Settings.tsx";
 import { go } from "../router.ts";
 import { Logo, fmtDate } from "../util.tsx";
 
@@ -78,6 +79,8 @@ export function NewLeague() {
   const [real, setReal] = useState<Awaited<ReturnType<typeof api.seedConferences>> | null>(null);
   const [custom, setCustom] = useState<ConferenceSetup | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [realignment, setRealignment] = useState<keyof typeof REALIGN>("market");
+  const [commissioner, setCommissioner] = useState(false);
   useEffect(() => {
     api.seedTeams().then(setTeams); api.seedCoaches().then(setCoaches).catch(() => {});
     api.seedConferences().then(setReal).catch(() => {});
@@ -98,7 +101,7 @@ export function NewLeague() {
     const [f, n] = format.split("-");
     const playoff = f === "playoff" ? { format: "playoff", teams: Number(n), byes: n === "12" ? 4 : n === "24" ? 8 : 0, auto_bids: Number(n) >= 12 ? 5 : 0 } : { format: f };
     try {
-      const { id } = await api.createLeague(name, pick, { playoff } as never, mode === "real" ? { mode } : { mode, first, last }, custom);
+      const { id } = await api.createLeague(name, pick, { playoff, realignment, commissioner } as never, mode === "real" ? { mode } : { mode, first, last }, custom);
       go("l", id, "home");
     } catch (e) {
       setErr((e as Error).message);
@@ -130,6 +133,10 @@ export function NewLeague() {
           <option value="real">Real 2026 conferences</option>
           <option value="custom">Custom conferences</option>
         </select></label>
+        <label>Realignment <select value={realignment} onChange={(e) => setRealignment(e.target.value as keyof typeof REALIGN)}>
+          {Object.entries(REALIGN).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select></label>
+        <label className="check"><span><input type="checkbox" checked={commissioner} onChange={(e) => setCommissioner(e.target.checked)} /> Commissioner mode</span></label>
         <label>Find a school <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" /></label>
         <button className="primary" disabled={busy || !pick || (mode === "fresh" && !last.trim())} onClick={create}>{chosen ? `Start as ${chosen.school}` : "Pick a team"}</button>
       </div>

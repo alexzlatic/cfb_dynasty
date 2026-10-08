@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useData, useLeague } from "../App.tsx";
 import { api, type ConferenceDef, type ConferenceSetup, type Team, type TieIns } from "../api.ts";
-import { Logo, TeamName } from "../util.tsx";
+import { Logo, TeamName, money } from "../util.tsx";
 
 const IND = "FBS Independents";
 const TIERS: Record<ConferenceDef["tier"], string> = { power: "Power", group: "Group of Six", independent: "Independents" };
@@ -132,31 +132,64 @@ export function ConferenceEditor({ teams, value, onChange, bowls, cap }: {
   );
 }
 
-/** League > Conferences: who is in each conference, its rules, champion and bowls. */
+const NY6 = new Set(["Rose Bowl", "Sugar Bowl", "Orange Bowl", "Cotton Bowl", "Fiesta Bowl", "Peach Bowl"]);
+const REASON: Record<string, string> = { invite: "invited", collapse: "conference folded", promotion: "promoted", relegation: "relegated", commissioner: "commissioner" };
+
+/** League > Conferences: who is in each conference, its rules, TV deal, champion and bowls, the moves announced, and (commissioner mode) the editor. */
 export function Conferences() {
   const { id, team, rank } = useLeague();
-  const data = useData(() => api.conferences(id), []);
+  const [v, setV] = useState(0);
+  const data = useData(() => api.conferences(id), [v]);
+  const [edit, setEdit] = useState<ConferenceSetup | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   if (!data) return <p className="muted">Loading...</p>;
   const byId = new Map(data.conferences.flatMap((c) => c.members.map((m) => [m, team(m)!] as const)).filter(([, t]) => !!t));
   const bowlsOf = (name: string) => Object.entries(data.tie_ins).filter(([, s]) => s[0].includes(name) || s[1].includes(name)).map(([b]) => b);
+  const save = async () => {
+    try { await api.act(id, "set_conferences", edit); setEdit(null); setErr(null); setV(v + 1); } catch (e) { setErr((e as Error).message); }
+  };
+  const moves = [...data.pending, ...data.history.slice(-30).reverse()];
   return (
-    <div className="confgrid">
-      {sortConfs(data.conferences, byId).map((c) => {
-        const champ = data.champs[c.name];
-        return (
-          <section key={c.name} className="panel confcard">
-            <h3>{c.name} <span className="muted small">{TIERS[c.tier]} · {c.members.length} schools</span></h3>
-            {c.tier !== "independent" && <p className="small muted">
-              {c.conf_games} conference games{c.title_game ? ", title game" : ", no title game"}{c.divisions ? ` (${Object.keys(c.divisions).join(" and ")} divisions)` : ""}
-              {c.cfp_bids ? `, ${c.cfp_bids} guaranteed playoff spot${c.cfp_bids > 1 ? "s" : ""}` : ""}</p>}
-            {champ != null && <p className="small">Champion: <TeamName team={team(champ)} league={id} /></p>}
-            <ul className="confteams">{c.members.map((m) => team(m)).filter((t): t is Team => !!t).sort((a, b) => a.school.localeCompare(b.school)).map((t) => (
-              <li key={t.id}><Logo team={t} size={16} /> <TeamName team={t} rank={rank(t.id)} league={id} /></li>
-            ))}</ul>
-            {c.tier !== "independent" && <p className="small muted">Bowls: {bowlsOf(c.name).join(", ") || "at-large only"}</p>}
-          </section>
-        );
-      })}
+    <div>
+      <p className="small muted">Realignment: {data.mode === "market" ? "market (TV deals, invitations and folds)" : data.mode === "promotion" ? "promotion and relegation" : "fixed"}
+        {data.commissioner ? " · commissioner mode on" : ""}</p>
+      {data.can_edit && !edit && <p><button onClick={() => setEdit({ conferences: structuredClone(data.conferences), tie_ins: structuredClone(data.tie_ins) })}>Edit conferences</button></p>}
+      {edit && <>
+        <p><button className="primary" onClick={save}>Save conferences</button> <button onClick={() => setEdit(null)}>Cancel</button> {err && <span className="warn">{err}</span>}</p>
+        <ConferenceEditor teams={[...byId.values()]} value={edit} onChange={setEdit} bowls={Object.keys(data.tie_ins).map((name) => ({ name, ny6: NY6.has(name) }))} cap={data.pcsa ? 20 : 24} />
+      </>}
+      {!edit && <>
+        {moves.length > 0 && <section className="panel">
+          <h3>Realignment</h3>
+          <table className="grid tight"><thead><tr><th>School</th><th>From</th><th>To</th><th className="num">Season</th><th>Why</th><th className="num">Exit fee</th></tr></thead>
+            <tbody>{moves.map((m, i) => (
+              <tr key={i} className={m.effective > data.year ? "upcoming" : ""}>
+                <td><Logo team={team(m.team_id)} size={16} /> <TeamName team={team(m.team_id)} league={id} /></td>
+                <td>{m.from}</td><td>{m.to}</td><td className="num">{m.effective > data.year ? `from ${m.effective}` : m.effective}</td>
+                <td className="muted">{REASON[m.reason] ?? m.reason}</td><td className="num">{m.fee ? money(m.fee) : ""}</td>
+              </tr>
+            ))}</tbody></table>
+        </section>}
+        <div className="confgrid">
+          {sortConfs(data.conferences, byId).map((c) => {
+            const champ = data.champs[c.name], deal = data.deals[c.name];
+            return (
+              <section key={c.name} className="panel confcard">
+                <h3>{c.name} <span className="muted small">{TIERS[c.tier]} · {c.members.length} schools</span></h3>
+                {c.tier !== "independent" && <p className="small muted">
+                  {c.conf_games} conference games{c.title_game ? ", title game" : ", no title game"}{c.divisions ? ` (${Object.keys(c.divisions).join(" and ")} divisions)` : ""}
+                  {c.cfp_bids ? `, ${c.cfp_bids} guaranteed playoff spot${c.cfp_bids > 1 ? "s" : ""}` : ""}</p>}
+                {deal && <p className="small">TV deal: {money(deal.per_school)} a school a year, through {deal.expires}</p>}
+                {champ != null && <p className="small">Champion: <TeamName team={team(champ)} league={id} /></p>}
+                <ul className="confteams">{c.members.map((m) => team(m)).filter((t): t is Team => !!t).sort((a, b) => a.school.localeCompare(b.school)).map((t) => (
+                  <li key={t.id}><Logo team={t} size={16} /> <TeamName team={t} rank={rank(t.id)} league={id} /></li>
+                ))}</ul>
+                {c.tier !== "independent" && <p className="small muted">Bowls: {bowlsOf(c.name).join(", ") || "at-large only"}</p>}
+              </section>
+            );
+          })}
+        </div>
+      </>}
     </div>
   );
 }

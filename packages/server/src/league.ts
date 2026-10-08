@@ -11,6 +11,7 @@ export type Action =
   | { type: "sim"; payload: SimCommand }
   | { type: "set_user_team"; payload: { team_id: number | null } }
   | { type: "update_settings"; payload: Partial<Settings> }
+  | { type: "set_conferences"; payload: ConferenceSetup }
   /** A team's depth chart; null puts back the opening depth chart. */
   | { type: "set_depth"; payload: { team_id: number; depth: DepthChart | null } }
   /** The user's calls from a game they called live (null = the coordinator's call); the game plays with them tonight. */
@@ -68,7 +69,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "conferences", "tie_ins"] as const;
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "conferences", "tie_ins", "realign"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -297,7 +298,7 @@ export class League {
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
     if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
-    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
+    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
     let reports: DayReport[] = [];
     const logged = tx(this.db, () => {
@@ -315,6 +316,12 @@ export class League {
         this.db.exec("DELETE FROM events");
         const e = this.db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?)");
         for (const x of s.events) e.run(x.id, x.date, x.type, x.status, j(x));
+      }
+      if (a.type === "set_conferences") {
+        this.season.setConferences(a.payload);
+        this.db.exec("DELETE FROM games WHERE season IS NULL AND kind = 'regular'");
+        const g = this.db.prepare("INSERT INTO games (id, date, kind, home_id, away_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        for (const x of s.games) if (x.kind === "regular") g.run(x.id, x.date, x.kind, x.home_id, x.away_id, x.status, j(x));
       }
       if (a.type === "set_depth") this.season.setDepth(a.payload.team_id, a.payload.depth);
       if (a.type === "call_game") { this.season.setCalls(a.payload.game_id, a.payload.calls); this.season.setSubs(a.payload.game_id, a.payload.subs ?? []); }

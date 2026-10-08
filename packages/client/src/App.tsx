@@ -102,9 +102,14 @@ function LeagueShell({ id, screen, arg, sub }: { id: string; screen: string; arg
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(() => { api.state(id).then(setState).catch((e) => setErr(e.message)); setVersion((v) => v + 1); }, [id]);
-  useEffect(() => { api.teams(id).then((t) => setTeams(new Map(t.map((x) => [x.id, x])))); refresh(); }, [id, refresh]);
+  const loadTeams = useCallback(() => api.teams(id).then((t) => setTeams(new Map(t.map((x) => [x.id, x])))), [id]);
+  useEffect(() => { loadTeams(); refresh(); }, [id, refresh, loadTeams]);
+  // Teams change conferences when the conferences are edited and at a new season.
+  const year = state?.year;
+  useEffect(() => { if (year != null) loadTeams(); }, [year, loadTeams]);
   useEffect(() => subscribe(id, (m) => {
     refresh();
+    if (m.type === "action" && m.action.type === "set_conferences") loadTeams();
     if (m.type === "days" && m.news?.length) setToast(m.news[m.news.length - 1].headline);
   }), [id, refresh]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 5000); return () => clearTimeout(t); } }, [toast]);
