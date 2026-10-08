@@ -15,7 +15,8 @@ import type { RatedPlayer } from "./players.ts";
  *   - scheme fit: how the starters fit the coaches' system. New head coaches swing it most; adaptable
  *     players and good coaches raise it through camp.
  *   - chemistry: built from leaders (a leader at QB matters most), helped by scheme fit; continuity makes
- *     a good locker room better and a bad one worse, and it moves a little with how the season is going.
+ *     a good locker room better and a bad one worse. For one game after an upset it also carries momentum
+ *     (Season.updateMorale), which never touches development.
  *
  * Sizes are calibrated to real seasons (reports/surprise-sizes.md: 658 FBS team-seasons): a team's true
  * strength lands about 6.6 points from its preseason rating on average, 4.7 for a continuity team and 7.8
@@ -151,12 +152,16 @@ export function hiddenTeam(o: {
     // Continuity: a good locker room gets better and a bad one worse.
     if (ctx.continuity) cz *= 1.15;
     const sd = ctx.continuity ? CHEM_SD.continuity : u === "off" && ctx.new_qb ? CHEM_SD.new_qb : CHEM_SD.same_qb;
-    chem[u] = r2(phi * sd * cz + 0.5 * (o.morale ?? 0) + (o.mood?.[u] ?? 0));
+    chem[u] = r2(phi * sd * cz + (o.mood?.[u] ?? 0));
   }
+  // Development follows the locker room, not last week's score.
+  const settled = { ...chem };
+  // Momentum: last week's result against expectations, split across both units (see Season.updateMorale).
+  for (const u of ["off", "def"] as const) chem[u] = r2(chem[u] + 0.5 * (o.morale ?? 0));
   // Development: better chemistry, faster development (young players gain the most from it); a staff
   // development plan adds about 2 overall points over 80 days (2.5 at most).
   const dev = new Map<number, number>(), growth = new Map<number, number>();
-  const rate = (u: Unit) => clamp(1 + 0.25 * chem[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
+  const rate = (u: Unit) => clamp(1 + 0.25 * settled[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
   for (const p of o.roster) {
     const h = hp.get(p.id)!, u = unitOf(p.pos);
     const lab = o.lab?.[p.id] && o.lab[p.id].area !== "leadership" ? 2 * labDays(p.id) / 80 : 0;

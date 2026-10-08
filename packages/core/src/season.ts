@@ -1,7 +1,7 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
-import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
+import { LAB_SLOTS, POINTS_PER_UNIT, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { ATTRS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
@@ -193,6 +193,8 @@ export interface DayReport {
 
 /** Program cycles: how much of a program's momentum carries into next year, and how far it runs (utility for recruits). */
 const CYCLE_CARRY = 0.8, CYCLE_SD = 0.5;
+/** Momentum after a result against expectations: points of next-game margin per unit of (won - win chance), carry-over per game, cap (reports/momentum.md). */
+export const MOMENTUM = { loss: 1, win: 0.25, carry: 0.3, cap: 1 };
 /** The yearly chance a program changes head coaches (a stand-in for the carousel). */
 const COACH_CHANGE = 0.2;
 const OFF_OR_DEF = { off: new Set<string>(OFFENSE_FIELD as readonly string[]), def: new Set<string>(DEFENSE_FIELD as readonly string[]) };
@@ -1633,14 +1635,22 @@ export class Season {
     return { off: h.fit.off + h.chem.off + dev("off"), def: h.fit.def + h.chem.def + dev("def"), h };
   }
 
-  /** Winning beyond expectations lifts a locker room a little; losing more than expected wears on it. */
+  /**
+   * Momentum, sized to real games (reports/momentum.md: 14,756 FBS team-games, 2014-2025): a result against
+   * expectations moves the next game by about half a point per unit of (won - win chance). An upset loss
+   * stings (1 point per unit) more than an upset win lifts (0.25), it is mostly gone a game later (x0.3),
+   * streaks don't stack, and it is never worth more than a point. Stored in hidden points (one is worth
+   * POINTS_PER_UNIT of margin) and split across offense and defense.
+   */
   private updateMorale(g: Game): void {
     const s = this.state;
     const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
     this.donors(g, p);
     const homeWon = g.home_score! > g.away_score! ? 1 : 0;
+    const cap = MOMENTUM.cap / POINTS_PER_UNIT;
     for (const [id, d] of [[g.home_id, homeWon - p], [g.away_id, p - homeWon]] as const) {
-      s.morale![id] = Math.round(Math.max(-1.5, Math.min(1.5, (s.morale![id] ?? 0) * 0.9 + 0.3 * d)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
+      const hit = (d < 0 ? MOMENTUM.loss : MOMENTUM.win) * d / POINTS_PER_UNIT;
+      s.morale![id] = Math.round(Math.max(-cap, Math.min(cap, (s.morale![id] ?? 0) * MOMENTUM.carry + hit)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
     }
   }
 

@@ -34,8 +34,13 @@ summer to 50%, fall camp to 85% by the opener, and the rest arrives by mid-Novem
   and a good head coach (by career record) and an adaptable roster raise it through camp. It is the
   best-known score going into camp for a returning staff and swings much more with a new head coach.
 - **Chemistry.** Built from the starters' leadership (the quarterback's counts three times), helped by scheme
-  fit, plus what can't be explained. It swings more with a new quarterback. It also moves a little with how
-  the season is going: winning beyond expectations lifts a locker room, losing more than expected wears on it.
+  fit, plus what can't be explained. It swings more with a new quarterback. Scheme fit is half explained by
+  the players' ratings in their coaches' schemes (`docs/schemes.md`) and half unseen.
+- **Momentum.** For about one game after a result against expectations, chemistry carries momentum. It is
+  sized to real games (`reports/momentum.md`: 14,756 FBS team-games from 2014 to 2025, where the effect is
+  barely there). An upset loss costs about 1 point of margin per unit of (won minus win chance), and an upset
+  win adds 0.25. It carries 30% into the game after, streaks don't stack, and the cap is 1 point. Momentum
+  never feeds development.
 
 ## How they connect
 
