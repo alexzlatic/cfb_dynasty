@@ -136,6 +136,52 @@ export function residual(rate: Rate, target: number, compiled: number): number {
   return LOG_RATES.has(rate) ? Math.log(target / compiled) : logit(target) - logit(compiled);
 }
 
+/** Position groups for fatigue: a tired group plays every unit input it feeds this many SDs lower. */
+export type Group = "qb" | "skill" | "ol" | "dl" | "lb" | "db";
+const INPUT_GROUPS: Record<string, [Group, number][]> = {
+  qb_short: [["qb", 1]], qb_deep: [["qb", 1]], qb_arm: [["qb", 1]], qb_decisions: [["qb", 1]], qb_pocket: [["qb", 1]],
+  recv_route: [["skill", 1]], recv_hands: [["skill", 1]], recv_speed: [["skill", 1]], recv_rac: [["skill", 1]], recv_contested: [["skill", 1]],
+  pass_pro: [["ol", 0.85], ["skill", 0.15]], run_block: [["ol", 0.8], ["skill", 0.2]],
+  rb_vision: [["skill", 1]], rb_power: [["skill", 1]], rb_speed: [["skill", 1]], rb_elusive: [["skill", 1]],
+  ball_security: [["skill", 0.7], ["qb", 0.3]],
+  pass_rush: [["dl", 0.8], ["lb", 0.2]], run_def: [["dl", 1]], lb_run_fit: [["lb", 1]], lb_speed: [["lb", 1]],
+  coverage: [["db", 0.87], ["lb", 0.13]], ball_skills: [["db", 1]], range: [["db", 1]], tackling: [["lb", 2 / 7], ["db", 5 / 7]],
+};
+
+/**
+ * A team's rates with some position groups tired (`tired` in SDs below their ratings). The compiler is
+ * linear in z, so lowering every player in a group by t lowers each unit input by t times its group weight.
+ */
+export function withFatigue(r: TeamRatings, tired: Partial<Record<Group, number>>): TeamRatings {
+  let any = false;
+  for (const g in tired) if (tired[g as Group]) { any = true; break; }
+  if (!any) return r;
+  const move = (rates: UnitRates, per: Record<Rate, [Group, number][]>): UnitRates => {
+    const out = { ...rates };
+    for (const k of RATES) {
+      let sh = 0;
+      for (const [g, c] of per[k]) sh -= c * (tired[g] ?? 0);
+      out[k] = apply(rates[k], k, sh);
+    }
+    return out;
+  };
+  return { ...r, offense: move(r.offense, GROUP_TERMS.offense), defense: move(r.defense, GROUP_TERMS.defense) };
+}
+
+/** Each rate's coefficient on each group's fatigue, folded once from the terms and the input groups. */
+const GROUP_TERMS = (() => {
+  const fold = (terms: Record<Rate, Terms>) => {
+    const out = {} as Record<Rate, [Group, number][]>;
+    for (const r of RATES) {
+      const acc = new Map<Group, number>();
+      for (const [input, c] of terms[r]) for (const [g, w] of INPUT_GROUPS[input]) acc.set(g, (acc.get(g) ?? 0) + c * w);
+      out[r] = [...acc];
+    }
+    return out;
+  };
+  return { offense: fold(OFFENSE_TERMS), defense: fold(DEFENSE_TERMS) };
+})();
+
 function shares(l: Lineup, table: Partial<Record<Slot, number>>, key: "carry" | "target", tilt: (p: RatedPlayer) => number, k: number,
   mults: (p: RatedPlayer) => { catch_mult: number; ypc_mult: number }): PlayerShare[] {
   const rows = (Object.entries(table) as [Slot, number][]).filter(([s]) => l.slot[s]).map(([s, w]) => {

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { ATTR_LABELS, ATTRS, type Pos } from "@cfb/core/players";
+import { ATTR_LABELS, ATTRS, fromZ, type Pos } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type RatedPlayer } from "../api.ts";
-import { Logo, heightStr, onColor } from "../util.tsx";
+import { api, type DepthChart, type Injury, type RatedPlayer } from "../api.ts";
+import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
 
 export const POS_ORDER: Pos[] = ["QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB", "CB", "S", "K", "P", "LS"];
@@ -24,6 +24,15 @@ export function Bar({ label, v }: { label: string; v: number }) {
   );
 }
 
+/** When an injured player is back: "out for the season" or "back Oct 17". */
+export const outUntil = (i: Injury) => (i.days >= 90 ? "out for the season" : `back ${shortDate(i.back)}`);
+
+/** A red OUT tag with the injury and return date on hover. */
+export function InjuryTag({ i }: { i: Injury | undefined | null }) {
+  if (!i) return null;
+  return <span className="inj" title={`${i.type}, ${outUntil(i)}`}>OUT</span>;
+}
+
 export const playerLink = (league: string, p: { id: number; first: string; last: string }) => <a href={`#/l/${league}/player/${p.id}`}>{p.first} {p.last}</a>;
 
 /** Which depth chart slots a player holds, e.g. "QB" or "CB2 (2)". */
@@ -31,8 +40,9 @@ export function slotsOf(depth: DepthChart, id: number): string[] {
   return Object.entries(depth).flatMap(([s, ids]) => (ids ?? []).map((x, i) => (x === id ? (i ? `${s} (${i + 1})` : s) : null))).filter((x): x is string => !!x);
 }
 
-export function RosterTable({ players, depth }: { players: RatedPlayer[]; depth: DepthChart }) {
+export function RosterTable({ players, depth, injuries = [] }: { players: RatedPlayer[]; depth: DepthChart; injuries?: Injury[] }) {
   const { id } = useLeague();
+  const hurt = useMemo(() => new Map(injuries.map((i) => [i.pid, i])), [injuries]);
   const [pos, setPos] = useState<Pos | "ALL">("ALL");
   const [sort, setSort] = useState<"pos" | "ovr" | "name" | "class">("pos");
   const starters = useMemo(() => new Set(Object.values(depth).map((ids) => ids?.[0])), [depth]);
@@ -60,7 +70,7 @@ export function RosterTable({ players, depth }: { players: RatedPlayer[]; depth:
             {attrs.map((a) => <th key={a} title={ATTR_LABELS[a]}>{abbr(a)}</th>)}<th>Depth</th></tr></thead>
           <tbody>{rows.map((p) => (
             <tr key={p.id} className={starters.has(p.id) ? "starter" : ""}>
-              <td className="num muted">{p.jersey ?? ""}</td><td>{playerLink(id, p)}</td><td>{p.pos}</td><td><Rating v={p.ovr} /></td>
+              <td className="num muted">{p.jersey ?? ""}</td><td>{playerLink(id, p)} <InjuryTag i={hurt.get(p.id)} /></td><td>{p.pos}</td><td><Rating v={p.ovr} /></td>
               <td>{p.class}</td><td>{heightStr(p.height)}</td><td>{p.weight ?? ""}</td><td className="muted">{p.stars ? "★".repeat(p.stars) : ""}</td>
               {attrs.map((a) => <td key={a} className="num">{p.attrs[a]}</td>)}
               <td className="muted small">{slotsOf(depth, p.id).join(", ")}</td>
@@ -81,8 +91,9 @@ export function PlayerPage({ pid }: { pid: number }) {
   const { id } = useLeague();
   const data = useData(() => api.player(id, pid), [pid]);
   if (!data) return <p className="muted">Loading...</p>;
-  const { player: p, team: t, log } = data;
+  const { player: p, team: t, log, injury } = data;
   const cols = STAT_COLS.filter(([k]) => log.some((g) => g.line[k]));
+  const snaps = log.reduce((a, g) => a + g.snaps, 0);
   const tot: Record<string, number> = {};
   for (const g of log) for (const [k] of cols) tot[k] = (tot[k] ?? 0) + (g.line[k] ?? 0);
   return (
@@ -92,6 +103,7 @@ export function PlayerPage({ pid }: { pid: number }) {
         <div>
           <h1>{p.jersey != null ? <span className="muted">#{p.jersey} </span> : null}{p.first} {p.last}</h1>
           <div>{p.pos} · {p.class} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school}</a>{data.slots.length ? ` · ${data.slots.join(", ")} on the depth chart` : ""}</div>
+          {injury && <div className="injline">Injured: {injury.type}, {outUntil(injury)}</div>}
           <div className="small">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="power">Overall <Rating v={p.ovr} big /></div>
@@ -105,12 +117,12 @@ export function PlayerPage({ pid }: { pid: number }) {
           <Panel title={`2026 game log (${log.length})`}>
             {!log.length ? <p className="muted">No stats yet.</p> : (
               <table className="grid tight">
-                <thead><tr><th>Game</th>{cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
+                <thead><tr><th>Game</th>{snaps > 0 && <th className="num" title="Snaps played">Snaps</th>}{cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
                 <tbody>
-                  {log.map(({ game, line }) => (
-                    <tr key={game.id}><td><GameLine g={game} showDate /></td>{cols.map(([k]) => <td key={k} className="num">{line[k] ?? ""}</td>)}</tr>
+                  {log.map(({ game, line, snaps: n }) => (
+                    <tr key={game.id}><td><GameLine g={game} showDate /></td>{snaps > 0 && <td className="num">{n || ""}</td>}{cols.map(([k]) => <td key={k} className="num">{line[k] ?? ""}</td>)}</tr>
                   ))}
-                  <tr className="total"><td>Season</td>{cols.map(([k]) => <td key={k} className="num">{tot[k]}</td>)}</tr>
+                  <tr className="total"><td>Season</td>{snaps > 0 && <td className="num">{snaps}</td>}{cols.map(([k]) => <td key={k} className="num">{tot[k]}</td>)}</tr>
                 </tbody>
               </table>
             )}
@@ -121,10 +133,18 @@ export function PlayerPage({ pid }: { pid: number }) {
             <Bar label="Stamina" v={p.traits.stamina} />
             <Bar label="Toughness" v={p.traits.toughness} />
             <Bar label="Discipline" v={p.traits.discipline} />
-            <Bar label="Injury proneness" v={p.traits.injury} />
+            {/* Injury proneness is stored 0-99 around 50; shown the other way up, on the ratings scale. */}
+            <Bar label="Durability" v={fromZ(-(p.traits.injury - 50) / 15)} />
             {p.tend.scramble != null && <p className="small">Scrambles on {(p.tend.scramble * 100).toFixed(0)}% of dropbacks.</p>}
             <p className="muted small">Potential and work ethic are hidden until scouting arrives.</p>
           </Panel>
+          {data.injuries.length > 0 && (
+            <Panel title="Injuries">
+              <table className="grid tight"><tbody>{data.injuries.map((i) => (
+                <tr key={`${i.game_id}`}><td>{shortDate(i.date)}</td><td>{i.type}</td><td className="muted">{i.days ? `${i.days >= 90 ? "season" : `${Math.round(i.days / 7) || 1} wk`}` : "rest of game"}</td></tr>
+              ))}</tbody></table>
+            </Panel>
+          )}
           <Panel title="Background">
             <table className="grid tight"><tbody>
               <tr><td>Recruiting</td><td>{p.stars ? `${"★".repeat(p.stars)} (${p.composite?.toFixed(4)})` : "Unranked"}{p.natl_rank ? `, #${p.natl_rank} nationally` : ""}</td></tr>

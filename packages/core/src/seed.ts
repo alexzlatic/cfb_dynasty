@@ -27,7 +27,7 @@ export function loadSeed(dir = DEFAULT_SEED_DIR): SeedBundle {
 }
 
 /** players.json holds ratings only; identity comes from the roster entry with the same id. */
-function unpackPlayers(teams: Record<string, any>, rosters: Record<string, Player[]>): Record<string, TeamPlayers> {
+export function unpackPlayers(teams: Record<string, any>, rosters: Record<string, Player[]>): Record<string, TeamPlayers> {
   for (const [tid, t] of Object.entries(teams)) {
     const ident = new Map((rosters[tid] ?? []).map((r) => [Number(r.id), r]));
     t.players = t.players.map((q: any): RatedPlayer => {
@@ -42,4 +42,14 @@ function unpackPlayers(teams: Record<string, any>, rosters: Record<string, Playe
     });
   }
   return teams as Record<string, TeamPlayers>;
+}
+
+/** A rated player in the compact form players.json (and a league file) stores; `unpackPlayers` reverses it. */
+export function packPlayer(p: RatedPlayer) {
+  const r = (x: number | null) => (x == null ? null : Math.round(x * 10000) / 10000);
+  return {
+    id: p.id, pos: p.pos, years: p.years, stars: p.stars, composite: r(p.composite), natl_rank: p.natl_rank,
+    a: ATTRS[p.pos].map((k) => p.attrs[k]), t: [p.traits.stamina, p.traits.injury, p.traits.toughness, p.traits.discipline],
+    h: [p.hidden.potential, p.hidden.work_ethic], tend: p.tend, b: p.basis === "stats" ? p.sample : -p.sample,
+  };
 }

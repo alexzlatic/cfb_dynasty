@@ -53,6 +53,15 @@ export function GamePage({ gid }: { gid: number }) {
           </Panel>
           <div>
             {[[A, d.away_players], [H, d.home_players]].map(([t, pl]: any) => <PlayerBox key={t.id} team={t} players={pl} />)}
+            {!!d.injuries?.length && (
+              <Panel title="Injuries">
+                <table className="grid tight"><tbody>{d.injuries.map((x, i) => (
+                  <tr key={i}><td>{team(x.team_id)?.abbr}</td><td><a href={`#/l/${id}/player/${x.pid}`}>{x.name}</a> <span className="muted small">{x.pos}</span></td>
+                    <td className="muted small">Q{x.quarter > 4 ? "OT" : x.quarter} · {x.type}</td>
+                    <td className="small">{x.days == null ? "returned" : x.days === 0 ? "out for the game" : x.days >= 90 ? "out for the season" : `out about ${Math.max(1, Math.round(x.days / 7))} wk`}</td></tr>
+                ))}</tbody></table>
+              </Panel>
+            )}
           </div>
         </div>
       )}

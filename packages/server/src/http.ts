@@ -97,11 +97,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ?").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         const coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id] };
+        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id) };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
-        return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id)), players: S.roster(id) };
+        const injuries = S.injured(id);
+        return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries };
       }
       case p[2] === "players" && p.length === 4: {
         const pl = S.playerById.get(Number(p[3]));
@@ -115,9 +116,10 @@ export function startServer(opts: ServerOptions, port: number): Server {
           if (!row) return [];
           const d = JSON.parse(row.data);
           const line = (g.home_id === pl.team_id ? d.home_players : d.away_players)?.[name];
-          return line ? [{ game: gameRow(g), line }] : [];
+          const snaps = d.snaps?.[pl.id];
+          return line || snaps ? [{ game: gameRow(g), line: line ?? {}, snaps: snaps ?? 0 }] : [];
         });
-        return { player: pl, team: S.team(pl.team_id), slots, log };
+        return { player: pl, team: S.team(pl.team_id), slots, log, injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id) };
       }
       case route === "schedule": {
         const team = url.searchParams.get("team"), date = url.searchParams.get("date"), week = url.searchParams.get("week");

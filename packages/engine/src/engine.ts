@@ -109,6 +109,23 @@ export function fitRush(ypc: number, stuff: number, explosive: number): RushMode
   return { stuff, explosive, mid_mu: (lo + hi) / 2 };
 }
 
+/**
+ * fitRush by table lookup: the same model to about 1e-4 of a yard, without the 40-step search.
+ * Substitutions refit every few snaps; kickoff keeps the exact fit so engine parity is untouched.
+ */
+let midTable: Float64Array | null = null;
+const MID_LO = -5, MID_STEP = 0.005, MID_N = 4001;
+export function fitRushFast(ypc: number, stuff: number, explosive: number): RushModel {
+  const t = (midTable ??= Float64Array.from({ length: MID_N }, (_, i) => clippedMean(MID_LO + i * MID_STEP, RUSH.MID_SD, 1, 11)));
+  const midShare = 1 - stuff - explosive;
+  let target = (ypc - stuff * RUSH.STUFF_MEAN - explosive * (RUSH.EXPL_BASE + RUSH.EXPL_TAIL)) / midShare;
+  target = Math.min(Math.max(target, 1.2), 10.5);
+  let lo = 0, hi = MID_N - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (t[m] < target) lo = m; else hi = m; }
+  const f = (target - t[lo]) / (t[hi] - t[lo] || 1);
+  return { stuff, explosive, mid_mu: MID_LO + (lo + f) * MID_STEP };
+}
+
 function sampleRush(m: RushModel, rng: Rng): number {
   const u = rng.random();
   if (u < m.stuff) return -Math.min(trunc(rng.expovariate(1 / 1.3)), 8);
@@ -123,6 +140,8 @@ function sampleCompletionYards(rng: Rng, mean: number): number {
 }
 
 interface Player { name: string; pos: string; share: number; catch_mult: number; ypc_mult: number }
+
+const prep = (r: TeamRatings) => ({ ...r, rushers: normalizePlayers(r.rushers || []), receivers: normalizePlayers(r.receivers || []) });
 
 /** Rescale player multipliers so the share-weighted mean is 1, keeping team rates intact. */
 function normalizePlayers(players: PlayerShare[]): Player[] {
@@ -234,10 +253,10 @@ export class GameSim {
   readonly home: Side;
   readonly away: Side;
   readonly neutral: boolean;
-  private readonly homeMu: Matchup;
-  private readonly awayMu: Matchup;
-  private readonly homeRush: RushModel;
-  private readonly awayRush: RushModel;
+  private homeMu!: Matchup;
+  private awayMu!: Matchup;
+  private homeRush!: RushModel;
+  private awayRush!: RushModel;
   readonly plays: PlayRecord[] = [];
   readonly drives: DriveRecord[] = [];
   quarter = 1;
@@ -254,21 +273,37 @@ export class GameSim {
   private otRound = 0;
   private otPossessionOver = false;
   private secondHalfKicker!: Side;
+  /** Who had the ball on the last scrimmage play (runner, sacked or scrambling QB, or the receiver who caught it). */
+  lastTouch: { name: string; side: "home" | "away" } | null = null;
 
   constructor(home: TeamRatings, away: TeamRatings, opts: GameOptions = {}) {
     this.rng = opts.rng ?? new Rng(opts.seed ?? 0);
     this.record = opts.record ?? true;
-    const prep = (r: TeamRatings) => ({ ...r, rushers: normalizePlayers(r.rushers || []), receivers: normalizePlayers(r.receivers || []) });
     this.home = new Side(prep(home), true);
     this.away = new Side(prep(away), false);
     this.neutral = opts.neutral ?? false;
-    const edge = this.neutral ? 0 : HOME_EDGE;
+    this.matchups(fitRush);
+    this.offense = this.home;
+  }
+
+  private matchups(fit = fitRushFast): void {
+    const edge = this.neutral ? 0 : HOME_EDGE, home = this.home.ratings, away = this.away.ratings;
     this.homeMu = buildMatchup(home, away, edge);
     this.awayMu = buildMatchup(away, home, -edge);
     for (const mu of [this.homeMu, this.awayMu]) mu.comp_pct = Math.min(0.85, mu.comp_pct * COMP_PCT_CAL);
-    this.homeRush = fitRush(this.homeMu.rush_ypc * RUSH_CAL, this.homeMu.rush_stuff, this.homeMu.rush_explosive);
-    this.awayRush = fitRush(this.awayMu.rush_ypc * RUSH_CAL, this.awayMu.rush_stuff, this.awayMu.rush_explosive);
-    this.offense = this.home;
+    this.homeRush = fit(this.homeMu.rush_ypc * RUSH_CAL, this.homeMu.rush_stuff, this.homeMu.rush_explosive);
+    this.awayRush = fit(this.awayMu.rush_ypc * RUSH_CAL, this.awayMu.rush_stuff, this.awayMu.rush_explosive);
+  }
+
+  /** A substitution: swap one side's ratings mid-game and rebuild the matchups. Draws nothing from the RNG. */
+  setRatings(side: "home" | "away", r: TeamRatings): void {
+    (side === "home" ? this.home : this.away).ratings = prep(r);
+    this.matchups();
+  }
+
+  /** Add a line to the play-by-play (an injury, a substitution) without touching the game. */
+  note(playType: string, desc: string): void {
+    this.log(playType, desc, 0, { down: 0, dist: 0 });
   }
 
   // ---- running the game ----------------------------------------------------------------
@@ -347,7 +382,7 @@ export class GameSim {
   }
 
   private log(playType: string, desc: string, yards = 0, o: LogOpts = {}) {
-    if (this.drive && !["KICKOFF", "PAT", "2PT", "TIMEOUT", "END"].includes(playType)) this.drive.plays += 1;
+    if (this.drive && !["KICKOFF", "PAT", "2PT", "TIMEOUT", "END", "INJURY", "SUB"].includes(playType)) this.drive.plays += 1;
     if (!this.record) return;
     const off = o.offense || this.offense;
     const yl = o.yl == null ? this.yl : o.yl;
@@ -664,6 +699,7 @@ export class GameSim {
   private *scrimmage(): Gen {
     const off = this.offense, dfn = this.defense;
     this.pendingTimeout = null;
+    this.lastTouch = null;
     if (!this.overtime && this.clock <= 8 && this.yl + 17 <= 55 + off.ratings.fg_skill &&
         (this.quarter === 2 || (this.quarter === 4 && this.margin() >= -3 && this.margin() <= 0))) {
       yield* this.fieldGoal();
@@ -695,6 +731,8 @@ export class GameSim {
     yield* this.postPlay(res[0], res[1], res[2], res[3], down0, dist0, yl0, q0, c0, isPass ? "PASS" : "RUN");
   }
 
+  private touch(name: string): void { this.lastTouch = { name, side: this.offense === this.home ? "home" : "away" }; }
+
   private pickPlayer(players: Player[], fallback: string): Player {
     if (!players.length) return { name: fallback, pos: "?", share: 1, ypc_mult: 1, catch_mult: 1 };
     const tot = players.reduce((s, p) => s + p.share, 0);
@@ -713,6 +751,7 @@ export class GameSim {
     y = Math.min(y, this.yl);
     off.stats.rush_att += 1; off.stats.rush_yards += y;
     off.players.rush(rusher.name, y, y === this.yl);
+    this.touch(rusher.name);
     if (y >= 12) off.stats.explosive += 1;
     const yds = (n: number) => `${n} yard${Math.abs(n) !== 1 ? "s" : ""}`;
     if (rng.random() < m.fumble_lost_rate * 1.0 && y < this.yl) {
@@ -733,6 +772,7 @@ export class GameSim {
       const y = -Math.max(1, trunc(rng.gauss(7, 3)));
       off.stats.sacks_taken += 1; off.stats.sack_yards += -y; dfn.stats.sacks += 1;
       off.players.sacked(qb);
+      this.touch(qb);
       if (rng.random() < 0.05 && this.yl - y < 100) {
         off.players.fumble(qb);
         return [y, true, `${qb} sacked for ${-y} yards, FUMBLES, recovered by ${dfn.ratings.abbr}`, "fumble"];
@@ -743,6 +783,7 @@ export class GameSim {
       const y = Math.min(this.yl, Math.max(-2, trunc(rng.gammavariate(1.6, off.ratings.scramble_scale || SCRAMBLE_SCALE)) - 1));
       off.stats.rush_att += 1; off.stats.rush_yards += y;
       off.players.rush(qb, y, y === this.yl);
+      this.touch(qb);
       if (y >= 12) off.stats.explosive += 1;
       return [y, false, `${qb} scrambles for ${y} yards`, null];
     }
@@ -771,6 +812,7 @@ export class GameSim {
     if (y >= 20) off.stats.explosive += 1;
     off.players.pass(qb, true, y, td, false);
     off.players.catch(tgt.name, y, td);
+    this.touch(tgt.name);
     if (!td && rng.random() < m.fumble_lost_rate * 0.8) {
       off.players.fumble(tgt.name);
       return [y, true, `${qb} pass complete to ${tgt.name} for ${y} yards, FUMBLES, recovered by ${dfn.ratings.abbr}`, "fumble"];
