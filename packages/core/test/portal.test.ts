@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerDays, openingAsk, payFor, reasonsOf, respond, stayScore, watchOf, type StayContext } from "../src/portal.ts";
+import { answerDays, askFor, lengthPremium, maxYears, openingAsk, payFor, reasonsOf, respond, stayScore, watchOf, type StayContext } from "../src/portal.ts";
 import type { Persona } from "../src/valuation.ts";
 import { loadSeed } from "../src/seed.ts";
 import { freshModel, rollRosters } from "../src/rollover.ts";
@@ -95,5 +95,36 @@ describe("transfers in the rollover", () => {
     expect(t.left.find((d) => d.pid === mover.id)).toMatchObject({ reason: "transfer", to: ohio });
     expect(t.left.find((d) => d.pid === quitter.id)?.reason).toBe("left");
     expect(Object.values(t.players).some((x) => x.players.some((p) => p.id === quitter.id))).toBe(false);
+  });
+});
+
+describe("multi-year deals", () => {
+  const steady: Persona = { ...avg, kind: "steady", loyalty: 1.8, money: 0.8, fit: 1.3 };
+  const home: Persona = { ...avg, kind: "homebody", home: 1.8, loyalty: 1.3, winning: 0.8 };
+
+  it("most players want more a year to lock in; loyal and homebody players hardly ask, mercenaries won't sign", () => {
+    expect(lengthPremium(avg)).toBeCloseTo(0.08, 3);
+    expect(lengthPremium(steady)).toBeLessThan(0.02);
+    expect(lengthPremium(home)).toBeLessThan(0.03);
+    expect(maxYears(merc)).toBe(1);
+    expect(maxYears(steady)).toBe(4);
+    expect(askFor(500_000, avg, 3)).toBe(580_000);
+  });
+
+  it("a locked deal holds a player much more than a deal he can renegotiate", () => {
+    expect(stayScore({ ...base, contract: true, locked: true }, avg).p).toBeLessThan(stayScore({ ...base, contract: true }, avg).p * 0.5);
+  });
+
+  it("answers a longer offer by its length: too long costs no patience, and the price rises by his premium", () => {
+    const t = { ask: 550_000, walk: 500_000, patience: 3 };
+    const long = respond(t, 900_000, 3, merc);
+    expect(long.accepted).toBe(false);
+    expect(long.too_long).toBe(1);
+    expect(long.patience).toBe(3);
+    // The one-year number isn't enough for three years; his premium on top is.
+    expect(respond(t, 500_000, 3, avg).accepted).toBe(false);
+    expect(respond(t, askFor(500_000, avg, 3), 3, avg).accepted).toBe(true);
+    // A loyal player signs for three at about his one-year number.
+    expect(respond(t, 505_000, 3, steady).accepted).toBe(true);
   });
 });

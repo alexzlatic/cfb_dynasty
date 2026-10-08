@@ -37,6 +37,8 @@ export interface TalkView {
   status: string; label: string; ask: number | null; patience: number; offer: { amount: number; years: number; made: string; answer: string } | null; counter: number | null;
   deal: { amount: number; years: number; via: string } | null; outcome: "signed" | "let_go" | "portal" | "stayed" | null; mine: boolean;
   plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
+  /** A longer deal: how much more a year he wants per extra season, the longest he'll sign (your staff's read until you talk). */
+  length: { premium: number; max: number; known: boolean };
 }
 export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
 export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
@@ -55,9 +57,24 @@ export interface PortalRow {
 export interface PortalNeed { spots: number; starter: boolean; floor: number }
 export interface PortalData { year: number | null; open: boolean; window: string | null; entries: PortalRow[]; needs: Record<string, PortalNeed>; budget: NextBudget | null; offered: number; pitches_left: number }
 
+export interface Fortune { fans: number; donors: number; ad: number }
+export interface FinanceYear { year: number; w: number; l: number; post: string | null; revenue: number; expenses: number; surplus: number; attendance: number; roster_budget: number; class: string; fortune: Fortune }
+export type SalaryCell = { amount: number; kind: "paid" | "signed" | "locked" | "est" | "gone" };
+export interface FrontOfficeData {
+  team_id: number | null; year: number; mine: boolean; conference: string;
+  class: { now: { key: string; label: string } | null; next: { key: string; label: string } };
+  fortune: { now: Fortune; next: Fortune }; record: { w: number; l: number; exp: number; ratio: number }; postseason: { own: number; pooled: number };
+  years: number[];
+  players: { pid: number; name: string; pos: string; ovr: number; cls: string; years: number; value: number; value_next: number; last: number; nfl: boolean; cells: SalaryCell[] }[];
+  totals: { year: number; budget: number; committed: number; est: number; room: number }[];
+  lines: { year: number; revenue: Record<string, number>; expenses: Record<string, number>; surplus: number; projected: boolean }[];
+  history: FinanceYear[];
+  labels: { revenue: Record<string, string>; expenses: Record<string, string> };
+}
+
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number; retention?: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
   /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
   returning: boolean; ceiling: number;
 }
@@ -169,6 +186,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  frontOffice: (id: string, team?: number) => req<FrontOfficeData>(`/api/leagues/${id}/front_office` + (team != null ? `?team=${team}` : "")),
   budget: (id: string, team?: number) => req<BudgetData>(`/api/leagues/${id}/budget` + (team != null ? `?team=${team}` : "")),
   collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),

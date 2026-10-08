@@ -140,6 +140,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return { team_id: team, mine: team === s.user_team_id, base: c.base, reserve: c.reserve, focus: c.focus ?? [], focus_max: FOCUS_MAX, positions: POSITIONS,
           spent: deals.reduce((a, d) => a + d.deal.amount, 0), deals, conference };
       }
+      case route === "front_office": {
+        // Salaries by season, roster budgets ahead, football's budget projected and the money history (yours by default).
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        if (!S.teamById.get(team)) return { team_id: null };
+        const fo = S.frontOffice(team);
+        if (!fo) return { team_id: null };
+        // Other schools' contracts are public; their staff's estimates aren't sent.
+        return { ...fo, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES } };
+      }
       case route === "budget": {
         // A school's budget (yours by default), its home games and facilities, and its conference's budgets.
         const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);

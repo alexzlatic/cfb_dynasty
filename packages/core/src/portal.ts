@@ -57,6 +57,8 @@ export interface StayContext {
   tier_away: 0 | 1 | 2;
   /** His deal runs into next season (leaving means a buyout). */
   contract?: boolean;
+  /** He signed a multi-year deal with you (he agreed to it): walking away from it is a bigger step. */
+  locked?: boolean;
   /** Moving would cost him a season (a second transfer under the Protect College Sports Act). */
   costs_season?: boolean;
   /** You promised him a starting job. */
@@ -79,6 +81,8 @@ export const TIER_FRICTION = [0, 1.3, 1.3];
 export const NOWHERE = 0.8;
 /** Dropping a level (the exposure, the life and the money of a power program) holds players back, per level. */
 export const TIER_DROP = 0.9;
+/** What a multi-year deal he agreed to adds to staying (on top of any deal running into next season). */
+export const LOCKED = 1.5;
 /** Spread of a player's own pull each year. */
 export const NOISE_SD = 0.9;
 /** Pay beyond this many times his value never keeps anyone: money can't fix it. */
@@ -111,7 +115,7 @@ export function stayScore(c: StayContext, w: Pick<Persona, "money" | "playing" |
   };
   const sum = Object.values(parts).reduce((a, b) => a + b, 0);
   const friction = FRICTION[Math.max(0, Math.min(FRICTION.length - 1, Math.floor(c.years)))] + TIER_FRICTION[c.tier]
-    + 0.5 * w.loyalty * W.loyalty + (c.contract ? 1 : 0) + (c.costs_season ? 1.5 : 0) + NOWHERE * Math.max(0, 1 - c.start_away / 0.3)
+    + 0.5 * w.loyalty * W.loyalty + (c.contract ? 1 : 0) + (c.locked ? LOCKED : 0) + (c.costs_season ? 1.5 : 0) + NOWHERE * Math.max(0, 1 - c.start_away / 0.3)
     + TIER_DROP * Math.max(0, c.tier_away - c.tier);
   const net = sum + friction + NOISE_SD * c.noise;
   return { net, p: sigmoid(-net), parts };
@@ -182,6 +186,27 @@ export interface RenewalRule {
 }
 export const DEFAULT_RULE: RenewalRule = { auto_up_to: 1.1, offer_up_to: 1, release_over: 25_000, budget_share: 0.8 };
 
+// ---- deal length ------------------------------------------------------------------------------------
+/**
+ * How much more a year he wants for each season beyond one. Most players would rather sign for a year and
+ * test the market again (about 8% a year); money-first players want much more to give that up, and
+ * players who value loyalty or home sign longer deals for little or nothing extra.
+ */
+export function lengthPremium(w: Pick<Persona, "money" | "development" | "loyalty" | "home">): number {
+  const x = 0.08 + 0.1 * (w.money - 1) + 0.05 * (w.development - 1) - 0.08 * (w.loyalty - 1) - 0.04 * (w.home - 1);
+  return Math.round(Math.max(-0.03, Math.min(0.3, x)) * 1000) / 1000;
+}
+
+/** The longest deal he'll sign: players who want much more for a longer deal won't sign one at all. */
+export function maxYears(w: Pick<Persona, "money" | "development" | "loyalty" | "home">): number {
+  const x = lengthPremium(w);
+  return x >= 0.17 ? 1 : x >= 0.12 ? 2 : 4;
+}
+
+/** His number for a deal of `years` seasons, from his one-year number. */
+export const askFor = (oneYear: number, w: Pick<Persona, "money" | "development" | "loyalty" | "home">, years: number) =>
+  roundPay(oneYear * (1 + lengthPremium(w) * Math.max(0, years - 1)));
+
 /** Rounds of patience by personality. */
 export const patienceOf = (w: Persona) => (w.kind === "mercenary" ? 2 : w.kind === "steady" ? 4 : 3);
 
@@ -191,8 +216,17 @@ export function openingAsk(walk: number, w: Persona): number {
 }
 
 /** His answer to an offer: he stays at or above his walk-away number; else he declines and names his number (part of the way down), losing patience (more for a lowball). */
-export function respond(t: Pick<Talk, "ask" | "walk" | "patience" | "counter">, offer: number): { accepted: boolean; counter: number | null; patience: number; insulted: boolean } {
+export function respond(t: Pick<Talk, "ask" | "walk" | "patience" | "counter">, offer: number, years = 1, w?: Persona): { accepted: boolean; counter: number | null; patience: number; insulted: boolean; too_long?: number } {
   if (t.walk == null || t.ask == null) return { accepted: false, counter: null, patience: 0, insulted: false };
+  // A longer deal than he'll sign: he says so, and it costs no patience.
+  if (w && years > maxYears(w)) return { accepted: false, counter: t.counter ?? t.ask, patience: t.patience, insulted: false, too_long: maxYears(w) };
+  // For a longer deal his numbers rise by his premium for each season beyond one.
+  if (w && years > 1) {
+    const k = (x: number) => askFor(x, w, years);
+    const r = respond({ ask: k(t.ask), walk: k(t.walk), patience: t.patience, counter: t.counter != null ? k(t.counter) : undefined }, offer);
+    // His counter is always stated as a one-year number.
+    return { ...r, counter: r.counter != null ? roundPay(r.counter / (1 + lengthPremium(w) * (years - 1))) : null };
+  }
   if (offer >= t.walk) return { accepted: true, counter: null, patience: t.patience, insulted: false };
   const insulted = offer < 0.7 * t.walk;
   const was = t.counter ?? t.ask;
