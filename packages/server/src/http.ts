@@ -4,6 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -87,7 +88,22 @@ export function startServer(opts: ServerOptions, port: number): Server {
       const pl = S.playerById.get(pid);
       return pl ? { pid, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr, ...st } : null;
     };
+    /** A team's schemes, each side's slots as the scheme names them, and every player's rating at each slot he can play. */
+    const schemeView = (id: number, players: RatedPlayer[]) => {
+      const sc = S.schemes(id);
+      const layout = (x: Scheme) => schemeLayout(x).map(({ slot, role }) => ({ slot, label: role.label, pos: role.pos }));
+      const ratings: Record<number, Record<string, { rating: number; fit: number }>> = {};
+      for (const pl of players) {
+        for (const x of [sc.off, sc.def]) for (const { slot, role } of schemeLayout(x)) {
+          if (!role.pos.includes(pl.pos)) continue;
+          const r = schemeRating(pl, x, slot);
+          (ratings[pl.id] ??= {})[slot] = { rating: r.rating, fit: r.fit };
+        }
+      }
+      return { ...sc, off_name: SCHEMES[sc.off].name, def_name: SCHEMES[sc.def].name, layout: { off: layout(sc.off), def: layout(sc.def) }, ratings };
+    };
     switch (true) {
+      case route === "schemes": return { schemes: SCHEMES };
       case route === "" || route === "state": {
         const upcoming = s.events.filter((e) => e.date >= s.date && e.status !== "done" && e.type !== "game_day").slice(0, 8);
         const myGames = s.user_team_id == null ? [] : s.games.filter((g) => g.home_id === s.user_team_id || g.away_id === s.user_team_id);
@@ -296,7 +312,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (c && c.team_id === id && c.mode === "fresh") coaches = coaches.map((x) => (x.role === "HC" ? { ...x, first: c.coach.first, last: c.coach.last, career: [], source: "you" } : x));
         const stats = S.roster(id).flatMap((pl) => { const st = s.player_stats?.[pl.id]; return st ? [statRow(pl.id, st)!] : []; });
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats };
+        return { team, roster, coaches, schemes: S.schemes(id), games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
@@ -304,7 +320,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const mine = id === s.user_team_id;
         const gp = Object.fromEntries(S.roster(id).map((pl) => [pl.id, s.player_stats?.[pl.id]?.gp ?? 0]));
         return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries,
-          gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES };
+          schemes: schemeView(id, S.roster(id)), gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES };
       }
       case p[2] === "players" && p.length === 4: {
         const pl = S.playerById.get(Number(p[3]));

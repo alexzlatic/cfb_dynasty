@@ -21,6 +21,7 @@ import {
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { KNOWN_FRONTS, drawSchemes, inferFronts, inferOffense, type TeamSchemes } from "./schemes.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -93,6 +94,8 @@ export interface SeasonState {
   hidden_ctx?: Record<number, TeamContext>;
   /** How each team's season is going against expectations (moves chemistry a little). */
   morale?: Record<number, number>;
+  /** Each team's coordinators' schemes (absent in a league's first season: read from the seed; see schemes.ts). */
+  schemes?: Record<number, TeamSchemes>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
@@ -446,6 +449,7 @@ export class Season {
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
     next.startHidden(coaches);
+    next.state.schemes = this.nextSchemes(next);
     for (const t of next.teams) {
       if (t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
     }
@@ -1516,6 +1520,47 @@ export class Season {
     const ids = Object.keys(ctx).map(Number), avg = ids.reduce((a, id) => a + ctx[id].coach, 0) / Math.max(1, ids.length);
     for (const id of ids) ctx[id].coach = Math.round((ctx[id].coach - avg) * 100) / 100;
     s.hidden_ctx = ctx;
+  }
+
+  private schemeCache?: Record<number, TeamSchemes>;
+  /** Every team's offensive and defensive schemes. */
+  allSchemes(): Record<number, TeamSchemes> {
+    if (this.state.schemes) return this.state.schemes;
+    if (!this.schemeCache) {
+      const rosters: Record<number, RatedPlayer[]> = {};
+      for (const t of this.teams) rosters[t.id] = this.roster(t.id);
+      const fronts = inferFronts(this.state.seed, rosters), out: Record<number, TeamSchemes> = {};
+      for (const t of this.teams) {
+        // FCS ratings are generic, so their staffs draw from the real mix.
+        const r = t.level === "fbs" ? this.seed.ratings[t.id]?.ratings : undefined;
+        out[t.id] = { off: r ? inferOffense(r) : drawSchemes(this.state.seed, this.state.year, t.id).off, def: KNOWN_FRONTS[t.school] ?? fronts[t.id] ?? "4-2-5" };
+      }
+      this.schemeCache = out;
+    }
+    return this.schemeCache;
+  }
+
+  /** A team's schemes and the coaches who run them (the head coach stands in for a missing coordinator). */
+  schemes(teamId: number): TeamSchemes & { off_coach: string | null; def_coach: string | null } {
+    const sc = this.allSchemes()[teamId] ?? { off: "pro_style", def: "4-2-5" };
+    const st = this.staff(teamId), name = (role: string) => {
+      const c = st.find((m) => m.role === role) ?? st.find((m) => m.role === "HC");
+      return c ? `${c.first} ${c.last}`.trim() : null;
+    };
+    return { ...sc, off_coach: name("OC"), def_coach: name("DC") };
+  }
+
+  /** Next season's schemes: the same coordinators keep theirs; a new head coach brings new ones. */
+  private nextSchemes(next: Season): Record<number, TeamSchemes> {
+    const now = this.allSchemes(), out: Record<number, TeamSchemes> = {};
+    for (const t of next.teams) {
+      const cur = now[t.id] ?? { off: "pro_style", def: "4-2-5" };
+      if (!next.state.hidden_ctx?.[t.id]?.new_coach) { out[t.id] = cur; continue; }
+      const d = drawSchemes(next.state.seed, next.state.year, t.id);
+      // The academies keep the option whoever coaches them.
+      out[t.id] = { off: cur.off === "option" ? "option" : d.off, def: d.def };
+    }
+    return out;
   }
 
   teamContext(teamId: number): TeamContext {

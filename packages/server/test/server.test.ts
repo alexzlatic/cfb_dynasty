@@ -189,6 +189,10 @@ describe("depth charts", () => {
     const d = await get(`/api/leagues/${id}/teams/2509/depth`);
     expect(d.players.length).toBeGreaterThan(80);
     expect(d.depth.QB.length).toBeGreaterThan(1);
+    // The scheme names each slot and rates every player at the slots he can play.
+    expect(d.schemes.layout.off).toHaveLength(14);
+    expect(d.schemes.layout.def).toHaveLength(11);
+    expect(d.schemes.ratings[d.depth.QB[0]].QB.rating).toBeGreaterThan(0);
     const lg = manager.get(id);
     const before = lg.season.teamRatings(2509)!;
     // Start the backup QB.
