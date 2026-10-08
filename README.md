@@ -118,6 +118,7 @@ npm run typecheck
 npm test                 # parity, calibration, full season, replay, sync, postseason formats, polls
 npm run bench            # speed gate
 npm run results:check    # Aug 24 strength vs real Weeks 1-6 scores
+npm run replay:2025      # M1 gate: sim the 2025 regular season 100 times from the Aug 2025 seed vs real scores
 python3 reference/make_fixtures.py   # regenerate parity fixtures from the Python engine
 ```
 
@@ -127,4 +128,14 @@ Rebuilding the seed needs CFBD access (`CFBD_API_KEY`, or a proxy that injects i
 python3 importer/build_team_ratings.py --cfb-sim <path to cfb-sim> --work /tmp/cutoff
 python3 importer/build_seed.py
 npm run seed:power
+```
+
+The 2025 replay bundle (`data/seed/2025wk1/`, no recruiting class or history) is built the same way with
+the season passed to each step:
+
+```sh
+python3 importer/build_team_ratings.py --cfb-sim <path to cfb-sim> --year 2025 --out data/seed/2025wk1/team_ratings.json
+python3 importer/build_seed.py --season 2025 --replay
+npm run seed:players -- 2025
+npm run seed:power -- 400 2025
 ```

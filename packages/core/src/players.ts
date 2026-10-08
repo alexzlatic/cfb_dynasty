@@ -55,7 +55,7 @@ export const OVR_WEIGHTS: Record<Pos, Record<string, number>> = {
 
 export interface RatedPlayer {
   id: number; team_id: number; first: string; last: string; pos: Pos; /** CFBD's listed position */ listed: string;
-  class: string; /** Seasons in college before 2026 (0 = true freshman). */ years: number;
+  class: string; /** Seasons in college before the seed season (0 = true freshman). */ years: number;
   jersey: number | null; height: number | null; weight: number | null;
   home: { city: string | null; state: string | null; lat: number | null; lon: number | null };
   stars: number | null; composite: number | null; natl_rank: number | null;
