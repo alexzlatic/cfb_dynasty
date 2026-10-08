@@ -29,6 +29,8 @@ interface Anim {
 export interface Idle { offHome: boolean; ytg: number; distance: number }
 
 const clampY = (y: number) => Math.max(1, Math.min(HT - 1, y));
+/** Nobody runs off the picture past an end line. */
+const clampX = (x: number) => Math.max(0.5, Math.min(W - 0.5, x));
 const ease = (u: number) => u * u * (3 - 2 * u);
 function at(path: WP[], t: number): P {
   if (t <= path[0][0] || path.length === 1) return [path[0][1], path[0][2]];
@@ -65,7 +67,7 @@ function formation(offHome: boolean, ytg: number) {
 
 /** Each dot stands where it is for the whole play unless moved. */
 const still = (pts: P[]) => pts.map(([x, y]) => [[0, x, y]] as WP[]);
-const go = (path: WP[], t: number, x: number, y: number) => { path.push([t, x, clampY(y)]); };
+const go = (path: WP[], t: number, x: number, y: number) => { path.push([t, clampX(x), clampY(y)]); };
 const last = (path: WP[]): P => { const l = path[path.length - 1]; return [l[1], l[2]]; };
 /** Send the defense to the ball carrier's finishing spot, each one stopping a little short around it. */
 function converge(def: WP[][], from: number, to: number, end: P, reach = 1): void {
@@ -165,7 +167,9 @@ function scrimmage(p: PlayRecord, qbs: Set<string>): Anim {
     go(off[5], 0.28, los - d * 7, C);
     go(ball, 0.28, los - d * 7, C);
     const [rx, ry] = last(off[tr]);
-    const air = int ? p.yards : inc ? 6 + (hash(desc) % 14) : p.yards <= 3 ? Math.max(-2, p.yards - 2) : Math.max(3, Math.round(p.yards * 0.6));
+    // An incompletion near the goal line is thrown no deeper than the back of the end zone.
+    const room = d > 0 ? W - 1 - los : los - 1;
+    const air = int ? p.yards : inc ? Math.min(room, 6 + (hash(desc) % 14)) : p.yards <= 3 ? Math.max(-2, p.yards - 2) : Math.max(3, Math.round(p.yards * 0.6));
     const catchAt: P = [endX(air), clampY(ry + (C - ry) * (air > 15 ? 0.15 : 0.35))];
     go(off[tr], 0.28, rx + d * Math.min(3, Math.max(-2, air) * 0.4), ry);
     go(off[tr], 0.55, catchAt[0], catchAt[1]);

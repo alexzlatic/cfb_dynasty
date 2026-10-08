@@ -264,6 +264,8 @@ export interface GameDayResult {
  * the defender who picked it off are drawn from the eleven on the field, weighted by position for the
  * kind of play and by rating, from the credit stream (the game itself does not change).
  */
+/** Share of sacks credited half and half to two defenders. */
+const SHARED_SACK = 0.25;
 const CREDIT: Record<"run" | "pass" | "sack" | "int" | "pd" | "tfl", Partial<Record<Pos, number>>> = {
   run: { LB: 3, S: 1.6, DE: 1.3, DT: 1.3, CB: 0.9 },
   pass: { CB: 2.6, S: 2.4, LB: 1.8, DE: 0.25, DT: 0.15 },
@@ -378,7 +380,14 @@ export class GameDay {
         this.defense.set(x.id, l);
       };
       if (!defenders.length) continue;
-      if (/sacked/.test(d)) { const x = who("sack"); add(x, "sacks"); add(x, "tkl"); add(x, "tfl"); if (/FUMBLES/.test(d)) add(x, "ff"); continue; }
+      if (/sacked/.test(d)) {
+        // About a quarter of sacks are shared (CFBD 2024: 660 of 1,782 players with a sack had a half).
+        const x = who("sack"), y = rng.random() < SHARED_SACK ? who("sack") : x;
+        const share = y === x ? 1 : 0.5;
+        for (const z of y === x ? [x] : [x, y]) { add(z, "sacks", share); add(z, "tkl"); add(z, "tfl", share); }
+        if (/FUMBLES/.test(d)) add(x, "ff");
+        continue;
+      }
       if (/INTERCEPTED/.test(d)) { const x = who("int"); add(x, "def_int"); add(x, "pd"); continue; }
       if (/incomplete/.test(d)) { if (rng.random() < 0.3) add(who("pd"), "pd"); continue; }
       if (/TOUCHDOWN/.test(d) || / scrambles /.test(d) && /out of bounds/.test(d)) continue;

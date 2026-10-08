@@ -172,15 +172,19 @@ export function hiddenTeam(o: {
 const PER_POINT: Partial<Record<keyof UnitRates, number>> = { comp_pct: 0.06, yds_per_comp: 0.014, sack_rate: -0.06, int_rate: -0.06, rush_ypc: 0.014, rush_stuff: -0.05, rush_explosive: 0.035 };
 /** Measured: one hidden point moves a unit's scoring margin by this many points (packages/core/scripts/hidden-check.ts). */
 export const POINTS_PER_UNIT = 1.38;
+const RARE = new Set<keyof UnitRates>(["sack_rate", "int_rate"]);
 const logit = (p: number) => Math.log(p / (1 - p));
 const inv = (x: number) => 1 / (1 + Math.exp(-x));
 
-function shiftUnit(u: UnitRates, x: number): UnitRates {
+/** Shift a unit by `x` points; `xc` is the same with the scoring correction (CONVEX) the rare rates don't need. */
+function shiftUnit(u: UnitRates, x: number, xc: number): UnitRates {
   if (!x) return u;
   const out = { ...u };
   for (const [k, v] of Object.entries(PER_POINT) as [keyof UnitRates, number][]) {
-    const d = (v * x) / POINTS_PER_UNIT;
-    out[k] = k === "yds_per_comp" || k === "rush_ypc" ? u[k] * Math.exp(d) : inv(logit(u[k]) + d);
+    const d = (v * (RARE.has(k) ? x : xc)) / POINTS_PER_UNIT;
+    // Sacks and interceptions are rare, and a log-odds shift would raise their average as teams spread
+    // out; a proportional shift keeps it where the scouted ratings put it.
+    out[k] = k === "yds_per_comp" || k === "rush_ypc" ? u[k] * Math.exp(d) : RARE.has(k) ? u[k] * Math.max(0.3, 1 + d) : inv(logit(u[k]) + d);
   }
   return out;
 }
@@ -195,5 +199,5 @@ const CONVEX = 0.012;
 /** A team's ratings with `off` points of hidden strength on offense and `def` on defense (positive = better). */
 export function applyHidden(r: TeamRatings, off: number, def: number): TeamRatings {
   if (!off && !def) return r;
-  return { ...r, offense: shiftUnit(r.offense, off - CONVEX * off * off), defense: shiftUnit(r.defense, -(def + CONVEX * def * def)) };
+  return { ...r, offense: shiftUnit(r.offense, off, off - CONVEX * off * off), defense: shiftUnit(r.defense, -def, -(def + CONVEX * def * def)) };
 }
