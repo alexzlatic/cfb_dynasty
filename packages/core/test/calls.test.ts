@@ -69,4 +69,15 @@ describe("live games", () => {
     expect(alerts.every((a) => typeof a === "string")).toBe(true);
     expect(alerts.length).toBeLessThan(40);
   });
+
+  it("sim to the end plays the whole game, even when you call every snap", () => {
+    const { s, g } = start();
+    const live = new LiveGame(s, g, { offense: "me", defense: "me" });
+    live.advance("deep");
+    live.advance(null, true);
+    const v = live.view();
+    expect(v.final).toBe(true);
+    expect(v.stop).toBeNull();
+    expect(v.plays.at(-1)!.play_type).toBe("END");
+  });
 });
