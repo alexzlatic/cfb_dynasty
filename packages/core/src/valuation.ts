@@ -37,6 +37,34 @@ const KINDS: { kind: PersonaKind; share: number; lean: Partial<Record<Factor, nu
   { kind: "steady", share: 0.2, lean: { loyalty: 1.8, fit: 1.3, money: 0.8 } },
 ];
 
+/** Each class's name, as the personality shows on player pages (like OOTP's personality line). */
+export const PERSONA_NAMES: Record<PersonaKind, string> = {
+  mercenary: "Mercenary", developer: "Grinder", homebody: "Homebody", winner: "Competitor", steady: "Loyalist",
+};
+/** The traits a player page shows, from what he weighs (scheme fit isn't shown: it's about the school, not him). */
+export const PERSONA_TRAITS: [Factor, string][] = [
+  ["money", "Greed"], ["loyalty", "Loyalty"], ["winning", "Desire to win"], ["development", "Work ethic"], ["playing", "Wants playing time"], ["home", "Hometown ties"],
+];
+export type TraitLevel = "High" | "Normal" | "Low";
+export const traitLevel = (w: number): TraitLevel => (w >= 1.3 ? "High" : w <= 0.77 ? "Low" : "Normal");
+
+/** What a class leans on with none of his own variation: what anyone who knows his class would assume. */
+export function typicalPersona(kind: PersonaKind): Persona {
+  const k = KINDS.find((x) => x.kind === kind)!;
+  return { kind, ...Object.fromEntries(FACTORS.map((f) => [f, k.lean[f] ?? 1])) } as Persona;
+}
+
+/**
+ * A player's personality as a page shows it: his class is public (teammates, coaches and reporters all know
+ * the type), his traits are his class's typical ones until you've talked with him, then his own.
+ */
+export function personaView(seed: number, pid: number, known: boolean) {
+  const w = persona(seed, pid), shown = known ? w : typicalPersona(w.kind);
+  return { kind: w.kind, name: PERSONA_NAMES[w.kind], label: PERSONA_WORDS[w.kind], known,
+    traits: PERSONA_TRAITS.map(([f, label]) => ({ factor: f, label, level: traitLevel(shown[f]) })) };
+}
+export type PersonaView = ReturnType<typeof personaView>;
+
 /** A player's personality, the same every time for the same league seed (it never changes with results). */
 export function persona(seed: number, pid: number): Persona {
   const rng = new Rng(mixSeed(seed, pid, "persona"));
