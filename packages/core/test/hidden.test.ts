@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { averageTeam } from "@cfb/engine";
-import { applyHidden, hiddenPlayer, loadSeed, progress, Season } from "../src/index.ts";
+import { applyHidden, devFocus, devPhase, hiddenPlayer, loadSeed, progress, Season } from "../src/index.ts";
 
 const sd = (a: number[]) => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); };
 
@@ -57,5 +57,33 @@ describe("hidden development, scheme fit and chemistry", () => {
     expect(up.offense.sack_rate).toBeLessThan(r.offense.sack_rate);
     expect(up.defense.comp_pct).toBeLessThan(r.defense.comp_pct);
     expect(applyHidden(r, 0, 0)).toBe(r);
+  });
+
+  it("the Development screen follows the phases of the year and tracks progress in the day sim", () => {
+    expect(devPhase(2027, "2027-03-10", "2027-08-29").kind).toBe("offseason");
+    expect(devPhase(2026, "2026-08-24", "2026-08-29").kind).toBe("camp");
+    expect(devPhase(2026, "2026-10-01", "2026-08-29").kind).toBe("season");
+    expect(devPhase(2026, "2027-01-05", "2026-08-29").kind).toBe("season");
+    // A player works on his plan's area, or the area of his weakest important rating.
+    const qb = { pos: "QB" as const, attrs: { acc_short: 80, acc_deep: 70, arm: 85, decisions: 60, pocket: 75, speed: 70, security: 80 } };
+    expect(devFocus(qb).area).toBe("film");
+    expect(devFocus(qb).attrs[0].key).toBe("decisions");
+    expect(devFocus(qb, { area: "strength", from: "2026-08-24" }).attrs.map((a) => a.key)).toEqual(["arm"]);
+    const run = () => {
+      const s = Season.create(seed, { seed: 9, user_team_id: 2509 });
+      expect(s.state.dev_track).toBeUndefined();
+      // Before the first day is simmed the phase is measured from fall camp's start.
+      expect(s.developmentReport(2509).phase.kind).toBe("camp");
+      while (s.state.date < "2026-09-16") s.advanceDay();
+      return s;
+    };
+    const a = run(), b = run();
+    expect(a.state.dev_track).toEqual(b.state.dev_track);
+    expect(a.state.dev_track!.key).toBe("2026:season");
+    expect(a.state.dev_track!.weeks.length).toBeGreaterThan(0);
+    const r = a.developmentReport(2509);
+    expect(r.phase.kind).toBe("season");
+    expect(r.players.find((x) => x.pos === "QB")!.target).toBeGreaterThan(0);
+    expect(r.players.some((x) => x.trend != null)).toBe(true);
   });
 });
