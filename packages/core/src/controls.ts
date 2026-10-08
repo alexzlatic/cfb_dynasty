@@ -12,7 +12,7 @@ export type SimCommand =
 export function stopsOn(season: Season, date: ISODate): boolean {
   const s = season.state;
   const mine = s.user_team_id != null && s.games.some((g) => g.date === date && g.status !== "final" && (g.home_id === s.user_team_id || g.away_id === s.user_team_id));
-  return mine || s.events.some((e) => e.date === date && e.status !== "done" && s.settings.stop_on.includes(e.type));
+  return mine || s.events.some((e) => e.date === date && e.status !== "done" && (s.settings.stop_on.includes(e.type) || (e.needs_you && s.user_team_id != null)));
 }
 
 /** Run a sim control. Always advances at least one day unless the season is over. */

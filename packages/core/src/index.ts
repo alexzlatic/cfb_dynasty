@@ -28,3 +28,4 @@ export * from "./rollover.ts";
 export * from "./recruiting.ts";
 export * from "./staff.ts";
 export * from "./draft.ts";
+export * from "./portal.ts";

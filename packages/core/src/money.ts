@@ -108,7 +108,7 @@ export interface Contract {
   retention?: number;
 }
 
-/** A player has completed a season at his school (he can be paid from the retention fund). Transfers come with the portal in M3. */
+/** A player has completed a season in college (the season also checks he wasn't a transfer who just arrived: Season.returningHere). */
 export const returning = (p: Pick<RatedPlayer, "years">) => p.years >= 1;
 
 /** Contracts in force in `year`. */
@@ -123,7 +123,7 @@ export function activeContract(c: Contract | undefined, year: number): Contract 
  * Protect College Sports Act a retention fund then goes to players who have completed a season at the
  * school, the same way, toward what's left of their value.
  */
-export function aiContracts(roster: Pick<RatedPlayer, "id" | "pos" | "ovr" | "stars" | "years">[], pool: number, year: number, retention = 0): Record<number, Contract> {
+export function aiContracts<P extends Pick<RatedPlayer, "id" | "pos" | "ovr" | "stars" | "years">>(roster: P[], pool: number, year: number, retention = 0, isReturning: (p: P) => boolean = returning): Record<number, Contract> {
   const vals = roster.map((p) => ({ p, v: playerValue(p) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v || a.p.id - b.p.id);
   const out: Record<number, Contract> = {};
   const share = (xs: { p: (typeof vals)[number]["p"]; v: number }[], budget: number, give: (id: number, amount: number) => void) => {
@@ -141,7 +141,7 @@ export function aiContracts(roster: Pick<RatedPlayer, "id" | "pos" | "ovr" | "st
   const byId = new Map(vals.map((x) => [x.p.id, x.p]));
   share(vals, pool, (id, amount) => { out[id] = { amount, years: Math.min(2, eligibilityLeft(byId.get(id)!)), start: year }; });
   if (retention > 0) {
-    const gaps = vals.filter((x) => returning(x.p)).map((x) => ({ p: x.p, v: x.v - (out[x.p.id]?.amount ?? 0) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v || a.p.id - b.p.id);
+    const gaps = vals.filter((x) => isReturning(x.p)).map((x) => ({ p: x.p, v: x.v - (out[x.p.id]?.amount ?? 0) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v || a.p.id - b.p.id);
     share(gaps, retention, (id, amount) => {
       const c = out[id] ?? { amount: 0, years: Math.min(2, eligibilityLeft(byId.get(id)!)), start: year };
       out[id] = { ...c, amount: c.amount + amount, retention: amount };

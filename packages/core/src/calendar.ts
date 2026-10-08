@@ -28,7 +28,9 @@ export const RULES: Rule[] = [
   { type: "early_signing", label: "Early signing period", active: true, dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
   { type: "conf_championships", label: "Conference championships", active: true, dates: (y) => [{ date: nthWeekday(y, 12, 6, 1) }] },
   { type: "bowls", label: "Bowl season", approx: true, active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 7), end: `${y + 1}-01-02` }] },
-  { type: "portal_window", label: "Transfer portal window", dates: (y) => [{ date: `${y + 1}-01-02`, end: `${y + 1}-01-16` }] },
+  // Renewal talks open the Monday after conference championship weekend and run until the portal opens.
+  { type: "renewal_talks", label: "Renewal talks open", active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 2), end: `${y}-12-31` }] },
+  { type: "portal_window", label: "Transfer portal window", active: true, dates: (y) => [{ date: `${y + 1}-01-02`, end: `${y + 1}-01-16` }] },
   { type: "draft_deadline", label: "NFL draft declaration deadline", approx: true, active: true, dates: (y) => [{ date: `${y + 1}-01-15` }] },
   // National signing day is the first Wednesday of February; the season (and its recruiting cycle) ends the day after.
   { type: "signing_day", label: "National signing day", active: true, dates: (y) => [{ date: nthWeekday(y + 1, 2, 3, 1) }] },
@@ -89,7 +91,7 @@ export function seasonEvents(year: number, start: ISODate, schedule: ScheduledGa
   for (const r of RULES) {
     for (const { date, end } of r.dates(year, { lastRegular })) {
       ev.push({ id: `${year}:${r.type}:${date}`, date, end_date: end ?? null, type: r.type, scope: "league", label: r.label,
-        status: "upcoming", needs_you: false, approx: !!r.approx, active: !!r.active });
+        status: "upcoming", needs_you: r.type === "renewal_talks" || r.type === "portal_window", approx: !!r.approx, active: !!r.active });
     }
   }
   ev.push(...postseasonEvents(year, playoff));

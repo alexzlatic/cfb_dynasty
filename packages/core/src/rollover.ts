@@ -37,7 +37,7 @@ const ROSTER_FLOOR = 80;
  */
 const fifthYear = (ovr: number, median: number) => clamp(0.25 + 0.06 * (ovr - median), 0.05, 0.85);
 
-export interface Departure { pid: number; team_id: number; name: string; pos: Pos; ovr: number; reason: "graduated" | "nfl" | "released"; potential?: number; years?: number }
+export interface Departure { pid: number; team_id: number; name: string; pos: Pos; ovr: number; reason: "graduated" | "nfl" | "released" | "transfer" | "left"; potential?: number; years?: number; /** Where a transfer went. */ to?: number }
 
 /** The fewest players a roster carries at each position. */
 const MIN_AT: Record<Pos, number> = { QB: 3, RB: 3, WR: 6, TE: 3, OL: 10, DE: 4, DT: 4, LB: 5, CB: 5, S: 4, K: 1, P: 1, LS: 1 };
@@ -103,6 +103,13 @@ export function rollRosters(o: {
   declared?: Set<number>;
   /** Each team's signing class, rated as college freshmen (recruiting.ts); generated freshmen fill only what's left. */
   incoming?: Record<number, RatedPlayer[]>;
+  /** Transfers from the portal (player id to his new school), and portal entrants who found no school (they leave). */
+  transfers?: Map<number, number>;
+  gone?: Set<number>;
+  /** Transfers that cost a season (a second transfer under the Protect College Sports Act). */
+  lostSeason?: Set<number>;
+  /** The Act's five seasons in five years: fourth-year players stay for a fifth unless they turn pro or are done. */
+  fiveYears?: boolean;
 }): RosterTurn {
   const { seed, year, model } = o;
   let nextId = o.next_player_id;
@@ -111,23 +118,44 @@ export function rollRosters(o: {
   const all = Object.values(o.players).flatMap((t) => t.players);
   const firsts = [...new Set(all.map((p) => p.first).filter(Boolean))].sort();
   const lasts = [...new Set(all.map((p) => p.last).filter(Boolean))].sort();
-  for (const t of [...o.teams].sort((a, b) => a.id - b.id)) {
+  // First every player's year: who leaves, who moves, everyone else develops (each team's own draws, in id order).
+  const kept = new Map<number, RatedPlayer[]>(), rngs = new Map<number, Rng>(), arrivals = new Map<number, RatedPlayer[]>();
+  const teams = [...o.teams].sort((a, b) => a.id - b.id);
+  for (const t of teams) {
     const tp = o.players[t.id];
     if (!tp) continue;
     const rng = new Rng(mixSeed(seed, year, t.id, "rollover"));
+    rngs.set(t.id, rng);
     const growth = o.growth(t.id);
     const keep: RatedPlayer[] = [];
     const ovrs = tp.players.map((p) => p.ovr).sort((a, b) => a - b), median = ovrs[Math.floor(ovrs.length / 2)] ?? 60;
     for (const p of [...tp.players].sort((a, b) => a.id - b.id)) {
       const done = p.years + 1;
       const u = rng.random(), v = rng.random();
-      const go = (reason: Departure["reason"]) => left.push({ pid: p.id, team_id: t.id, name: `${p.first} ${p.last}`.trim(), pos: p.pos, ovr: p.ovr, reason, potential: p.hidden.potential, years: p.years });
+      const go = (reason: Departure["reason"], to?: number) => left.push({ pid: p.id, team_id: t.id, name: `${p.first} ${p.last}`.trim(), pos: p.pos, ovr: p.ovr, reason, potential: p.hidden.potential, years: p.years, ...(to != null ? { to } : {}) });
       if (done >= 5) { go(p.ovr >= 80 ? "nfl" : "graduated"); continue; }
       // Early entrants: the ones who declared in January (draft.ts), or in older leagues the best few.
       if (done >= 3 && (o.declared ? o.declared.has(p.id) : u < clamp((p.ovr - 81) / 8, 0, 0.85))) { go("nfl"); continue; }
-      if (done >= 4 && v >= fifthYear(p.ovr, median)) { go(p.ovr >= 80 ? "nfl" : "graduated"); continue; }
+      if (o.gone?.has(p.id)) { go("left"); continue; }
+      const to = o.transfers?.get(p.id);
+      if (to != null && to !== t.id && o.players[to]) {
+        // A transfer develops over the year he just played, then joins his new school (a second one under the Act costs him a season).
+        const d = develop(p, done + (o.lostSeason?.has(p.id) ? 1 : 0), growth.get(p.id) ?? 0, o.gp[p.id] ?? 0, o.rate?.(t.id) ?? 1, rng);
+        go("transfer", to);
+        if (d.years < 5) { const g = arrivals.get(to) ?? []; g.push({ ...d, team_id: to }); arrivals.set(to, g); }
+        continue;
+      }
+      const stays = to != null ? 1 : o.fiveYears ? clamp(0.6 + 0.06 * (p.ovr - median), 0.3, 0.95) : fifthYear(p.ovr, median);
+      if (done >= 4 && v >= stays) { go(p.ovr >= 80 ? "nfl" : "graduated"); continue; }
       keep.push(develop(p, done, growth.get(p.id) ?? 0, o.gp[p.id] ?? 0, o.rate?.(t.id) ?? 1, rng));
     }
+    kept.set(t.id, keep);
+  }
+  for (const t of teams) {
+    const tp = o.players[t.id];
+    if (!tp) continue;
+    const rng = rngs.get(t.id)!;
+    const keep = [...kept.get(t.id)!, ...(arrivals.get(t.id) ?? [])];
     // Back to the team's usual size, never over the roster limit: the least-rated players at positions
     // with more than their share are released, then freshmen fill the positions furthest below theirs.
     const before = tp.players.length;

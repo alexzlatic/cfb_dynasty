@@ -9,13 +9,17 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, off
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
-import { devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import { YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import {
+  DEFAULT_RULE, PITCHES_PER_DAY, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
+  type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
+} from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
-import { STARTERS, miles } from "./valuation.ts";
+import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
@@ -126,6 +130,22 @@ export interface SeasonState {
   draft?: { year: number; picks: DraftPick[] } | null;
   /** Each school's picks in its last three drafts, oldest first (recruits notice). */
   draft_history?: Record<string, number[]>;
+  /** Your renewal talks this winter (from the end of the regular season to January 1), by player id, and your standing rule. */
+  talks?: Record<number, Talk>;
+  renewal_rule?: RenewalRule;
+  /** Next season's deals you've signed (renewals and transfers): dollars a year and seasons. */
+  next_deals?: Record<number, { amount: number; years: number }>;
+  /** Your promises of a starting job, by player id: the season each is for (and whether it broke). */
+  promises?: Record<number, { year: number; broken?: boolean }>;
+  /** Players you've talked to this season (you know their real reasons), by the date of the talk. */
+  talked?: Record<number, ISODate>;
+  /** Your players' portal watch (their chance to enter in January), updated every Monday. */
+  watch?: Record<number, number>;
+  /** The transfer portal this winter. */
+  portal?: PortalState | null;
+  /** Transfers each player has made, and the season he arrived at his current school (the Act's rules, the retention fund). */
+  moves?: Record<number, number>;
+  arrived?: Record<number, number>;
 }
 
 /** What a finished season leaves in the record book. */
@@ -184,6 +204,27 @@ export function injuryOutlook(days: number): string {
 }
 
 const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
+
+// ---- the portal's helpers ------------------------------------------------------------------------
+/** Each level (power, Group of Five, FCS): what it pays for value, its starters' rating by position, how it looks to a player. */
+type TierStats = { ratio: number; bar: Record<Pos, number>; win: number }[];
+/** A team's next season as players see it: each returning player's rank at his position, this year's starter bar and room counts. */
+interface NextYear { tier: 0 | 1 | 2; rank: Map<number, number>; bar: Partial<Record<Pos, number>>; count: Partial<Record<Pos, number>>; ratio: number; win: number; prestige: number }
+/** A player's rating next season as everyone expects it (the usual year's gain, slower past his potential). */
+const ovrNext = (p: RatedPlayer) => p.ovr + YEAR_GAIN[Math.max(0, Math.min(YEAR_GAIN.length - 1, Math.floor(p.years)))] * (p.hidden.potential > p.ovr ? 1 : 0.3);
+/** Winning and exposure as recruits weigh it (valuation.ts), for a player of quality q. */
+const winTerm = (prestige: number, winPct: number, power: boolean, q: number) => {
+  const f = RECRUIT_FIT, pr = prestige / 100, pw = power ? 1 : 0;
+  return f.prestige * pr + f.prestige_x_quality * pr * q + f.win_pct * winPct + f.power * pw + f.power_x_quality * pw * q;
+};
+const homeTerm = (mi: number, sameState: boolean) => RECRUIT_FIT.log_distance * Math.log1p(mi / 50) + RECRUIT_FIT.home_state * (sameState ? 1 : 0);
+const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+const STAY = { playing: 1.6, winning: 0.6 };
+/** The personality your staff assumes for a player it hasn't talked with. */
+const AVERAGE_PERSONA: Persona = { kind: "steady", money: 1, playing: 1, development: 1, fit: 1, winning: 1, home: 1, loyalty: 1 };
+const money = (x: number) => (x >= 1_000_000 ? `$${(x / 1_000_000).toFixed(2)}M` : `$${Math.round(x / 1000)}K`);
+const softmax = (xs: number[]) => { const m = Math.max(...xs), e = xs.map((x) => Math.exp(x - m)), t = e.reduce((a, b) => a + b, 0); return e.map((x) => x / t); };
+const chooseIdx = (xs: number[], u: number) => { const c = softmax(xs); for (let i = 0; i < c.length; i++) { if (u < c[i]) return i; u -= c[i]; } return c.length - 1; };
 const INDEPENDENT = "FBS Independents";
 
 export class Season {
@@ -340,7 +381,16 @@ export class Season {
       }
     }
     const declared = s.declared ? new Set(s.declared) : undefined;
+    // The portal: committed transfers move, entrants with no school leave college football.
+    const transfers = new Map<number, number>(), gone = new Set<number>(), lostSeason = new Set<number>();
+    for (const e of s.portal?.year === y ? s.portal.entries : []) {
+      if (e.status === "committed" && e.to != null && e.to !== e.from) {
+        transfers.set(e.pid, e.to);
+        if (s.settings.pcsa && (s.moves?.[e.pid] ?? 0) >= 1) lostSeason.add(e.pid);
+      } else if (e.status !== "committed") gone.add(e.pid);
+    }
     const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
+      transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa,
       rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     const { start, schedule } = nextSchedule(s.games, this.teams, opening, s.next_game_id);
@@ -375,11 +425,17 @@ export class Season {
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
       requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
       // Everyone leaving for the pros or out of eligibility goes into April's draft.
-      draft_pool: turn.left.filter((d) => d.reason !== "released").map((d) => ({ pid: d.pid, team_id: d.team_id, name: d.name, pos: d.pos, ovr: d.ovr,
+      draft_pool: turn.left.filter((d) => d.reason === "nfl" || d.reason === "graduated").map((d) => ({ pid: d.pid, team_id: d.team_id, name: d.name, pos: d.pos, ovr: d.ovr,
         potential: d.potential ?? d.ovr, years: (d.years ?? 3) + 1, early: !!declared?.has(d.pid), tier: this.tierOf(d.team_id) }))
         // Only players the NFL could take (the last pick rates about 74).
         .filter((e) => e.ovr >= 66),
       draft: null, draft_history: s.draft_history,
+      // Transfers and where everyone arrived (the Act's one free transfer, the retention fund); promises made for this season.
+      moves: { ...s.moves, ...Object.fromEntries([...transfers.keys()].map((pid) => [pid, (s.moves?.[pid] ?? 0) + 1])) },
+      arrived: Object.fromEntries([...Object.entries(s.arrived ?? {}).filter(([pid]) => kept.has(Number(pid))),
+        ...[...transfers.keys()].map((pid) => [String(pid), ny] as const), ...Object.values(incoming).flat().map((p) => [String(p.id), ny] as const)]),
+      promises: Object.fromEntries(Object.entries(s.promises ?? {}).filter(([, x]) => x.year === ny)),
+      renewal_rule: s.renewal_rule,
     };
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
@@ -388,15 +444,18 @@ export class Season {
       if (t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
     }
     next.startMoney();
-    // Your deals that run into the new season stand (renewing the rest comes with the renewals screen).
+    next.startCollectives();
+    // Your deals for the new season: multi-year deals that run into it, renewals and transfers.
     const me = s.user_team_id;
     if (me != null) {
+      const deals: Record<number, { amount: number; years: number }> = {};
       for (const p of next.roster(me)) {
         const c = activeContract(s.contracts?.[p.id], ny);
-        if (c) next.state.contracts![p.id] = c;
+        if (c) deals[p.id] = { amount: c.amount, years: c.start + c.years - ny };
       }
+      Object.assign(deals, s.next_deals);
+      next.applyDeals(deals);
     }
-    next.startCollectives();
     next.startFinance(seed.finances);
     next.state.facilities = { ...next.state.facilities, ...facilities };
     next.state.projects = projects;
@@ -537,8 +596,10 @@ export class Season {
     this.practiceDay(today, rep);
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
-    if (weekday(today) === 1) this.weeklyMorale();
+    if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
     this.recruitingDay(today, rep);
+    if (s.talks && !s.portal) this.talksDay(today, rep);
+    if (s.portal?.year === s.year) this.portalDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -624,7 +685,7 @@ export class Season {
       s.pools[t.id] = pool;
       const ret = s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t)) / 10_000) * 10_000 : 0;
       if (ret) s.retention[t.id] = ret;
-      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year, ret));
+      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year, ret, (p) => this.returningHere(p)));
     }
   }
 
@@ -681,7 +742,7 @@ export class Season {
     if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
     const k = (x: number) => `$${Math.round(x / 1000).toLocaleString("en-US")}K`;
     const baseRoom = Math.max(0, (s.pools?.[me] ?? 0) - (this.payroll(me) - this.retentionPaid(me)) + (cur ? cur.amount - (cur.retention ?? 0) : 0));
-    const retRoom = returning(p) ? Math.max(0, (s.retention?.[me] ?? 0) - this.retentionPaid(me) + (cur?.retention ?? 0)) : 0;
+    const retRoom = this.returningHere(p) ? Math.max(0, (s.retention?.[me] ?? 0) - this.retentionPaid(me) + (cur?.retention ?? 0)) : 0;
     const nilRoom = (c?.reserve ?? 0) + curNil;
     const fromBase = Math.min(amount, baseRoom), fromRet = Math.min(amount - fromBase, retRoom), fromNil = amount - fromBase - fromRet;
     if (fromNil > nilRoom) throw new Error(`that is over your roster budget: ${k(baseRoom + retRoom + nilRoom)} left for him`);
@@ -691,6 +752,40 @@ export class Season {
     else delete contracts[pid];
     s.contracts = contracts;
     setNil(fromNil);
+  }
+
+  /** He has completed a season at his school (the retention fund can pay him): not a freshman, not a first-year transfer. */
+  returningHere(p: RatedPlayer): boolean {
+    return returning(p) && this.state.arrived?.[p.id] !== this.state.year;
+  }
+
+  /**
+   * The new season's opening deals for your team: the ones you signed (renewals, transfers, multi-year deals),
+   * paid from revenue share, then the retention fund, then your collective; the rest of the roster gets the
+   * revenue share left, by value. Your collective spends nothing else on its own.
+   */
+  applyDeals(deals: Record<number, { amount: number; years: number }>): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.pools?.[me]) return;
+    const roster = this.roster(me), c = s.collectives?.[me];
+    const contracts = { ...s.contracts }, nil = { ...s.nil };
+    for (const p of roster) { delete contracts[p.id]; delete nil[p.id]; }
+    if (c) c.reserve = c.base;
+    let base = s.pools[me], ret = s.retention?.[me] ?? 0;
+    const signed = roster.filter((p) => deals[p.id]?.amount > 0).sort((a, b) => deals[b.id].amount - deals[a.id].amount || a.id - b.id);
+    for (const p of signed) {
+      const d = deals[p.id];
+      const fromBase = Math.min(d.amount, base); base -= fromBase;
+      const fromRet = this.returningHere(p) ? Math.min(d.amount - fromBase, ret) : 0; ret -= fromRet;
+      const fromNil = Math.min(d.amount - fromBase - fromRet, c?.reserve ?? 0, fmvCeiling(this.value(p.id), !!s.settings.pcsa));
+      const years = Math.max(1, Math.min(d.years, eligibilityLeft(p)));
+      if (fromBase + fromRet > 0) contracts[p.id] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}) };
+      if (fromNil > 0 && c) { nil[p.id] = { amount: fromNil, status: "approved", date: s.date }; c.reserve -= fromNil; }
+    }
+    const rest = roster.filter((p) => !deals[p.id]);
+    Object.assign(contracts, aiContracts(rest, Math.max(0, base), s.year));
+    s.contracts = contracts;
+    s.nil = nil;
   }
 
   /** Each collective's opening deals: most of its year's money, held back a little for the season. */
@@ -1263,7 +1358,8 @@ export class Season {
       const u = rng.random();
       // Juniors and fourth-year players with a year left choose; anyone out of eligibility is in the draft anyway.
       if (p.years !== 2 && p.years !== 3) return;
-      const pay = (s.contracts?.[p.id]?.amount ?? 0) + (s.nil?.[p.id]?.amount ?? 0);
+      // What staying pays: a deal he's signed for next season, else what he has now.
+      const pay = s.next_deals?.[p.id]?.amount ?? (s.contracts?.[p.id]?.amount ?? 0) + (s.nil?.[p.id]?.amount ?? 0);
       if (u < declareChance(i + 1, pay)) declared.push({ p, slot: i + 1 });
     });
     s.declared = declared.map((d) => d.p.id).sort((a, b) => a - b);
@@ -1527,6 +1623,650 @@ export class Season {
     ].filter(Boolean);
     rep.news.push(this.news(date, "staff", kind === "camp" ? "Fall camp report from your staff" : "Midseason report from your staff",
       `${lines.join(" ")} The media hasn't seen any of this yet.`, [me]));
+  }
+
+  // ---- keeping players and the transfer portal (M3 step 5) ----------------------------------------
+  private portalCache: { date: ISODate; tiers: TierStats; next: Map<number, NextYear> } | null = null;
+
+  /** What each level pays for value, its starters' ratings by position and how it looks to a player, and every team's projected next season. */
+  private portalBasis(): { tiers: TierStats; next: Map<number, NextYear> } {
+    const s = this.state;
+    if (this.portalCache?.date === s.date) return this.portalCache;
+    const ratios: number[][] = [[], [], []], bars: Partial<Record<Pos, number[]>>[] = [{}, {}, {}], wins: number[][] = [[], [], []];
+    const recs = records(s.games, this.teams);
+    const leaving = this.leavingSet();
+    const next = new Map<number, NextYear>();
+    for (const t of this.teams) {
+      const tier = this.tierOf(t.id), roster = this.roster(t.id);
+      if (!roster.length) continue;
+      let pay = 0, val = 0;
+      for (const p of roster) { const v = this.value(p.id); if (v > 0) { val += v; pay += this.pay(p.id); } }
+      if (t.level === "fbs" && val > 0) ratios[tier].push(pay / val);
+      // Next season's room at each position: returning players by projected rating, plus transfers already committed in.
+      const byPos = new Map<Pos, { id: number; o: number }[]>();
+      for (const p of roster) {
+        if (leaving.has(p.id) || this.portalOut(p.id)) continue;
+        const g = byPos.get(p.pos) ?? []; g.push({ id: p.id, o: ovrNext(p) }); byPos.set(p.pos, g);
+      }
+      for (const e of s.portal?.entries ?? []) {
+        if (e.status !== "committed" || e.to !== t.id) continue;
+        const p = this.playerById.get(e.pid);
+        if (p) { const g = byPos.get(p.pos) ?? []; g.push({ id: p.id, o: ovrNext(p) }); byPos.set(p.pos, g); }
+      }
+      const rank = new Map<number, number>(), bar: Partial<Record<Pos, number>> = {}, count: Partial<Record<Pos, number>> = {};
+      for (const pos of POSITIONS) {
+        const g = (byPos.get(pos) ?? []).sort((a, b) => b.o - a.o || a.id - b.id);
+        g.forEach((x, i) => rank.set(x.id, i));
+        count[pos] = g.length;
+        // This year's starters set the bar a newcomer has to clear.
+        const o = roster.filter((p) => p.pos === pos).map((p) => p.ovr).sort((a, b) => b - a);
+        bar[pos] = o[Math.min(o.length, STARTERS[pos]) - 1] ?? 55;
+        (bars[tier][pos] ??= []).push(bar[pos]!);
+      }
+      const rec = recs.get(t.id);
+      const win = rec && rec.w + rec.l > 0 ? rec.w / (rec.w + rec.l) : 0.5;
+      const w = winTerm((t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]), win, tier === 0, 0);
+      if (t.level === "fbs" || tier === 2) wins[tier].push(w);
+      next.set(t.id, { tier, rank, bar, count, ratio: val > 0 ? pay / val : 0, win, prestige: (t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]) });
+    }
+    const med = (xs: number[]) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+    const tiers: TierStats = [0, 1, 2].map((i) => ({
+      ratio: i === 2 ? 0 : med(ratios[i]),
+      bar: Object.fromEntries(POSITIONS.map((pos) => [pos, med(bars[i][pos] ?? [60])])) as Record<Pos, number>,
+      win: med(wins[i]),
+    }));
+    this.portalCache = { date: s.date, tiers, next };
+    return this.portalCache;
+  }
+
+  /** Players who won't be back next season whatever happens: out of eligibility, or declared for the draft. */
+  private leavingSet(): Set<number> {
+    const s = this.state, out = new Set<number>(s.declared ?? []);
+    for (const t of this.teams) for (const p of this.roster(t.id)) if (p.years + 1 >= 5) out.add(p.id);
+    return out;
+  }
+
+  /** He's in the portal (or committed elsewhere) this winter. */
+  private portalOut(pid: number): boolean {
+    return !!this.state.portal?.entries.some((e) => e.pid === pid);
+  }
+
+  /** Projected NFL slot among this year's draft-eligible players (players who'd go in the top 100 weigh the NFL, not the portal). */
+  private nflSlots(): Map<number, number> {
+    if (this.nflCache?.date === this.state.date) return this.nflCache.slots;
+    const slots = new Map(this.draftBoard(this.state.date, mixSeed(this.state.seed, "mock")).map((x, i) => [x.p.id, i + 1]));
+    this.nflCache = { date: this.state.date, slots };
+    return slots;
+  }
+  private nflCache: { date: ISODate; slots: Map<number, number> } | null = null;
+
+  /** What a player weighs about staying (pay: what staying pays him next season; default his pay now). */
+  stayContext(p: RatedPlayer, pay = this.nextPay(p)): StayContext {
+    const s = this.state, { tiers, next } = this.portalBasis();
+    const me = next.get(p.team_id)!, t = this.team(p.team_id);
+    const o = ovrNext(p), value = playerValue({ pos: p.pos, ovr: o, stars: p.stars, years: p.years + 1 });
+    const q = Math.max(-2, Math.min(3, (o - 72) / 5));
+    // The level he'd land at: the best mix of playing time, winning and money among the three.
+    let best = { tier: me.tier as 0 | 1 | 2, u: -Infinity, start: 0 };
+    for (const i of [0, 1, 2] as const) {
+      const start = sigmoid((o - tiers[i].bar[p.pos]) / 2.5);
+      const u = STAY.playing * start + STAY.winning * winTerm(i === 0 ? 70 : i === 1 ? 40 : 25, 0.5, i === 0, q) + Math.log(tiers[i].ratio + 0.05);
+      if (u > best.u) best = { tier: i, u, start };
+    }
+    const away = tiers[best.tier];
+    const r = me.rank.get(p.id), jobs = STARTERS[p.pos];
+    const start_here = r == null ? 0 : r < jobs ? 1 : r === jobs ? 0.4 : r === jobs + 1 ? 0.2 : 0.08;
+    const home = p.home.lat != null && p.home.lon != null && t.venue?.lat != null && t.venue?.lon != null
+      ? homeTerm(miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }), p.home.state === t.venue.state) : homeTerm(250, false);
+    const frozen = s.recruiting?.frozen?.year === s.year ? s.recruiting.frozen.schools[t.id] : undefined;
+    return {
+      value, pay, ratio_away: away.ratio, demand: 1 + 0.3 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
+      start_here, start_away: best.start,
+      dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
+      fit: Math.max(-1.5, Math.min(1.5, hiddenPlayer(s.seed, s.year, p).fit)),
+      win_here: winTerm(me.prestige, me.win, me.tier === 0, q), win_away: winTerm(best.tier === 0 ? 70 : best.tier === 1 ? 40 : 25, 0.55, best.tier === 0, q),
+      home_here: home, home_away: homeTerm(250, false),
+      morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier,
+      contract: !!activeContract(s.contracts?.[p.id], s.year + 1),
+      costs_season: !!s.settings.pcsa && (s.moves?.[p.id] ?? 0) >= 1,
+      promise: s.promises?.[p.id]?.year === s.year + 1,
+      noise: hashGauss(s.seed, s.year, p.id, 91),
+    };
+  }
+
+  /** What staying pays him next season if nothing changes: a deal you've signed, a multi-year deal, or his pay now grown with his value. */
+  nextPay(p: RatedPlayer): number {
+    const s = this.state;
+    const deal = s.next_deals?.[p.id];
+    if (deal) return deal.amount;
+    const c = activeContract(s.contracts?.[p.id], s.year + 1);
+    if (c) return c.amount;
+    const now = this.pay(p.id), v = this.value(p.id);
+    const vNext = playerValue({ pos: p.pos, ovr: ovrNext(p), stars: p.stars, years: p.years + 1 });
+    return v > 0 ? Math.round(now * vNext / v) : 0;
+  }
+
+  /** The personality your staff assumes until you've talked with him. */
+  private known(pid: number): boolean { return this.state.talked?.[pid] != null; }
+  private personaOf(pid: number, truth: boolean): Persona { return truth ? persona(this.state.seed, pid) : AVERAGE_PERSONA; }
+
+  /**
+   * A player's portal watch as you see it: his chance to enter, the reasons and what would keep him. Your staff's
+   * read (an average personality) until you've talked with him; then his own.
+   */
+  watchView(pid: number) {
+    const s = this.state, p = this.playerById.get(pid);
+    if (!p) return null;
+    const w = this.personaOf(pid, this.known(pid));
+    const ctx = this.stayContext(p);
+    const r = stayScore(ctx, w), keep = payFor(ctx, w, 0.12), walk = payFor(ctx, w, 0.3);
+    const leaving = this.leavingSet().has(pid) || p.years + 1 >= 5;
+    const reasons = reasonsOf(r).map((x) => ({ ...x, label: REASON_WORDS[x.reason] }));
+    const top = reasons[0]?.reason;
+    const why = top === "playing" ? (ctx.start_away > ctx.start_here ? `He wants to start: he's behind ${STARTERS[p.pos] === 1 ? "the starter" : "the starters"} here and would start elsewhere.` : "He wants more playing time.")
+      : top === "winning" ? "He wants to play for a winner." : top === "home" ? "He wants to be closer to home." : top === "fit" ? "He doesn't fit your scheme." : top === "development" ? "He doesn't think he's developing here." : top === "unhappy" ? "He's unhappy here." : null;
+    return {
+      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
+      reasons, leaving, value: ctx.value, pay: ctx.pay, keep, walk_range: walk == null ? null : [roundPay(walk * (this.known(pid) ? 0.95 : 0.8)), roundPay(walk * (this.known(pid) ? 1.05 : 1.25))],
+      fix: leaving ? "He's out of eligibility after this season." : keep == null ? `Money won't fix this. ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : `Pay him ${money(keep)} next season and he's settled.`,
+      promise: s.promises?.[pid] ?? null,
+    };
+  }
+
+  /** Monday: your players' portal watch, and an alert when a starter or one of your most valuable players starts shopping. */
+  private weeklyWatch(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !this.roster(me).length || this.done) return;
+    const prev = s.watch ?? {}, next: Record<number, number> = {};
+    const starters = new Set(Object.values(this.depthChart(me)).map((ids) => ids[0]));
+    const top = new Set(this.roster(me).map((p) => ({ id: p.id, v: this.value(p.id) })).sort((a, b) => b.v - a.v).slice(0, 25).map((x) => x.id));
+    for (const p of this.roster(me)) {
+      if (p.years + 1 >= 5) continue;
+      const v = this.watchView(p.id);
+      if (!v) continue;
+      next[p.id] = v.p;
+      const was = prev[p.id];
+      if (was != null && was < 0.3 && v.p >= 0.3 && (starters.has(p.id) || top.has(p.id))) {
+        rep.news.push(this.news(date, "retention", `${p.pos} ${playerName(p)} is shopping`,
+          `${v.reasons.map((r) => r.label).join(", ") || "Several things"} ${v.known ? "" : "(your staff's read) "}could take him to the portal in January. ${v.fix}`, [me]));
+      }
+    }
+    s.watch = next;
+  }
+
+  /** Talk with one of your players: you learn his real reasons (five talks a week); it lifts his morale a little. */
+  talkTo(pid: number): void {
+    const s = this.state, me = s.user_team_id, p = this.playerById.get(pid);
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only talk with your own players");
+    const monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
+    const used = Object.values(s.talked ?? {}).filter((d) => d >= monday && d <= s.date).length;
+    if (used >= TALKS_PER_WEEK) throw new Error(`you've had your ${TALKS_PER_WEEK} talks this week`);
+    s.talked = { ...s.talked, [pid]: s.date };
+    s.player_morale = { ...s.player_morale, [pid]: Math.round(((s.player_morale?.[pid] ?? 0) + 0.05) * 100) / 100 };
+    const t = s.talks?.[pid];
+    if (t) s.talks = { ...s.talks, [pid]: this.planTalk({ ...t }) };
+  }
+
+  /** Next season's roster budget for a school (revenue share, retention fund and boosters), and what's committed to it. */
+  nextBudget(teamId: number): { total: number; committed: number; deals: number; contracts: number } {
+    const s = this.state, t = this.team(teamId), ny = s.year + 1;
+    const pool = footballPool(t, ny, this.seed.finances?.[t.id]?.roster_budget);
+    const boost = Math.round(this.boosters(t) * 1.04);
+    const ret = s.settings.pcsa ? Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * boost) : 0;
+    const total = Math.round((pool + Math.max(0, boost - ret) + ret) / 10_000) * 10_000;
+    const leaving = this.leavingSet();
+    const deals = Object.entries(s.next_deals ?? {}).reduce((a, [, d]) => a + d.amount, 0);
+    let contracts = 0;
+    for (const p of this.roster(teamId)) if (!leaving.has(p.id) && !s.next_deals?.[p.id]) contracts += activeContract(s.contracts?.[p.id], ny)?.amount ?? 0;
+    return { total, committed: deals + contracts, deals, contracts };
+  }
+
+  /** Renewal talks open (the day after the conference championships): every player posts a status and an ask, and your standing rule signs most. */
+  private openTalks(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !this.roster(me).length) return;
+    s.renewal_rule ??= { ...DEFAULT_RULE };
+    s.next_deals ??= {};
+    const talks: Record<number, Talk> = {};
+    const leaving = this.leavingSet(), nfl = this.nflSlots();
+    for (const p of this.roster(me)) {
+      let status: TalkStatus;
+      if (p.years + 1 >= 5) status = "graduating";
+      else if (leaving.has(p.id) || (p.years >= 2 && (nfl.get(p.id) ?? 999) <= 100)) status = "nfl";
+      else if (activeContract(s.contracts?.[p.id], s.year + 1)) status = "contract";
+      else status = "staying";
+      talks[p.id] = this.planTalk({ pid: p.id, status, ask: null, walk: null, patience: patienceOf(persona(s.seed, p.id)) }, true);
+    }
+    s.talks = talks;
+    this.applyRule();
+    const open = Object.values(s.talks).filter((t) => !t.outcome && t.plan?.kind === "needs_you").length;
+    const signed = Object.values(s.talks).filter((t) => t.deal?.via === "rule").length;
+    rep.news.push(this.news(date, "retention", `Renewal talks open: ${open} player${open === 1 ? "" : "s"} need you`,
+      `Your standing rule re-signed ${signed} players. Talks run until January 1; anyone who wants a deal and doesn't have one enters the portal on January 2.`, [me]));
+  }
+
+  /** A player's status, ask and walk-away number for the talks, and your staff's plan for him under the rule. */
+  private planTalk(t: Talk, fresh = false): Talk {
+    const s = this.state, p = this.playerById.get(t.pid)!, w = persona(s.seed, t.pid), rule = s.renewal_rule ?? DEFAULT_RULE;
+    if (t.status === "graduating" || t.status === "nfl" || t.status === "contract" || t.outcome) return t;
+    const now = this.nextPay(p), ctx = this.stayContext(p, now);
+    const walk = payFor(ctx, w, 0.3), r = stayScore(ctx, w);
+    if (walk == null) t.status = r.p > 0.85 ? "leaving" : "testing";
+    else t.status = walk <= now || ctx.value === 0 ? "staying" : "raise";
+    t.walk = walk;
+    if (fresh || t.ask == null) t.ask = walk == null ? null : t.status === "staying" ? Math.max(walk, now) : openingAsk(walk, w);
+    t.market = this.marketFor(p, ctx.value);
+    const v = ctx.value;
+    const important = this.importance(p) <= 30;
+    if (t.status === "staying" && v === 0) t.plan = { kind: "renew", amount: 0 };
+    else if (t.ask != null && t.ask <= rule.auto_up_to * v) t.plan = { kind: "renew", amount: t.ask };
+    else if (t.ask != null && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
+    else if (t.walk != null && t.walk <= rule.offer_up_to * v && !important) t.plan = { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
+    else t.plan = important ? { kind: "needs_you" } : t.walk == null ? { kind: "let_go" } : { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
+    return t;
+  }
+
+  /** How much a player matters to next season: his rank on your roster by projected rating against his position's starters (1 = most). */
+  private importance(p: RatedPlayer): number {
+    const roster = this.roster(p.team_id).map((x) => ({ id: x.id, v: this.value(x.id) })).sort((a, b) => b.v - a.v || a.id - b.id);
+    return roster.findIndex((x) => x.id === p.id) + 1;
+  }
+
+  /** What players like him are paid at his level: the median of up to five comparables (null without enough). */
+  marketFor(p: RatedPlayer, value: number): number {
+    return this.comparables(p).median ?? roundPay(value * this.portalBasis().tiers[this.tierOf(p.team_id)].ratio);
+  }
+
+  /** Five players at his position, rating and level at other schools, and their pay this season. */
+  comparables(p: RatedPlayer): { players: { pid: number; team_id: number; name: string; ovr: number; pay: number }[]; median: number | null } {
+    const tier = this.tierOf(p.team_id), o = ovrNext(p), out: { pid: number; team_id: number; name: string; ovr: number; pay: number; d: number }[] = [];
+    for (const t of this.teams) {
+      if (t.id === p.team_id || this.tierOf(t.id) !== tier) continue;
+      for (const x of this.roster(t.id)) if (x.pos === p.pos && Math.abs(x.ovr - o) <= 2) out.push({ pid: x.id, team_id: t.id, name: playerName(x), ovr: x.ovr, pay: this.pay(x.id), d: Math.abs(x.ovr - o) * 1000 + (hashGauss(p.id, x.id) + 4) });
+    }
+    const players = out.sort((a, b) => a.d - b.d).slice(0, 5).map(({ d: _, ...x }) => x);
+    const pays = players.map((x) => x.pay).sort((a, b) => a - b);
+    return { players, median: pays.length >= 3 ? pays[Math.floor(pays.length / 2)] : null };
+  }
+
+  /** Your standing rule signs everyone it covers, most valuable first, within its share of next season's budget. */
+  private applyRule(): void {
+    const s = this.state, me = s.user_team_id!, rule = s.renewal_rule ?? DEFAULT_RULE;
+    const b = this.nextBudget(me);
+    let room = rule.budget_share * b.total - b.committed;
+    const talks = { ...s.talks };
+    const order = Object.values(talks).filter((t) => !t.outcome && !t.mine && t.plan?.kind === "renew")
+      .sort((a, b2) => this.value(b2.pid) - this.value(a.pid) || a.pid - b2.pid);
+    for (const t of order) {
+      const amount = t.plan!.amount ?? 0;
+      if (amount > room) continue;
+      room -= amount;
+      talks[t.pid] = this.sign({ ...t }, amount, Math.min(2, eligibilityLeft({ years: this.playerById.get(t.pid)!.years + 1 })), "rule");
+    }
+    s.talks = talks;
+  }
+
+  private sign(t: Talk, amount: number, years: number, via: NonNullable<Talk["deal"]>["via"]): Talk {
+    const s = this.state;
+    if (amount > 0) s.next_deals = { ...s.next_deals, [t.pid]: { amount, years } };
+    return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined };
+  }
+
+  /** Change your standing rule; your staff re-plans everyone still open (and the rule signs whoever it now covers). */
+  setRenewalRule(rule: Partial<RenewalRule>): void {
+    const s = this.state;
+    if (!s.talks) throw new Error("renewal talks haven't opened");
+    s.renewal_rule = { ...(s.renewal_rule ?? DEFAULT_RULE), ...rule };
+    s.talks = Object.fromEntries(Object.entries(s.talks).map(([k, t]) => [k, this.planTalk({ ...t })]));
+    this.applyRule();
+  }
+
+  /** Make one of your players an offer for next season: he answers in a day or two. */
+  renewalOffer(pid: number, amount: number, years: number): void {
+    const s = this.state, t = s.talks?.[pid], p = this.playerById.get(pid);
+    if (!t || !p) throw new Error("no renewal talks with him");
+    if (t.outcome) throw new Error("his decision is made");
+    if (t.status === "graduating" || t.status === "contract") throw new Error(`he's ${STATUS_WORDS[t.status].toLowerCase()}`);
+    if (t.offer) throw new Error("he hasn't answered your last offer yet");
+    if (years < 1 || years > eligibilityLeft({ years: p.years + 1 })) throw new Error(`he has ${eligibilityLeft({ years: p.years + 1 })} season(s) left`);
+    const b = this.nextBudget(p.team_id);
+    if (amount > b.total - b.committed) throw new Error(`that's over next season's budget: ${money(b.total - b.committed)} left`);
+    const n = (t.patience ?? 0) * 7 + Object.keys(s.talks!).length;
+    s.talks = { ...s.talks, [pid]: { ...t, mine: true, offer: { amount: roundPay(amount), years, made: s.date, answer: addDays(s.date, answerDays(s.seed, pid, n)) } } };
+  }
+
+  /** Promise him a starting job next season (one per starting job at his position), or take it back. */
+  setPromise(pid: number, on: boolean): void {
+    const s = this.state, p = this.playerById.get(pid), me = s.user_team_id;
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only promise your own players");
+    const ny = s.year + 1, list = { ...s.promises };
+    if (on) {
+      const held = Object.entries(list).filter(([id, x]) => x.year === ny && Number(id) !== pid && this.playerById.get(Number(id))?.pos === p.pos).length;
+      if (held >= STARTERS[p.pos]) throw new Error(`you've already promised every starting ${p.pos} job`);
+      list[pid] = { year: ny };
+    } else delete list[pid];
+    s.promises = list;
+    const t = s.talks?.[pid];
+    if (t && !t.outcome) s.talks = { ...s.talks, [pid]: this.planTalk({ ...t }) };
+  }
+
+  /** Let him go (he enters the portal), or put him back in your staff's hands; "mine" keeps the staff's plan off him on December 31. */
+  setTalk(pid: number, patch: { let_go?: boolean; mine?: boolean }): void {
+    const s = this.state, t = s.talks?.[pid];
+    if (!t) throw new Error("no renewal talks with him");
+    if (t.outcome === "signed") throw new Error("he's already signed");
+    const next = { ...t };
+    if (patch.let_go != null) next.outcome = patch.let_go ? "let_go" : undefined;
+    if (patch.mine != null) next.mine = patch.mine;
+    s.talks = { ...s.talks, [pid]: next };
+  }
+
+  /** Each day of the talks, players answer the offers that have waited a day or two. */
+  private talksDay(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    if (!s.talks || me == null) return;
+    for (const t of Object.values(s.talks)) {
+      if (!t.offer || t.offer.answer > date || t.outcome) continue;
+      const p = this.playerById.get(t.pid)!;
+      const a = respond(t, t.offer.amount);
+      if (a.accepted) {
+        s.talks[t.pid] = this.sign(t, t.offer.amount, t.offer.years, "talks");
+        rep.news.push(this.news(date, "retention", `${p.pos} ${playerName(p)} commits to stay`, `${money(t.offer.amount)} a year for ${t.offer.years} season${t.offer.years === 1 ? "" : "s"}.`, [me]));
+        continue;
+      }
+      if (a.insulted) s.player_morale = { ...s.player_morale, [t.pid]: Math.round(((s.player_morale?.[t.pid] ?? 0) - 0.3) * 100) / 100 };
+      const done = a.patience <= 0;
+      s.talks[t.pid] = { ...t, offer: undefined, counter: a.counter ?? undefined, patience: a.patience, outcome: done ? "portal" : undefined };
+      rep.news.push(this.news(date, "retention", done ? `${p.pos} ${playerName(p)} is done talking` : `${p.pos} ${playerName(p)} turns down your offer`,
+        done ? "He'll enter the portal on January 2. You can still bid for him there." : `He wants ${money(a.counter!)}${a.insulted ? "; the offer insulted him" : ""}. ${a.patience} more round${a.patience === 1 ? "" : "s"} before he stops talking.`, [me]));
+    }
+  }
+
+  /**
+   * January 2: talks are over. Your staff's plan settles anyone you left to it; everyone who wanted a deal and
+   * has none enters, and across the country every player decides by his stay-or-go score. Then schools bid.
+   */
+  private openPortal(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    const leaving = this.leavingSet(), nfl = this.nflSlots();
+    // Your open talks: the staff's plan for whatever you left to it.
+    if (s.talks && me != null) {
+      for (const t of Object.values(s.talks)) {
+        if (t.outcome || t.status === "graduating" || t.status === "nfl" || t.status === "contract") continue;
+        if (t.mine) { if (t.status === "raise") s.talks[t.pid] = { ...t, outcome: "portal" }; continue; }
+        const plan = t.plan;
+        if (plan?.kind === "renew") s.talks[t.pid] = this.sign(t, plan.amount ?? 0, 1, "staff");
+        else if (plan?.kind === "offer" && t.walk != null && t.walk <= (plan.amount ?? 0)) s.talks[t.pid] = this.sign(t, t.walk, 1, "staff");
+        else if (plan?.kind === "let_go") s.talks[t.pid] = { ...t, outcome: "let_go" };
+        else if (t.status === "raise") s.talks[t.pid] = { ...t, outcome: "portal" };
+      }
+    }
+    const entries: PortalEntry[] = [];
+    const lastGame = new Map<number, ISODate>();
+    for (const g of s.games) for (const id of [g.home_id, g.away_id]) if ((lastGame.get(id) ?? "") < g.date) lastGame.set(id, g.date);
+    for (const t of this.teams) {
+      const mine = t.id === me;
+      const mix = STYLE_MIX[styleOf(this.seed.styles, t.id)];
+      for (const p of this.roster(t.id)) {
+        if (leaving.has(p.id) || (p.years >= 2 && (nfl.get(p.id) ?? 999) <= 100)) continue;
+        let enters: boolean;
+        const talk = mine ? s.talks?.[p.id] : undefined;
+        if (talk?.outcome === "portal" || talk?.outcome === "let_go") enters = true;
+        else if (talk?.outcome === "signed") enters = false;
+        else {
+          // AI schools offer to keep their players by their style; yours keep what they have.
+          const pay = mine ? this.nextPay(p) : Math.round(this.nextPay(p) * mix.retain);
+          const r = stayScore(this.stayContext(p, pay), persona(s.seed, p.id));
+          enters = new Rng(mixSeed(s.seed, s.year, p.id, "enter")).random() < r.p;
+        }
+        if (!enters) continue;
+        const ctx = this.stayContext(p);
+        const r = stayScore(ctx, persona(s.seed, p.id));
+        const end = lastGame.get(t.id) ?? date;
+        entries.push({
+          pid: p.id, from: t.id, entered: end >= date ? addDays(end, 1) : date, status: "open", offers: [],
+          reasons: talk?.outcome === "let_go" ? ["Released"] : reasonsOf(r).map((x) => REASON_WORDS[x.reason]),
+          ask: roundPay(ctx.value * ctx.ratio_away * ctx.demand),
+        });
+      }
+    }
+    s.portal = { year: s.year, entries };
+    this.portalCache = null;
+    const fbs = entries.filter((e) => this.team(e.from).level === "fbs").length;
+    const big = entries.map((e) => this.playerById.get(e.pid)!).sort((a, b) => b.ovr - a.ovr).slice(0, 6);
+    rep.news.push(this.news(date, "portal", `The transfer portal opens: ${entries.length} players enter`,
+      `${fbs} from FBS. Biggest names: ${big.map((p) => `${p.pos} ${playerName(p)} (${this.team(p.team_id).school})`).join(", ")}.`, big.map((p) => p.team_id)));
+    if (me != null) {
+      const mineOut = entries.filter((e) => e.from === me).map((e) => this.playerById.get(e.pid)!);
+      if (mineOut.length) rep.news.push(this.news(date, "portal", `${mineOut.length} ${this.team(me).school} player${mineOut.length === 1 ? "" : "s"} enter the portal`,
+        mineOut.sort((a, b) => b.ovr - a.ovr).map((p) => `${p.pos} ${playerName(p)} (${p.ovr})`).join(", ") + ".", [me]));
+    }
+  }
+
+  /** What a school still needs next season by position (open spots against a healthy room, and starting jobs without a returning starter). */
+  private needsOf(teamId: number): Partial<Record<Pos, { spots: number; starter: boolean }>> {
+    const nx = this.portalBasis().next.get(teamId);
+    const out: Partial<Record<Pos, { spots: number; starter: boolean }>> = {};
+    if (!nx) return out;
+    const signees = new Map<Pos, number>();
+    for (const p of this.state.recruiting?.prospects ?? []) if (p.cls === this.state.year + 1 && p.commit?.team === teamId) signees.set(p.pos, (signees.get(p.pos) ?? 0) + 1);
+    for (const pos of POSITIONS) {
+      const have = (nx.count[pos] ?? 0) + 0.5 * (signees.get(pos) ?? 0);
+      const startersBack = [...nx.rank].filter(([id, r]) => r < STARTERS[pos] && this.playerById.get(id)?.pos === pos).length;
+      const spots = Math.max(0, Math.round(ROOM[pos] - have));
+      const starter = startersBack < STARTERS[pos];
+      if (spots > 0 || starter) out[pos] = { spots: Math.max(spots, starter ? 1 : 0), starter };
+    }
+    return out;
+  }
+
+  /** Each day of the window: AI schools make offers to fill their needs, and players with offers commit. */
+  private portalDay(date: ISODate, rep: DayReport): void {
+    const s = this.state, pt = s.portal;
+    if (!pt || pt.year !== s.year) return;
+    const open = pt.entries.filter((e) => e.status === "open" && e.entered <= date);
+    if (!open.length) return;
+    const { tiers, next } = this.portalBasis();
+    const byPos = new Map<Pos, PortalEntry[]>();
+    for (const e of open) { const p = this.playerById.get(e.pid)!; const g = byPos.get(p.pos) ?? []; g.push(e); byPos.set(p.pos, g); }
+    // AI schools: offers to the best fits for what they still need, from what's left of next season's money for transfers.
+    for (const t of this.teams) {
+      if (t.id === s.user_team_id) continue;
+      const nx = next.get(t.id);
+      if (!nx) continue;
+      const style = styleOf(this.seed.styles, t.id), mix = STYLE_MIX[style];
+      const b = this.transferBudget(t.id);
+      let left = b.total - b.spent;
+      for (const [pos, need] of Object.entries(this.needsOf(t.id)) as [Pos, { spots: number; starter: boolean }][]) {
+        const pending = pt.entries.filter((e) => e.status === "open" && e.offers.some((o) => o.team_id === t.id) && this.playerById.get(e.pid)!.pos === pos).length;
+        let want = Math.min(4, 2 * need.spots) - pending;
+        if (want <= 0) continue;
+        const bar = nx.bar[pos] ?? 60;
+        const cands = (byPos.get(pos) ?? []).filter((e) => e.from !== t.id && !e.offers.some((o) => o.team_id === t.id))
+          .map((e) => ({ e, p: this.playerById.get(e.pid)! })).map((x) => ({ ...x, o: ovrNext(x.p) }))
+          // Someone who'd start, or add real depth; not a player far above what the school can attract.
+          .filter((x) => x.o >= bar - (need.starter ? 3 : 7) && x.o <= bar + (nx.tier === 0 ? 30 : nx.tier === 1 ? 9 : 6))
+          .map((x) => ({ ...x, sv: schoolValue({ value: Math.max(10_000, playerValue({ pos, ovr: x.o, stars: x.p.stars, years: x.p.years + 1 })), need: need.starter ? 1.4 : 1, fit: 0, style, source: "transfer", years: x.p.years + 1 }) + 1000 * hashGauss(t.id, x.e.pid, s.year) }))
+          .sort((a, b2) => b2.sv - a.sv || a.e.pid - b2.e.pid);
+        for (const c of cands) {
+          if (want <= 0) break;
+          const value = playerValue({ pos, ovr: c.o, stars: c.p.stars, years: c.p.years + 1 });
+          const amount = roundPay(Math.min(left, value * Math.max(0.15, nx.ratio) * mix.transfers * (need.starter ? 1.15 : 0.9)));
+          if (value > 0 && amount < 0.25 * value * nx.ratio) continue;
+          c.e.offers.push({ team_id: t.id, amount, years: 1, date });
+          left -= amount;
+          want--;
+        }
+      }
+    }
+    // Players with offers commit: slowly at first, most by the end of the window.
+    const rng = new Rng(mixSeed(s.seed, date, "portal"));
+    for (const e of open) {
+      const u = rng.random(), v = rng.random();
+      if (!e.offers.length) continue;
+      const p = this.playerById.get(e.pid)!;
+      const scored = this.scoreOffers(e, p);
+      const best = Math.max(...scored.map((x) => x.score));
+      const days = daysBetween(e.entered, date);
+      if (u >= transferHazard(days, best < -1.5 ? 2 : 0)) continue;
+      const pick = scored[chooseIdx(scored.map((x) => x.score), v)];
+      this.commitTransfer(e, pick.team_id, date, rep);
+    }
+  }
+
+  /** How an entrant scores each offer he holds (the recruits' choice model, with his old school's loyalty and your pitches). */
+  private scoreOffers(e: PortalEntry, p: RatedPlayer): { team_id: number; score: number }[] {
+    const s = this.state, { next } = this.portalBasis(), w = persona(s.seed, p.id);
+    const o = ovrNext(p), value = Math.max(10_000, playerValue({ pos: p.pos, ovr: o, stars: p.stars, years: p.years + 1 }));
+    const q = Math.max(-2, Math.min(3, (o - 72) / 5));
+    return e.offers.map((off) => {
+      const t = this.team(off.team_id), nx = next.get(t.id)!;
+      const ahead = [...nx.rank].filter(([id]) => this.playerById.get(id)?.pos === p.pos && ovrNext(this.playerById.get(id)!) > o).length;
+      const start = ahead < STARTERS[p.pos] ? 0.9 : ahead === STARTERS[p.pos] ? 0.4 : 0.1;
+      const home = p.home.lat != null && p.home.lon != null && t.venue?.lat != null && t.venue?.lon != null ? miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }) : 400;
+      const offer: SchoolOffer = {
+        team_id: t.id, prestige: nx.prestige, power: nx.tier === 0, win_pct: nx.win, miles: home, home_state: p.home.state != null && p.home.state === t.venue?.state,
+        money: off.amount, start_chance: start, development: (devRate(s.facilities?.[t.id]) - 1) * 5, fit: 0, chemistry: 0,
+        current: t.id === e.from, morale: s.player_morale?.[p.id] ?? 0,
+      };
+      const pitch = t.id === s.user_team_id ? 0.25 * Math.min(4, e.pitches ?? 0) : 0;
+      return { team_id: t.id, score: offerScore(offer, { value, quality: q, persona: w }) + pitch + 0.5 * hashGauss(s.seed, p.id, t.id, 13) };
+    });
+  }
+
+  private commitTransfer(e: PortalEntry, to: number, date: ISODate, rep: DayReport): void {
+    const s = this.state, p = this.playerById.get(e.pid)!, me = s.user_team_id;
+    e.status = "committed"; e.to = to; e.committed = date;
+    this.portalCache = null;
+    const off = e.offers.find((o) => o.team_id === to)!;
+    if (to === me) s.next_deals = { ...s.next_deals, [p.id]: { amount: off.amount, years: off.years } };
+    const big = p.ovr >= 82 || to === me || e.from === me;
+    if (big) rep.news.push(this.news(date, "portal", to === e.from ? `${p.pos} ${playerName(p)} returns to ${this.team(to).school}` : `${p.pos} ${playerName(p)} transfers to ${this.team(to).school}`,
+      `From ${this.team(e.from).school} (${p.ovr}), ${money(off.amount)} a year.`, [to, e.from]));
+  }
+
+  /** National signing day closes the portal: entrants with offers choose now; anyone without one leaves college football. */
+  private closePortal(date: ISODate, rep: DayReport): void {
+    const s = this.state, pt = s.portal;
+    if (!pt || pt.year !== s.year) return;
+    const rng = new Rng(mixSeed(s.seed, date, "portal-close"));
+    for (const e of pt.entries) {
+      if (e.status !== "open") continue;
+      const v = rng.random();
+      if (!e.offers.length) { e.status = "none"; continue; }
+      const scored = this.scoreOffers(e, this.playerById.get(e.pid)!);
+      this.commitTransfer(e, scored[chooseIdx(scored.map((x) => x.score), v)].team_id, date, rep);
+    }
+    const none = pt.entries.filter((e) => e.status === "none").length;
+    rep.news.push(this.news(date, "portal", `The portal closes: ${pt.entries.length - none} players found new schools`, `${none} found none and leave college football.`, []));
+  }
+
+  /** What a school has for transfers next season (its style's share of the budget) and what it has committed. */
+  private transferBudget(teamId: number): { total: number; spent: number } {
+    const s = this.state, t = this.team(teamId);
+    const style = styleOf(this.seed.styles, teamId);
+    const share = style === "portal" || style === "win_now" ? 0.3 : style === "balanced" ? 0.2 : 0.12;
+    const total = t.level === "fbs" ? Math.round(this.nextBudget(teamId).total * share) : 0;
+    let spent = 0;
+    for (const e of s.portal?.entries ?? []) for (const o of e.offers) if (o.team_id === teamId && (e.status === "open" || e.to === teamId)) spent += o.amount;
+    return { total, spent };
+  }
+
+  /** Bid for a player in the portal (0 withdraws your offer). The money comes from next season's budget. */
+  portalOffer(pid: number, amount: number, years: number): void {
+    const s = this.state, me = s.user_team_id, e = s.portal?.entries.find((x) => x.pid === pid);
+    if (me == null || !e) throw new Error("he isn't in the portal");
+    if (e.status !== "open" || e.entered > s.date) throw new Error("he isn't open to offers");
+    const p = this.playerById.get(pid)!;
+    e.offers = e.offers.filter((o) => o.team_id !== me);
+    if (amount <= 0) return;
+    if (years < 1 || years > eligibilityLeft({ years: p.years + 1 })) throw new Error(`he has ${eligibilityLeft({ years: p.years + 1 })} season(s) left`);
+    const b = this.nextBudget(me);
+    const out = s.portal!.entries.filter((x) => x.status === "open").reduce((a, x) => a + (x.offers.find((o) => o.team_id === me)?.amount ?? 0), 0);
+    if (amount > b.total - b.committed - out) throw new Error(`that's over next season's budget: ${money(b.total - b.committed - out)} left after your other offers`);
+    e.offers.push({ team_id: me, amount: roundPay(amount), years, date: s.date });
+  }
+
+  /** A pitch call to a player in the portal (six a day): each builds his interest in your school. */
+  portalPitch(pid: number): void {
+    const s = this.state, e = s.portal?.entries.find((x) => x.pid === pid);
+    if (!e || e.status !== "open") throw new Error("he isn't open");
+    const today = s.portal!.entries.reduce((a, x) => a + ((x as PortalEntry & { pitched?: string }).pitched === s.date ? 1 : 0), 0);
+    if (today >= PITCHES_PER_DAY) throw new Error(`you've made your ${PITCHES_PER_DAY} pitch calls today`);
+    if ((e as PortalEntry & { pitched?: string }).pitched === s.date) throw new Error("you've already called him today");
+    e.pitches = (e.pitches ?? 0) + 1;
+    (e as PortalEntry & { pitched?: string }).pitched = s.date;
+  }
+
+  /** The portal as you see it: entrants with their asks, offers and top schools, and your needs and budget. */
+  portalView() {
+    const s = this.state, me = s.user_team_id, pt = s.portal;
+    const entries = (pt?.entries ?? []).filter((e) => e.entered <= s.date).map((e) => {
+      const p = this.playerById.get(e.pid)!;
+      const scored = e.status === "open" && e.offers.length ? this.scoreOffers(e, p) : [];
+      const chances = scored.length ? softmax(scored.map((x) => x.score)) : [];
+      const top = scored.map((x, i) => ({ team_id: x.team_id, share: Math.round(chances[i] * 100) })).sort((a, b) => b.share - a.share).slice(0, 5);
+      const mine = e.offers.find((o) => o.team_id === me);
+      return {
+        pid: e.pid, name: playerName(p), pos: p.pos, ovr: p.ovr, next: Math.round(ovrNext(p)), potential: this.scoutedPotential(p), years: p.years, cls: p.class, stars: p.stars,
+        from: e.from, entered: e.entered, reasons: e.reasons, ask: e.ask, offers: e.offers.length, status: e.status, to: e.to ?? null,
+        top, mine: mine ? { amount: mine.amount, years: mine.years } : null, pitches: e.pitches ?? 0,
+        costs_season: !!s.settings.pcsa && (s.moves?.[e.pid] ?? 0) >= 1,
+      };
+    });
+    return {
+      year: pt?.year ?? null, open: !!pt && pt.year === s.year, window: s.events.find((e) => e.type === "portal_window")?.date ?? null,
+      entries, needs: me != null ? this.needsOf(me) : {}, budget: me != null ? this.nextBudget(me) : null,
+      offered: me != null ? (pt?.entries ?? []).filter((e) => e.status === "open").reduce((a, e) => a + (e.offers.find((o) => o.team_id === me)?.amount ?? 0), 0) : 0,
+    };
+  }
+
+  /** Your retention screen: every player's portal watch, and the renewal talks when they're open. */
+  retentionView() {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return null;
+    const starters = new Set(Object.values(this.depthChart(me)).map((ids) => ids[0]));
+    const rows = this.roster(me).map((p) => {
+      const w = this.watchView(p.id)!, t = s.talks?.[p.id];
+      return {
+        pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
+        watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
+          deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null } : null,
+        pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
+      };
+    });
+    const monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
+    return {
+      talks_open: !!s.talks && !s.portal, rule: s.renewal_rule ?? DEFAULT_RULE, budget: this.nextBudget(me), rows,
+      talks_left: TALKS_PER_WEEK - Object.values(s.talked ?? {}).filter((d) => d >= monday && d <= s.date).length,
+      dates: { talks: s.events.find((e) => e.type === "renewal_talks")?.date ?? null, portal: s.events.find((e) => e.type === "portal_window")?.date ?? null },
+    };
+  }
+
+  /** The fourth game of the season: a promised starter who isn't starting has had his promise broken. */
+  private checkPromises(g: Game, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || (g.home_id !== me && g.away_id !== me) || g.kind !== "regular") return;
+    const played = s.games.filter((x) => x.kind === "regular" && x.status === "final" && (x.home_id === me || x.away_id === me)).length;
+    if (played !== 4) return;
+    const starters = new Set(Object.values(this.depthChart(me)).map((ids) => ids[0]));
+    for (const [id, pr] of Object.entries(s.promises ?? {})) {
+      const pid = Number(id), p = this.playerById.get(pid);
+      if (pr.year !== s.year || pr.broken || !p || p.team_id !== me || starters.has(pid)) continue;
+      s.promises![pid] = { ...pr, broken: true };
+      s.player_morale = { ...s.player_morale, [pid]: -1.5 };
+      rep.news.push(this.news(g.date, "retention", `${p.pos} ${playerName(p)}: a broken promise`, "You promised him a starting job and he isn't starting. He won't forget it this winter.", [me]));
+    }
+  }
+
+  /** Leagues saved before the portal: renewal talks and the window go on the calendar. */
+  upgradePortal(): void {
+    const s = this.state;
+    for (const e of s.events) if (e.type === "portal_window" && e.status !== "done") e.active = true;
+    if (!s.events.some((e) => e.type === "renewal_talks")) {
+      const ev = seasonEvents(s.year, s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date, this.seed.schedule, s.settings.playoff).filter((e) => e.type === "renewal_talks" && e.date >= s.date);
+      s.events = sortEvents([...s.events, ...ev]);
+    }
   }
 
   // ---- stats, awards and redshirts -------------------------------------------------------------
@@ -1793,9 +2533,12 @@ export class Season {
         if (!st) break;
         signingDay(st, s.year, this.schools(e.date), this.week, e.date, new Rng(mixSeed(s.seed, s.year, "signing-day")));
         this.signingNews(e.date, "National signing day", rep);
+        this.closePortal(e.date, rep);
         break;
       }
       case "draft_deadline": this.declarations(e.date, rep); break;
+      case "renewal_talks": this.openTalks(e.date, rep); break;
+      case "portal_window": this.openPortal(e.date, rep); break;
       case "nfl_draft": this.draftDay(e.date, rep); break;
       case "season_end": {
         const poll = this.poll("ap", e.date, AP_PANEL, s.champion, rep);
@@ -1933,6 +2676,7 @@ export class Season {
     if (day) this.recordInjuries(g, day.injuries, [hs!, as!], rep);
     if (userSide && day) this.redshirtWarnings(g, day.snaps, rep);
     this.updateMorale(g);
+    this.checkPromises(g, rep);
     updatePower(s.power, g, s.settings.home_field_points);
     for (const [id, side] of [[g.home_id, r.home], [g.away_id, r.away]] as const) {
       const line = starLine(side.players as Record<string, Record<string, number>>, this.team(id).school);
