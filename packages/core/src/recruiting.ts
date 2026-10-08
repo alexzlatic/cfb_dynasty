@@ -14,8 +14,10 @@ import type { StaffTime } from "./staff.ts";
  * genuinely unsettled while he is young: kids grow at different rates, so it moves a lot from year to year
  * as a freshman and sophomore and much less later, without ever being fully settled. Nobody sees it. The
  * national recruiting service (a composite in the style of 247Sports, On3 and Rivals) publishes stars,
- * a 0.80-1.00 rating and ranks for about 50 sophomores, about 500 juniors and every senior; each school
- * reads prospects through its own scouts, best in its own region, and can pay to scout further.
+ * a 0.80-1.00 rating and ranks for about 50 freshmen, about 500 sophomores and every junior and senior; each
+ * school reads prospects through its own scouts, best in its own region, and can pay to scout further. Every
+ * prospect exists from his freshman year, but a staff only knows the ones the service rates, the ones near
+ * home its coaches have come across, and the ones its scouts find in regions it covers.
  *
  * The 2027 class is real (CFBD), with its real commitments as verbals that can still flip, completed with
  * generated prospects at the low end. 2028 to 2030 and every class after are generated from real
@@ -212,8 +214,14 @@ export function realClass(o: { seed: number; rs: RecruitSeed; shape: { mu: numbe
 /** The service's read error (points of potential) by years until arrival (0 to 4+), before re-rates narrow it. */
 const SVC_SD = [1.5, 2, 3, 4, 6];
 const svcSd = (t: number) => smoothAt(SVC_SD, Math.max(0, Math.min(4, t)));
-/** How many each grade the service rates: none as freshmen, about 50 sophomores, about 500 juniors, every senior. */
-export const SVC_RATED = [0, 50, 500, Infinity];
+/** How many each grade the service rates: about 50 freshmen, about 500 sophomores, every junior and senior. */
+export const SVC_RATED = [50, 500, Infinity, Infinity];
+/**
+ * How deep into each class the schools recruit (by national rank): no freshmen, the top 50 sophomores and 500
+ * juniors, every senior. Prospects on your board are always in play.
+ */
+export const IN_PLAY = [0, 50, 500, Infinity];
+export const inPlay = (p: Prospect, g: number) => p.svc != null && g >= 1 && p.svc.rank <= IN_PLAY[g];
 /** Re-rates through the year narrow its reads: start of the year, after spring camps, after the summer circuit, after the season. */
 export const RERATE = [1, 0.85, 0.7, 0.55];
 export const RERATE_DATES = (year: number): ISODate[] => [`${year}-05-15`, `${year}-08-01`, `${year}-12-15`];
@@ -335,6 +343,25 @@ export function schoolRead(eye: SchoolEye, p: Prospect, date: ISODate, seed: num
   return { est: (own * w1 + svc * w2) / (w1 + w2), sd: 1 / Math.sqrt(w1 + w2) };
 }
 
+// ---- discovery: which prospects a staff knows about ----------------------------------------------------
+/** Everyone knows the prospects the service rates and anyone who has committed somewhere. */
+export const isPublic = (p: Prospect) => p.svc != null || p.commit != null;
+/**
+ * The weekly chance a staff comes across a prospect it doesn't know yet: high near home (his state or within
+ * 300 miles), a little lower in regions where it pays a scout, rare elsewhere (word of mouth, for the best
+ * only). Better prospects are found sooner: z is how far his true potential is above his class's average, in
+ * class standard deviations. `effort` is the staff's scouting time against the usual 10% (square root).
+ */
+export function discoverRate(eye: SchoolEye, p: Prospect, z: number, effort: number): number {
+  const near = p.home.state === eye.state || miles(p.home, eye) <= 300;
+  const reg = regionOf(p.home);
+  const area = near ? 0.08 : reg != null && eye.regions.includes(reg) ? 0.06 : eye.national ? 0.004 : 0.002;
+  const prom = Math.min(1, Math.exp(1.2 * (z - 1.5)));
+  return area * prom * Math.max(0.5, Math.min(2, effort)) / eye.width;
+}
+/** Weeks of looking a staff has behind it when a league starts: a sophomore class has had a year, freshmen a few weeks. */
+export const KNOWN_WEEKS = [3, 40, 80, 120];
+
 // ---- schools ---------------------------------------------------------------------------------------
 /** What the weekly recruiting needs to know about a school. */
 export interface School extends SchoolEye {
@@ -412,6 +439,11 @@ export interface UserRecruiting {
   spend: number;
   /** How your staff splits its week. */
   time: StaffTime;
+  /** Prospects your staff has found beyond the public ones (rated by the service or committed), and for which school. */
+  found?: number[];
+  found_team?: number;
+  /** Your big board: the prospects you're tracking, in your order. */
+  board?: number[];
 }
 
 export interface RecruitingState {
@@ -428,6 +460,8 @@ export interface RecruitingState {
    * starters), fixed on the first day of the recruiting year so a reopened league recruits the same way.
    */
   frozen?: { year: number; schools: Record<string, FrozenSchool> };
+  /** 2 once the service rates freshmen, sophomores and every junior (older leagues are re-rated on open). */
+  svc_v?: number;
   user: UserRecruiting;
 }
 
@@ -460,6 +494,8 @@ const FBS_PULL = 1.2;
 const DIST_SCALE = 0.45, POWER_PULL = 0.6, ELITE_PULL = 1.0;
 /** How many schools work an uncommitted prospect at once: the ones he likes best. */
 const TOP_K = 40, TIER_K = 12;
+/** A class range topping out here or higher (about the top 15 programs) has no ceiling. */
+const ELITE_BAND = 91;
 
 /**
  * His base score for a school (offerScore, plus the FBS and power pulls, the program cycle and money). NIL
@@ -537,7 +573,8 @@ export class RecruitWeek {
     const read = p.svc!.read, q = (p.svc!.r - 0.86) / 0.04, me = { value: 0, quality: q, persona: this.persona(p.id) };
     for (let i = 0; i < schools.length; i++) {
       const t = schools[i];
-      if (read < t.band[0] - 4 || read > t.band[1] + 0.6) continue;
+      // Schools recruit in their range; the elite programs chase anyone above it too (nobody is too good for them).
+      if (read < t.band[0] - 4 || (read > t.band[1] + 0.6 && t.band[1] < ELITE_BAND)) continue;
       ts.push(i);
       bs.push(baseScore(t, p, read, me));
     }
@@ -553,6 +590,24 @@ export class RecruitWeek {
     const list: Considered = { t: Int32Array.from(ts), base: Float64Array.from(bs), at: new Map(ts.map((t, k) => [t, k])) };
     c.set(p.id, list);
     return list;
+  }
+
+  /**
+   * The schools a prospect is considering, best first: his chance of picking each if he chose among them today
+   * (base appeal, relationship and offer, as in the weekly decisions). Empty while he is too young to be in play.
+   */
+  considering(st: RecruitingState, year: number, schools: School[], user: number | null, p: Prospect): { team: number; share: number; offered: boolean; hours: number }[] {
+    const g = gradeOf(p, year);
+    if (!p.svc || g < 1 || p.commit?.signed) return [];
+    const list = this.considered(year, st.rerate, schools, user, p);
+    const idx = new Map(schools.map((t, i) => [t.id, i]));
+    const u = Array.from(list.base);
+    for (const key in p.interest) { const k = list.at.get(idx.get(Number(key)) ?? -1); if (k != null) u[k] += contactPull(p.interest[key]); }
+    for (const id of p.offers) { const k = list.at.get(idx.get(id) ?? -1); if (k != null) u[k] += OFFER_PULL; }
+    const m = Math.max(...u);
+    const e = u.map((x) => Math.exp(x - m)), z = e.reduce((a, x) => a + x, 0);
+    return Array.from(list.t, (t, k) => ({ team: schools[t].id, share: e[k] / z, offered: p.offers.includes(schools[t].id), hours: Math.round(p.interest[schools[t].id] ?? 0) }))
+      .sort((a, b) => b.share - a.share || a.team - b.team);
   }
 
   run(o: { st: RecruitingState; year: number; date: ISODate; schools: School[]; user: number | null; rng: Rng }): RecruitEvent[] {
@@ -576,7 +631,8 @@ export class RecruitWeek {
     const cands: Cand[] = [];
     for (const p of st.prospects) {
       const g = gradeOf(p, year);
-      if (!p.svc || g < 1 || p.commit?.signed) continue;
+      if (p.commit?.signed || !p.svc || g < 1) continue;
+      if (!inPlay(p, g) && !(o.user != null && (p.offers.includes(o.user) || p.interest[o.user]))) continue;
       const list = this.considered(year, st.rerate, schools, o.user, p);
       const u = list.base.slice();
       for (const key in p.interest) {

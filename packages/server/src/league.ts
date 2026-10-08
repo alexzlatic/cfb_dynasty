@@ -39,6 +39,8 @@ export type Action =
   | { type: "recruit_offer"; payload: { pid: number; on: boolean } }
   /** Send your scouts to evaluate a prospect (each week until taken off the list). */
   | { type: "scout_prospect"; payload: { pid: number; on: boolean } }
+  /** Put a prospect on your big board (at a place in it, or the end), or take him off. */
+  | { type: "recruit_board"; payload: { pid: number; on: boolean; at?: number } }
   /** Hire a regional scout (or let one go). */
   | { type: "scout_region"; payload: { region: Region; on: boolean } }
   /** How your staff splits its week between recruiting, scouting and game preparation. */
@@ -152,6 +154,8 @@ export class League {
     if (!meta.budgets) lg.season.startFinance(seed?.finances);
     // Leagues saved before recruiting: the four classes start the way a new league's would.
     if (!meta.recruiting) lg.season.startRecruiting();
+    // ...and before the service rated every junior, or before staffs had to find prospects.
+    lg.season.upgradeRecruiting();
     return lg;
   }
 
@@ -241,6 +245,11 @@ export class League {
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), hours } };
     }
     if (a.type === "recruit_offer" || a.type === "scout_prospect") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "recruit_board") {
+      const at = a.payload?.at == null ? undefined : Number(a.payload.at);
+      if (at != null && !Number.isInteger(at)) throw new Error("at is a place on the board");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on, ...(at != null ? { at } : {}) } };
+    }
     if (a.type === "scout_region") {
       if (!Object.hasOwn(REGIONS, a.payload?.region)) throw new Error(`unknown region ${a.payload?.region}`);
       a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
@@ -284,6 +293,7 @@ export class League {
       if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
       if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);
       if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on);
+      if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);
       if (a.type === "sim") {
