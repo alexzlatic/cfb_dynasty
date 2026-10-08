@@ -18,3 +18,4 @@ export * from "./compiler.ts";
 export * from "./gameday.ts";
 export * from "./awards.ts";
 export * from "./career.ts";
+export * from "./hidden.ts";

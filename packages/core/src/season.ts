@@ -1,11 +1,12 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
-import { GameDay, type SideSetup } from "./gameday.ts";
+import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
+import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { POSITIONS, playerName, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
-import { expectations, meetingText, newCareer, securityTrail, type Career, type CareerStart, type Meeting } from "./career.ts";
+import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
@@ -72,6 +73,12 @@ export interface SeasonState {
   redshirts?: number[];
   /** Your career: who you are, your athletic director, expectations and meetings (null without a team). */
   career?: Career | null;
+  /** What each team's camps were built on (new coach, new QB, continuity, coach quality); see hidden.ts. */
+  hidden_ctx?: Record<number, TeamContext>;
+  /** How each team's season is going against expectations (moves chemistry a little). */
+  morale?: Record<number, number>;
+  /** Your staff's individual development plans, by player id. */
+  lab?: Record<number, LabPlan>;
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -128,6 +135,8 @@ export class Season {
     state.award_week ??= {};
     state.awards ??= [];
     state.redshirts ??= [];
+    state.morale ??= {};
+    state.lab ??= {};
     // One canonical game order (date, then id), so a league reopened from its file plays a day's games in the same order.
     state.games.sort(gameOrder);
   }
@@ -195,7 +204,8 @@ export class Season {
     const fresh = mine && gameId != null ? freshness(this.prepFor(gameId)) : 1;
     const out = new Set(this.injured(teamId).map((i) => i.pid));
     if (mine) for (const pid of this.redshirtsSitting()) out.add(pid);
-    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out, fresh };
+    const h = this.hidden(teamId);
+    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out, fresh, hidden: h ? { fit: h.fit, chem: h.chem, dev: h.dev } : undefined };
   }
 
   /** A new league on the seed's start date. */
@@ -217,6 +227,7 @@ export class Season {
       next_game_id: 9_000_001, writers: generateWriters(seed.teams, seed.rosters, opts.seed >>> 0), stars: {},
     };
     const season = new Season(state, seed);
+    season.startHidden(seed.coaches ?? []);
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
   }
@@ -308,8 +319,8 @@ export class Season {
     const has = (k: Meeting["kind"]) => c.meetings.some((m) => m.kind === k);
     const reg = this.state.games.filter((g) => g.kind === "regular" && (g.home_id === c.team_id || g.away_id === c.team_id));
     const played = reg.filter((g) => g.status === "final").length;
-    if (!has("preseason") && !has("midseason") && played === 0) this.meet("preseason", today, rep);
-    else if (!has("midseason") && !has("end") && played >= Math.ceil(reg.length / 2)) this.meet("midseason", today, rep);
+    if (!has("preseason") && !has("midseason") && played === 0) { this.meet("preseason", today, rep); this.staffReport("camp", today, rep); }
+    else if (!has("midseason") && !has("end") && played >= Math.ceil(reg.length / 2)) { this.meet("midseason", today, rep); this.staffReport("midseason", today, rep); }
   }
 
   private meet(kind: Meeting["kind"], date: ISODate, rep: DayReport): void {
@@ -322,6 +333,139 @@ export class Season {
     const ad = `${c.ad.first} ${c.ad.last}`;
     const head = kind === "preseason" ? `Athletic director ${ad} sets the bar for ${s.year}` : kind === "midseason" ? `Midseason meeting with athletic director ${ad}` : `End-of-season meeting with athletic director ${ad}`;
     rep.news.push(this.news(date, "ad", head, text, [c.team_id]));
+  }
+
+  // ---- true vs scouted ratings ------------------------------------------------------------------
+  /** Record what each team's camps were built on, from its coaches and opening lineup. */
+  startHidden(coaches: Coach[]): void {
+    const s = this.state, ctx: Record<number, TeamContext> = {};
+    const cut = `${s.year - 1}-07-01`;
+    for (const t of this.teams) {
+      const hc = coaches.find((c) => c.team_id === t.id && c.role === "HC");
+      const w = hc?.career.reduce((a, c) => a + c.wins, 0) ?? 0, l = hc?.career.reduce((a, c) => a + c.losses, 0) ?? 0;
+      const new_coach = !!hc?.hire_date && hc.hire_date >= cut;
+      const st = this.openingStarters(t.id);
+      const qb = st.off.find((p) => p.pos === "QB");
+      const new_qb = !qb || qb.basis !== "stats" || qb.sample < 150;
+      const all = [...st.off, ...st.def];
+      const returning = all.length ? all.filter((p) => p.basis === "stats").length / all.length : 0;
+      ctx[t.id] = { new_coach, new_qb, continuity: !new_coach && !new_qb && returning >= 0.6,
+        coach: w + l >= 24 ? Math.round(Math.max(-2, Math.min(2, (w / (w + l) - 0.5) / 0.15)) * 100) / 100 : 0 };
+    }
+    // Coach quality is relative to the rest of the country, so the scouted view stays unbiased.
+    const ids = Object.keys(ctx).map(Number), avg = ids.reduce((a, id) => a + ctx[id].coach, 0) / Math.max(1, ids.length);
+    for (const id of ids) ctx[id].coach = Math.round((ctx[id].coach - avg) * 100) / 100;
+    s.hidden_ctx = ctx;
+  }
+
+  teamContext(teamId: number): TeamContext {
+    return this.state.hidden_ctx?.[teamId] ?? { new_coach: false, new_qb: false, continuity: false, coach: 0 };
+  }
+
+  /** The lineup camp was built around: the opening depth chart's starters, by unit. */
+  private openingStarters(teamId: number): Record<Unit, RatedPlayer[]> {
+    const tp = this.seed.players?.[teamId];
+    if (!tp) return { off: [], def: [] };
+    const l = lineup(tp.depth, this.playerById).slot;
+    const pick = (slots: readonly string[]) => slots.map((k) => l[k as keyof typeof l]).filter((p): p is RatedPlayer => !!p);
+    return { off: pick(OFFENSE_FIELD), def: pick(DEFENSE_FIELD) };
+  }
+
+  private hiddenCache = new Map<number, { key: string; h: HiddenTeam }>();
+  /** A team's hidden scores today (or on `date`); null for a team without rated players. */
+  hidden(teamId: number, date = this.state.date): HiddenTeam | null {
+    const s = this.state;
+    const roster = this.roster(teamId);
+    if (!roster.length || !s.hidden_ctx) return null;
+    const lab = teamId === s.user_team_id ? s.lab : undefined;
+    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}`;
+    const c = this.hiddenCache.get(teamId);
+    if (c && c.key === key) return c.h;
+    const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab });
+    this.hiddenCache.set(teamId, { key, h });
+    return h;
+  }
+
+  /** Hidden points by unit with the opening starters on the field. */
+  hiddenStrength(teamId: number, date = this.state.date): { off: number; def: number; h: HiddenTeam } | null {
+    const h = this.hidden(teamId, date);
+    if (!h) return null;
+    const st = this.openingStarters(teamId);
+    const dev = (u: Unit) => st[u].reduce((a, p) => a + (h.dev.get(p.id) ?? 0), 0);
+    return { off: h.fit.off + h.chem.off + dev("off"), def: h.fit.def + h.chem.def + dev("def"), h };
+  }
+
+  /** Winning beyond expectations lifts a locker room a little; losing more than expected wears on it. */
+  private updateMorale(g: Game): void {
+    const s = this.state;
+    const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
+    const homeWon = g.home_score! > g.away_score! ? 1 : 0;
+    for (const [id, d] of [[g.home_id, homeWon - p], [g.away_id, p - homeWon]] as const) {
+      s.morale![id] = Math.round(Math.max(-1.5, Math.min(1.5, (s.morale![id] ?? 0) * 0.9 + 0.3 * d)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
+    }
+  }
+
+  /** Put a player on an individual development plan (or take him off with null). */
+  setLab(pid: number, area: LabArea | null): void {
+    const s = this.state, me = s.user_team_id;
+    const p = this.playerById.get(pid);
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only plan your own players' development");
+    const lab = { ...s.lab };
+    if (!area) delete lab[pid];
+    else {
+      if (!lab[pid] && Object.keys(lab).length >= LAB_SLOTS) throw new Error(`your staff can run ${LAB_SLOTS} development plans at once`);
+      lab[pid] = { area, from: lab[pid]?.area === area ? lab[pid].from : s.date };
+    }
+    s.lab = lab;
+  }
+
+  /**
+   * What your staff believes about your team: the truth blurred by how long they have watched it. In
+   * August they have a decent read; by midseason a good one. Never shown for other teams.
+   */
+  staffView(teamId: number, date = this.state.date) {
+    const s = this.state;
+    const h = this.hidden(teamId, date);
+    if (!h) return null;
+    const known = Math.min(0.9, 0.5 + Math.max(0, daysBetween(`${s.year}-08-01`, date)) / 150);
+    const week = Math.floor(Math.max(0, daysBetween(`${s.year}-08-01`, date)) / 7);
+    const rng = new Rng(mixSeed(s.seed, s.year, teamId, "staff", week));
+    const blur = (x: number, sd: number) => Math.round((x + (1 - known) * sd * rng.gauss(0, 1)) * 10) / 10;
+    const st = this.openingStarters(teamId);
+    const units = Object.fromEntries((["off", "def"] as const).map((u) => {
+      const dev = st[u].reduce((a, p) => a + (h.dev.get(p.id) ?? 0), 0);
+      return [u, { development: blur(dev, 3), fit: blur(h.fit[u], 2.5), chemistry: blur(h.chem[u], 2.5) }];
+    })) as Record<Unit, { development: number; fit: number; chemistry: number }>;
+    // Traits read like a scout's grade: to the nearest 5, sharper the longer the staff has had him.
+    const trait = (x: number) => Math.round(Math.max(1, Math.min(99, x + (1 - known) * 15 * rng.gauss(0, 1))) / 5) * 5;
+    const players = this.roster(teamId).map((p) => {
+      const hp = hiddenPlayer(s.seed, s.year, p);
+      return { pid: p.id, growth: blur(h.growth.get(p.id) ?? 0, 3), expected: Math.round(hp.expected * progress(s.year, date) * 10) / 10,
+        leadership: trait(hp.leadership), adaptability: trait(hp.adaptability) };
+    });
+    return { known, units, players };
+  }
+
+  /** The staff's camp and midseason reports on your team. */
+  private staffReport(kind: "camp" | "midseason", date: ISODate, rep: DayReport): void {
+    const me = this.state.user_team_id;
+    if (me == null) return;
+    const v = this.staffView(me, date);
+    if (!v) return;
+    const name = (pid: number) => { const p = this.playerById.get(pid)!; return `${p.pos} ${playerName(p)}`; };
+    const byGrowth = v.players.filter((x) => unitOf(this.playerById.get(x.pid)!.pos)).sort((a, b) => b.growth - a.growth || a.pid - b.pid);
+    const up = byGrowth.slice(0, 3).filter((x) => x.growth >= 1.5), down = byGrowth.slice(-2).reverse().filter((x) => x.growth <= -1.5);
+    const say = (x: number, good: string, bad: string, mid: string) => (x >= 1.5 ? good : x <= -1.5 ? bad : mid);
+    const o = v.units.off, d = v.units.def;
+    const lines = [
+      up.length ? `Ahead of schedule: ${up.map((x) => `${name(x.pid)} (+${x.growth.toFixed(1)})`).join(", ")}.` : "",
+      down.length ? `Behind where we hoped: ${down.map((x) => `${name(x.pid)} (${x.growth.toFixed(1)})`).join(", ")}.` : "",
+      `Offense: ${say(o.fit, "the system fits this group", "the system is a struggle for this group", "the fit with the system is fine")}; ${say(o.chemistry, "the locker room is tight", "the chemistry isn't there yet", "chemistry is normal")}.`,
+      `Defense: ${say(d.fit, "the scheme fits", "the scheme isn't clicking", "the fit is fine")}; ${say(d.chemistry, "they play for each other", "there's friction", "chemistry is normal")}.`,
+    ].filter(Boolean);
+    rep.news.push(this.news(date, "staff", kind === "camp" ? "Fall camp report from your staff" : "Midseason report from your staff",
+      `${lines.join(" ")} The media hasn't seen any of this yet.`, [me]));
   }
 
   // ---- stats, awards and redshirts -------------------------------------------------------------
@@ -631,6 +775,9 @@ export class Season {
     }
     let home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
     if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
+    const hs2 = this.hiddenStrength(g.home_id), as2 = this.hiddenStrength(g.away_id);
+    if (hs2) home = applyHidden(home, hs2.off, hs2.def);
+    if (as2) away = applyHidden(away, as2.off, as2.def);
     if (userSide === "home") home = planRatings(home, this.gamePlan);
     if (userSide === "away") away = planRatings(away, this.gamePlan);
     return { sim: new GameSim(home, away, opts), gd: null, sides: null, caller };
@@ -707,6 +854,7 @@ export class Season {
     this.recordStats(g, rep.details[rep.details.length - 1]);
     if (day) this.recordInjuries(g, day.injuries, [hs!, as!], rep);
     if (userSide && day) this.redshirtWarnings(g, day.snaps, rep);
+    this.updateMorale(g);
     updatePower(s.power, g, s.settings.home_field_points);
     for (const [id, side] of [[g.home_id, r.home], [g.away_id, r.away]] as const) {
       const line = starLine(side.players as Record<string, Record<string, number>>, this.team(id).school);

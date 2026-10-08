@@ -22,12 +22,15 @@ const SEASON = 2025;
 const SPREAD_MARK = 12.7, TOTAL_BIAS_MARK = 1;
 /** REPLAY_TEAMS_ONLY=1 plays team ratings without the rated players (no depth charts, game day or injuries), for diagnosis. */
 const TEAMS_ONLY = process.env.REPLAY_TEAMS_ONLY === "1";
+/** REPLAY_NO_HIDDEN=1 plays the scouted ratings as the truth (no hidden development, fit or chemistry), for comparison. */
+const NO_HIDDEN = process.env.REPLAY_NO_HIDDEN === "1";
 function replaySeed(): SeedBundle {
   const seed = loadSeed(seedDir(SEASON));
   return TEAMS_ONLY ? { ...seed, players: undefined } : seed;
 }
 
-interface Acc { n: number; margin: number; total: number; homeWins: number; marginSq: number }
+/** Per-game sums over the simmed seasons, plus each season's margin (`ms[i]` from season `from + i`). */
+interface Acc { n: number; margin: number; total: number; homeWins: number; marginSq: number; ms: Record<number, number> }
 type Sums = Record<number, Acc>;
 
 /** Sim seasons `from`..`to-1` through the last regular-season day; per-game sums of margin and total. */
@@ -36,12 +39,14 @@ function simSeasons(seed: SeedBundle, from: number, to: number): Sums {
   const lastRegular = seed.schedule.reduce((m, g) => (g.date > m ? g.date : m), seed.start_date);
   for (let i = from; i < to; i++) {
     const season = Season.create(seed, { seed: mixSeed("replay", SEASON, i), settings: { keep_pbp: "none" } as never });
+    if (NO_HIDDEN) delete season.state.hidden_ctx;
     while (season.state.date <= lastRegular) {
       const r = season.advanceDay();
       for (const g of r.played) {
         if (g.kind !== "regular") continue;
         const m = g.home_score! - g.away_score!, t = g.home_score! + g.away_score!;
-        const a = (sums[g.id] ??= { n: 0, margin: 0, total: 0, homeWins: 0, marginSq: 0 });
+        const a = (sums[g.id] ??= { n: 0, margin: 0, total: 0, homeWins: 0, marginSq: 0, ms: {} });
+        a.ms[i] = m;
         a.n++; a.margin += m; a.total += t; a.marginSq += m * m; if (m > 0) a.homeWins++;
       }
     }
@@ -72,7 +77,8 @@ if (process.argv[2] === "--part") {
   const secs = (Date.now() - t0) / 1000;
   const sums: Sums = {};
   for (const p of parts) for (const [id, a] of Object.entries(p)) {
-    const s = (sums[Number(id)] ??= { n: 0, margin: 0, total: 0, homeWins: 0, marginSq: 0 });
+    const s = (sums[Number(id)] ??= { n: 0, margin: 0, total: 0, homeWins: 0, marginSq: 0, ms: {} });
+    Object.assign(s.ms, a.ms);
     s.n += a.n; s.margin += a.margin; s.total += a.total; s.homeWins += a.homeWins; s.marginSq += a.marginSq;
   }
 
@@ -92,13 +98,13 @@ if (process.argv[2] === "--part") {
   const team = new Map(seed.teams.map((t) => [t.id, t]));
   const P4 = new Set(["SEC", "Big Ten", "Big 12", "ACC"]);
   const tier = (id: number) => { const t = team.get(id)!; return t.level === "fcs" ? "FCS" : P4.has(t.conference ?? "") || t.school === "Notre Dame" ? "P4" : "G5"; };
-  interface Row { id: number; week: number; home: string; away: string; ht: string; at: string; neutral: boolean; sim_m: number; real_m: number; sim_t: number; real_t: number; p_home: number }
+  interface Row { id: number; week: number; home_id: number; away_id: number; home: string; away: string; ht: string; at: string; neutral: boolean; sim_m: number; real_m: number; sim_t: number; real_t: number; p_home: number; ms: Record<number, number> }
   const rows: Row[] = [];
   for (const g of seed.schedule) {
     const r = real.get(g.id), a = sums[g.id];
     if (!r || !a || !a.n) continue;
     rows.push({
-      id: g.id, week: g.week, home: team.get(g.home_id)!.school, away: team.get(g.away_id)!.school, ht: tier(g.home_id), at: tier(g.away_id),
+      id: g.id, week: g.week, home_id: g.home_id, away_id: g.away_id, ms: a.ms, home: team.get(g.home_id)!.school, away: team.get(g.away_id)!.school, ht: tier(g.home_id), at: tier(g.away_id),
       neutral: g.neutral, sim_m: a.margin / a.n, real_m: r.hp - r.ap, sim_t: a.total / a.n, real_t: r.hp + r.ap, p_home: a.homeWins / a.n,
     });
   }
@@ -122,8 +128,34 @@ if (process.argv[2] === "--part") {
   const groups: Record<string, Row[]> = { all: rows, fbs_vs_fbs: fbs, fbs_vs_fcs: fcsG };
   for (const w of [[1, 4], [5, 9], [10, 16]] as const) groups[`fbs_weeks_${w[0]}-${w[1]}`] = fbs.filter((r) => r.week >= w[0] && r.week <= w[1]);
   for (const k of ["P4-P4", "P4-G5", "G5-G5"]) groups[`fbs_${k}`] = fbs.filter((r) => [r.ht, r.at].sort().reverse().join("-") === k || [r.ht, r.at].sort().join("-") === k);
+
+  // Realism: is a simmed season as unpredictable as 2025 was, and in the same way? The mean simmed margin
+  // over all seasons is the game's preseason projection (nobody knows the hidden truth). Real 2025 missed
+  // it by the spread MAE; each simmed season should miss it by about as much. And the misses should
+  // cluster by team the way real ones do (surprise teams), not just be game-to-game noise: the spread
+  // across FBS teams of each team's average miss, and how many teams beat or missed it by 10+ per game.
+  const sd = (xs: number[]) => { const m = mean(xs); return Math.sqrt(mean(xs.map((x) => (x - m) ** 2))); };
+  const teamMiss = (margin: (r: Row) => number | undefined) => {
+    const by = new Map<number, number[]>();
+    for (const r of fbs) {
+      const m = margin(r);
+      if (m == null) continue;
+      (by.get(r.home_id) ?? by.set(r.home_id, []).get(r.home_id)!).push(m - r.sim_m);
+      (by.get(r.away_id) ?? by.set(r.away_id, []).get(r.away_id)!).push(r.sim_m - m);
+    }
+    const avg = [...by.values()].filter((xs) => xs.length >= 6).map(mean);
+    return { sd: sd(avg), big: avg.filter((x) => Math.abs(x) >= 10).length, teams: avg.length };
+  };
+  const seasonIds = [...new Set(fbs.flatMap((r) => Object.keys(r.ms).map(Number)))];
+  const simMae = mean(seasonIds.map((i) => mean(fbs.filter((r) => r.ms[i] != null).map((r) => Math.abs(r.ms[i] - r.sim_m)))));
+  const simTeams = seasonIds.map((i) => teamMiss((r) => r.ms[i]));
+  const realism = {
+    projection_mae: { sim_season: simMae, real_2025: mean(fbs.map((r) => Math.abs(r.real_m - r.sim_m))) },
+    team_miss_sd: { sim_season: mean(simTeams.map((x) => x.sd)), real_2025: teamMiss((r) => r.real_m).sd },
+    teams_off_by_10: { sim_season: mean(simTeams.map((x) => x.big)), real_2025: teamMiss((r) => r.real_m).big, teams: teamMiss((r) => r.real_m).teams },
+  };
   const summary = {
-    season: SEASON, teams_only: TEAMS_ONLY, seasons, workers, seconds: Math.round(secs), sims_per_game: mean(Object.values(sums).map((a) => a.n)),
+    season: SEASON, teams_only: TEAMS_ONLY, no_hidden: NO_HIDDEN, realism, seasons, workers, seconds: Math.round(secs), sims_per_game: mean(Object.values(sums).map((a) => a.n)),
     fcs_upsets: { sim: fcsWinSim, real: fcsWinReal, games: fcsG.length },
     groups: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, stats(v)])),
   };
@@ -136,6 +168,10 @@ if (process.argv[2] === "--part") {
   const pr = (label: string, s: ReturnType<typeof stats>) => console.log(`${label.padEnd(16)} ${String(s.games).padStart(4)} games  spread MAE ${f(s.spread_mae)}  margin bias ${f(s.margin_bias)}  totals bias ${f(s.totals_bias)}  totals MAE ${f(s.totals_mae)}  home-win acc ${(100 * s.home_win_acc).toFixed(1)}%`);
   console.log(`${seasons} seasons of the ${SEASON} regular season${TEAMS_ONLY ? " (team ratings only)" : ""} in ${secs.toFixed(0)}s on ${workers} workers`);
   for (const [k, v] of Object.entries(groups)) pr(k, stats(v));
+  console.log(`realism (FBS vs FBS; projection = mean of all simmed seasons):`);
+  console.log(`  miss vs projection per game: one simmed season ${f(realism.projection_mae.sim_season)}, real 2025 ${f(realism.projection_mae.real_2025)}`);
+  console.log(`  spread of teams' average miss: simmed ${f(realism.team_miss_sd.sim_season)}, real ${f(realism.team_miss_sd.real_2025)}`);
+  console.log(`  teams 10+ points per game off projection: simmed ${realism.teams_off_by_10.sim_season.toFixed(1)}, real ${realism.teams_off_by_10.real_2025} of ${realism.teams_off_by_10.teams}`);
   console.log(`FCS over FBS: sim ${(100 * fcsWinSim).toFixed(1)}%, real ${(100 * fcsWinReal).toFixed(1)}% (${fcsG.length} games)`);
   const all = stats(rows);
   const okSpread = all.spread_mae <= SPREAD_MARK, okTotals = Math.abs(all.totals_bias) <= TOTAL_BIAS_MARK;

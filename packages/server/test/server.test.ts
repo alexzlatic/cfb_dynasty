@@ -279,3 +279,53 @@ describe("career and season polish", () => {
     again.close();
   }, 60_000);
 });
+
+describe("hidden ratings and development plans", () => {
+  // As above: the server may drop idle keep-alive sockets while a season runs synchronously, so retry once.
+  const postR = (path: string, b: unknown): Promise<any> => post(path, b).catch(() => post(path, b));
+  const getR = (path: string): Promise<any> => get(path).catch(() => get(path));
+  it("runs development plans through the action log, shows only your staff's read, and replays", async () => {
+    const { id } = await postR("/api/leagues", { name: "Development", team_id: 2509, seed: 31 });
+    const lg = manager.get(id);
+    const mine = lg.season.roster(2509).sort((a, b) => b.ovr - a.ovr);
+    const act = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "set_lab", payload });
+    for (const p of mine.slice(0, 8)) expect((await act({ pid: p.id, area: "technique" })).ok).toBe(true);
+    expect((await act({ pid: mine[8].id, area: "film" })).error).toMatch(/at once/);
+    expect((await act({ pid: mine[0].id, area: "juggling" })).error).toMatch(/unknown development area/);
+    expect((await act({ pid: mine[0].id, area: "toString" })).error).toMatch(/unknown development area/);
+    expect((await act({ pid: lg.season.roster(135)[0].id, area: "film" })).error).toMatch(/own players/);
+    expect((await act({ pid: mine[7].id, area: null })).ok).toBe(true);
+    expect((await act({ pid: mine[8].id, area: "leadership" })).ok).toBe(true);
+
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-10" } });
+    const dev = await getR(`/api/leagues/${id}/development`);
+    expect(dev.team_id).toBe(2509);
+    expect(Object.keys(dev.lab)).toHaveLength(8);
+    expect(dev.staff.known).toBeGreaterThan(0.5);
+    expect(dev.staff.players.length).toBe(mine.length);
+    expect(Object.keys(dev.staff.units.off)).toEqual(["development", "fit", "chemistry"]);
+    const pl = await getR(`/api/leagues/${id}/players/${mine[0].id}`);
+    expect(pl.staff.plan.area).toBe("technique");
+    expect((await getR(`/api/leagues/${id}/players/${lg.season.roster(135)[0].id}`)).staff).toBeNull();
+    expect(lg.season.state.news.some((n) => n.kind === "staff")).toBe(true);
+
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("dev-check", manager.path(id));
+    expect(again.season.state.lab).toEqual(lg.season.state.lab);
+    expect(again.season.state.morale).toEqual(lg.season.state.morale);
+    again.close();
+  }, 120_000);
+
+  it("a league saved before hidden ratings draws the same truth from its seed", async () => {
+    const lg = manager.create({ name: "Pre-hidden save", user_team_id: 2509, seed: 9 });
+    const ctx = lg.season.state.hidden_ctx;
+    lg.db.exec("DELETE FROM meta WHERE key IN ('hidden_ctx', 'morale', 'lab')");
+    const { League } = await import("../src/league.ts");
+    const again = League.open("pre-hidden", manager.path(lg.id));
+    expect(again.season.state.hidden_ctx).toEqual(ctx);
+    expect(again.season.hiddenStrength(2509, "2026-11-15")).toEqual(lg.season.hiddenStrength(2509, "2026-11-15"));
+    again.close();
+  }, 60_000);
+});

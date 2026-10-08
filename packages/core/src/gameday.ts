@@ -1,5 +1,6 @@
 import { GameSim, Rng, type DecisionProvider, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, withFatigue, type Group, type Lineup } from "./compiler.ts";
+import { applyHidden } from "./hidden.ts";
 import { DEFENSE_SLOTS, OFFENSE_SLOTS, SLOT_POS, SPECIAL_SLOTS, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
 import type { TeamPlayers } from "./types.ts";
 
@@ -73,6 +74,8 @@ export interface SideSetup {
   out: Set<number>;
   /** Energy every player starts with (below 1 after a week of hard practice). */
   fresh?: number;
+  /** What scouts don't know: scheme fit and chemistry by unit, and each player's development while on the field (points). */
+  hidden?: { fit: Record<"off" | "def", number>; chem: Record<"off" | "def", number>; dev: Map<number, number> };
 }
 
 /** Starters sit: the leading team in a rout, the trailing team only once it is hopeless. `lead` < 0 when trailing. */
@@ -178,7 +181,11 @@ class SideState {
       return r;
     };
     const off = half(offKey), def = half("d" + defKey);
-    return withFatigue({ ...off, defense: def.defense }, tired);
+    const r = withFatigue({ ...off, defense: def.defense }, tired);
+    const h = this.s.hidden;
+    if (!h) return r;
+    const dev = (ps: RatedPlayer[]) => ps.reduce((a, p) => a + (h.dev.get(p.id) ?? 0), 0);
+    return applyHidden(r, h.fit.off + h.chem.off + dev(this.offenseField), h.fit.def + h.chem.def + dev(this.defenseField));
   }
 
   /** Players below full energy; only they and the players on the field change. */
