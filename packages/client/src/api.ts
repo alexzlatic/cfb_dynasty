@@ -30,6 +30,8 @@ export interface TalkView {
   status: string; label: string; ask: number | null; patience: number; offer: { amount: number; years: number; made: string; answer: string } | null; counter: number | null;
   deal: { amount: number; years: number; via: string } | null; outcome: "signed" | "let_go" | "portal" | "stayed" | null; mine: boolean;
   plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
+  /** A longer deal: how much more a year he wants per extra season, the longest he'll sign (your staff's read until you talk). */
+  length: { premium: number; max: number; known: boolean };
 }
 export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
 export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
@@ -50,7 +52,7 @@ export interface PortalData { year: number | null; open: boolean; window: string
 
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number; retention?: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
   /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
   returning: boolean; ceiling: number;
 }

@@ -56,6 +56,9 @@ function Negotiation({ f }: { f: FutureData }) {
   const [amount, setAmount] = useState(String(Math.round(start / 1000)));
   const [years, setYears] = useState(1);
   const left = f.budget.total - f.budget.committed;
+  // His number for the length on offer: longer deals cost more a year, by his premium.
+  const len = t.length, num = t.counter ?? t.ask;
+  const forYears = (x: number) => Math.round(x * (1 + len.premium * (years - 1)) / 5000) * 5000;
   if (t.status === "graduating" || t.status === "nfl" || t.status === "contract") {
     return <p>{t.label}{t.status === "contract" && f.next_deal ? `: ${money(f.next_deal.amount)} next season.` : "."}</p>;
   }
@@ -77,12 +80,15 @@ function Negotiation({ f }: { f: FutureData }) {
         <div className="offer-row">
           $<input className="num" style={{ width: "6em" }} value={amount} onChange={(e) => setAmount(e.target.value)} />K a year for{" "}
           <select value={years} onChange={(e) => setYears(Number(e.target.value))}>
-            {Array.from({ length: Math.max(1, f.eligibility) }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} season{y === 1 ? "" : "s"}</option>)}
+            {Array.from({ length: Math.max(1, f.eligibility) }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} season{y === 1 ? "" : "s"}{y > 1 ? " (locks him in)" : ""}</option>)}
           </select>{" "}
           <button className="primary" disabled={busy || !Number.isFinite(parseK(amount))} onClick={() => act("renewal_offer", { pid: f.pid, amount: parseK(amount), years })}>Make offer</button>
-          {(t.counter ?? t.ask) != null && <button disabled={busy} onClick={() => act("renewal_offer", { pid: f.pid, amount: t.counter ?? t.ask, years })}>Pay his number ({money((t.counter ?? t.ask)!)})</button>}
+          {num != null && years <= len.max && <button disabled={busy} onClick={() => act("renewal_offer", { pid: f.pid, amount: forYears(num), years })}>Pay his number ({money(forYears(num))}{years > 1 ? ` for ${years}` : ""})</button>}
         </div>
       )}
+      <p className="small">{len.max <= 1 ? "He wants a one-year deal so he can test the market again next winter."
+        : <>A multi-year deal locks him in: he won't renegotiate until it ends, and he's much less likely to leave. He'll sign for up to {len.max} seasons{len.premium > 0.005 ? <> and wants about {Math.round(len.premium * 100)}% more a year for each season beyond one</> : <> without asking much more for it</>}.</>}
+        {len.known ? "" : <span className="muted"> (Your staff's read of a typical player until you talk with him.)</span>}</p>
       <p className="small muted">He answers in a day or two: he stays at or above the least he'd take{f.watch.walk_range ? ` (your staff thinks ${money(f.watch.walk_range[0])}-${money(f.watch.walk_range[1])})` : ""}, or declines and names his number. Each decline costs patience,
         a lowball costs more and hurts his morale. With no deal by January 1 he enters the portal. {money(left)} of next season's budget is uncommitted.</p>
       <div className="row-actions">

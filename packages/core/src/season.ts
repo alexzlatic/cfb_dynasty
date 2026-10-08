@@ -13,6 +13,7 @@ import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, 
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
+  askFor, lengthPremium, maxYears,
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
@@ -135,7 +136,7 @@ export interface SeasonState {
   talks?: Record<number, Talk>;
   renewal_rule?: RenewalRule;
   /** Next season's deals you've signed (renewals and transfers): dollars a year and seasons. */
-  next_deals?: Record<number, { amount: number; years: number }>;
+  next_deals?: Record<number, { amount: number; years: number; locked?: boolean }>;
   /** Your promises of a starting job, by player id: the season each is for (and whether it broke). */
   promises?: Record<number, { year: number; broken?: boolean }>;
   /** Players you've talked to this season (you know their real reasons), by the date of the talk. */
@@ -463,10 +464,10 @@ export class Season {
     // Your deals for the new season: multi-year deals that run into it, renewals and transfers.
     const me = s.user_team_id;
     if (me != null) {
-      const deals: Record<number, { amount: number; years: number }> = {};
+      const deals: Record<number, { amount: number; years: number; locked?: boolean }> = {};
       for (const p of next.roster(me)) {
         const c = activeContract(s.contracts?.[p.id], ny);
-        if (c) deals[p.id] = { amount: c.amount, years: c.start + c.years - ny };
+        if (c) deals[p.id] = { amount: c.amount, years: c.start + c.years - ny, ...(c.locked ? { locked: true } : {}) };
       }
       Object.assign(deals, s.next_deals);
       next.applyDeals(deals);
@@ -801,6 +802,15 @@ export class Season {
     if (amount <= 0) { delete contracts[pid]; s.contracts = contracts; setNil(0); return; }
     if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
     const k = (x: number) => `$${Math.round(x / 1000).toLocaleString("en-US")}K`;
+    // A multi-year deal locks him in, so he has to want it: most players would rather sign for a year.
+    if (years > 1 && !(cur?.locked && cur.start + cur.years >= s.year + years && amount >= cur.amount)) {
+      const w = persona(s.seed, pid), most = Math.min(maxYears(w), eligibilityLeft(p));
+      if (years > most) throw new Error(most === 1 ? `${playerName(p)} wants a one-year deal so he can test the market again` : `${playerName(p)} will sign for up to ${most} seasons`);
+      const walk = payFor(this.stayContext(p, amount), w, COMMIT);
+      if (walk == null) throw new Error(`${playerName(p)} won't commit past this season for money alone`);
+      const need = Math.max(askFor(walk, w, years), Math.round(this.value(pid) * 0.5));
+      if (amount < need) throw new Error(`to sign for ${years} seasons ${playerName(p)} wants at least ${k(need)} a year`);
+    }
     const baseRoom = Math.max(0, (s.pools?.[me] ?? 0) - (this.payroll(me) - this.retentionPaid(me)) + (cur ? cur.amount - (cur.retention ?? 0) : 0));
     const retRoom = this.returningHere(p) ? Math.max(0, (s.retention?.[me] ?? 0) - this.retentionPaid(me) + (cur?.retention ?? 0)) : 0;
     const nilRoom = (c?.reserve ?? 0) + curNil;
@@ -808,7 +818,7 @@ export class Season {
     if (fromNil > nilRoom) throw new Error(`that is over your roster budget: ${k(baseRoom + retRoom + nilRoom)} left for him`);
     const top = fmvCeiling(this.value(pid), !!s.settings.pcsa);
     if (fromNil > top) throw new Error(`the fair-market-value review would cut his NIL deal to ${k(top)}: offer at most ${k(fromBase + fromRet + top)}`);
-    if (fromBase + fromRet > 0) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}) };
+    if (fromBase + fromRet > 0) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...(years > 1 ? { locked: true } : {}) };
     else delete contracts[pid];
     s.contracts = contracts;
     setNil(fromNil);
@@ -824,7 +834,7 @@ export class Season {
    * paid from revenue share, then the retention fund, then your collective; the rest of the roster gets the
    * revenue share left, by value. Your collective spends nothing else on its own.
    */
-  applyDeals(deals: Record<number, { amount: number; years: number }>): void {
+  applyDeals(deals: Record<number, { amount: number; years: number; locked?: boolean }>): void {
     const s = this.state, me = s.user_team_id;
     if (me == null || !s.pools?.[me]) return;
     const roster = this.roster(me), c = s.collectives?.[me];
@@ -839,7 +849,9 @@ export class Season {
       const fromRet = this.returningHere(p) ? Math.min(d.amount - fromBase, ret) : 0; ret -= fromRet;
       const fromNil = Math.min(d.amount - fromBase - fromRet, c?.reserve ?? 0, fmvCeiling(this.value(p.id), !!s.settings.pcsa));
       const years = Math.max(1, Math.min(d.years, eligibilityLeft(p)));
-      if (fromBase + fromRet > 0) contracts[p.id] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}) };
+      // A locked deal stays locked while it runs (its NIL part with it).
+      const locked = d.locked && years > 1 ? { locked: true } : {};
+      if (fromBase + fromRet > 0) contracts[p.id] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...locked };
       if (fromNil > 0 && c) { nil[p.id] = { amount: fromNil, status: "approved", date: s.date }; c.reserve -= fromNil; }
     }
     const rest = roster.filter((p) => !deals[p.id]);
@@ -1872,6 +1884,7 @@ export class Season {
       home_here: home, home_away: homeTerm(250, false),
       morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier, tier_away: best.tier,
       contract: !!activeContract(s.contracts?.[p.id], s.year + 1),
+      locked: !!activeContract(s.contracts?.[p.id], s.year + 1)?.locked || !!s.next_deals?.[p.id]?.locked,
       costs_season: !!s.settings.pcsa && (s.moves?.[p.id] ?? 0) >= 1,
       promise: s.promises?.[p.id]?.year === s.year + 1,
       noise: hashGauss(s.seed, s.year, p.id, 91),
@@ -1988,7 +2001,8 @@ export class Season {
       let status: TalkStatus;
       if (p.years + 1 >= 5) status = "graduating";
       else if (leaving.has(p.id) || (p.years >= 2 && (nfl.get(p.id) ?? 999) <= 100)) status = "nfl";
-      // (Deals run a season at a time in practice: a player under a multi-year deal still renegotiates.)
+      // A multi-year deal he agreed to holds: no talks until it ends. Any other deal is renegotiated every winter.
+      else if (activeContract(s.contracts?.[p.id], s.year + 1)?.locked) status = "contract";
       else status = "staying";
       talks[p.id] = this.planTalk({ pid: p.id, status, ask: null, walk: null, patience: patienceOf(persona(s.seed, p.id)) }, true);
     }
@@ -2058,14 +2072,15 @@ export class Season {
       const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : activeContract(s.contracts?.[t.pid], s.year + 1)?.amount ?? 0);
       if (cost > room) continue;
       room -= cost;
-      talks[t.pid] = this.sign({ ...t }, amount, Math.min(2, eligibilityLeft({ years: this.playerById.get(t.pid)!.years + 1 })), "rule");
+      // The rule signs one-year deals: a longer one is yours to negotiate.
+      talks[t.pid] = this.sign({ ...t }, amount, 1, "rule");
     }
     s.talks = talks;
   }
 
   private sign(t: Talk, amount: number, years: number, via: NonNullable<Talk["deal"]>["via"]): Talk {
     const s = this.state;
-    if (amount > 0) s.next_deals = { ...s.next_deals, [t.pid]: { amount, years } };
+    if (amount > 0) s.next_deals = { ...s.next_deals, [t.pid]: { amount, years, ...(years > 1 ? { locked: true } : {}) } };
     return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined };
   }
 
@@ -2125,7 +2140,13 @@ export class Season {
     for (const t of Object.values(s.talks)) {
       if (!t.offer || t.offer.answer > date || t.outcome) continue;
       const p = this.playerById.get(t.pid)!;
-      const a = respond(t, t.offer.amount);
+      const a = respond(t, t.offer.amount, t.offer.years, persona(s.seed, t.pid));
+      if (a.too_long) {
+        s.talks[t.pid] = { ...t, offer: undefined };
+        rep.news.push(this.news(date, "retention", `${p.pos} ${playerName(p)} won't sign for ${t.offer.years} seasons`,
+          a.too_long === 1 ? "He wants a one-year deal so he can test the market again next winter." : `He'll sign for up to ${a.too_long} seasons.`, [me]));
+        continue;
+      }
       if (a.accepted) {
         s.talks[t.pid] = this.sign(t, t.offer.amount, t.offer.years, "talks");
         rep.news.push(this.news(date, "retention", `${p.pos} ${playerName(p)} commits to stay`, `${money(t.offer.amount)} a year for ${t.offer.years} season${t.offer.years === 1 ? "" : "s"}.`, [me]));
@@ -2442,12 +2463,21 @@ export class Season {
     };
   }
 
+  /**
+   * How he feels about a longer deal: how much more a year he wants per extra season and the longest he'll
+   * sign. Until you talk with him your staff reads him as a typical player.
+   */
+  lengthView(p: RatedPlayer): { premium: number; max: number; known: boolean } {
+    const known = this.known(p.id), w = known ? persona(this.state.seed, p.id) : { money: 1, development: 1, loyalty: 1, home: 1 };
+    return { premium: lengthPremium(w), max: Math.min(maxYears(w), eligibilityLeft({ years: p.years + 1 })), known };
+  }
+
   private retentionRow(p: RatedPlayer, starters: Set<number>) {
     const s = this.state, w = this.watchView(p.id)!, t = s.talks?.[p.id];
     return {
       pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
       watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
-        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null } : null,
+        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null, length: this.lengthView(p) } : null,
       pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
     };
   }
