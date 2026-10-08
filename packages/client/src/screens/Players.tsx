@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useSort } from "../sort.tsx";
 import { ATTR_LABELS, ATTRS, fromZ, type Pos } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type GameRow, type Injury, type RatedPlayer } from "../api.ts";
+import { api, type DepthChart, type GameRow, type Injury, type PersonaView, type RatedPlayer } from "../api.ts";
 import { Dial, DualBar } from "./ratings.tsx";
 import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
@@ -38,43 +39,52 @@ export function InjuryTag({ i }: { i: Injury | undefined | null }) {
 
 export const playerLink = (league: string, p: { id: number; first: string; last: string }) => <a href={`#/l/${league}/player/${p.id}`}>{p.first} {p.last}</a>;
 
+/** His personality, OOTP-style: his class and its traits (his own once you've talked with him; his class's typical ones until then). */
+export function PersonaPanel({ v, talkable = false }: { v: PersonaView; talkable?: boolean }) {
+  return (
+    <Panel title="Personality" right={<span className="chip persona flat">{v.name}</span>}>
+      <p className="small">{v.label}.</p>
+      <table className="grid tight"><tbody>{v.traits.map((t) => (
+        <tr key={t.factor}><td>{t.label}</td><td className={"num " + (t.level === "High" ? "win" : t.level === "Low" ? "loss" : "muted")}>{t.level}</td></tr>
+      ))}</tbody></table>
+      <p className="small muted">{v.known ? "What you've learned talking with him." : `Typical for a ${v.name.toLowerCase()}.${talkable ? " Talk with him to learn his own." : " Everyone in his class weighs these a little differently."}`}</p>
+    </Panel>
+  );
+}
+
 /** Which depth chart slots a player holds, e.g. "QB" or "CB2 (2)". */
 export function slotsOf(depth: DepthChart, id: number): string[] {
   return Object.entries(depth).flatMap(([s, ids]) => (ids ?? []).map((x, i) => (x === id ? (i ? `${s} (${i + 1})` : s) : null))).filter((x): x is string => !!x);
 }
 
-export function RosterTable({ players, depth, injuries = [] }: { players: RatedPlayer[]; depth: DepthChart; injuries?: Injury[] }) {
+export function RosterTable({ players, depth, injuries = [], personas = {} }: { players: RatedPlayer[]; depth: DepthChart; injuries?: Injury[]; personas?: Record<number, string> }) {
   const { id } = useLeague();
   const hurt = useMemo(() => new Map(injuries.map((i) => [i.pid, i])), [injuries]);
   const [pos, setPos] = useState<Pos | "ALL">("ALL");
-  const [sort, setSort] = useState<"pos" | "ovr" | "name" | "class">("pos");
   const starters = useMemo(() => new Set(Object.values(depth).map((ids) => ids?.[0])), [depth]);
-  const rows = useMemo(() => {
-    const r = players.filter((p) => pos === "ALL" || p.pos === pos).slice();
-    r.sort((a, b) =>
-      sort === "ovr" ? b.ovr - a.ovr :
-      sort === "name" ? a.last.localeCompare(b.last) :
-      sort === "class" ? CLASS_ORDER.indexOf(b.class) - CLASS_ORDER.indexOf(a.class) || b.ovr - a.ovr :
-      POS_ORDER.indexOf(a.pos) - POS_ORDER.indexOf(b.pos) || +starters.has(b.id) - +starters.has(a.id) || b.ovr - a.ovr);
-    return r;
-  }, [players, pos, sort, starters]);
+  // By position (starters first) until a column header is clicked.
+  const filtered = useMemo(() => players.filter((p) => pos === "ALL" || p.pos === pos).sort((a, b) =>
+    POS_ORDER.indexOf(a.pos) - POS_ORDER.indexOf(b.pos) || +starters.has(b.id) - +starters.has(a.id) || b.ovr - a.ovr), [players, pos, starters]);
   const attrs = pos === "ALL" ? [] : ATTRS[pos];
+  const { rows, th } = useSort(filtered, {
+    jersey: (p) => p.jersey, name: (p) => `${p.last} ${p.first}`, pos: (p) => POS_ORDER.indexOf(p.pos), ovr: (p) => p.ovr, class: (p) => CLASS_ORDER.indexOf(p.class),
+    ht: (p) => p.height, wt: (p) => p.weight, stars: (p) => p.stars, persona: (p) => personas[p.id], depth: (p) => slotsOf(depth, p.id)[0],
+    ...Object.fromEntries(attrs.map((a) => [a, (p: RatedPlayer) => p.attrs[a]])),
+  }, { asc: ["jersey", "pos", "class"] });
   return (
     <>
       <div className="filters">
         {(["ALL", ...POS_ORDER] as const).map((x) => <button key={x} className={pos === x ? "on" : ""} onClick={() => setPos(x)}>{x === "ALL" ? "All" : x}</button>)}
-        <select value={sort} onChange={(e) => setSort(e.target.value as never)}>
-          <option value="pos">By position</option><option value="ovr">By overall</option><option value="name">By name</option><option value="class">By class</option>
-        </select>
+        <span className="small muted">Click a column to sort.</span>
       </div>
       <div className="scrollx">
         <table className="grid tight roster">
-          <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Ovr</th><th>Class</th><th>Ht</th><th>Wt</th><th title="Recruiting stars">Rec</th>
-            {attrs.map((a) => <th key={a} title={ATTR_LABELS[a]}>{abbr(a)}</th>)}<th>Depth</th></tr></thead>
+          <thead><tr>{th("jersey", "#")}{th("name", "Name")}{th("pos", "Pos")}{th("ovr", "Ovr")}{th("class", "Class")}{th("ht", "Ht")}{th("wt", "Wt")}{th("stars", "Rec", { title: "Recruiting stars" })}{th("persona", "Personality")}
+            {attrs.map((a) => <React.Fragment key={a}>{th(a, abbr(a), { title: ATTR_LABELS[a] })}</React.Fragment>)}{th("depth", "Depth")}</tr></thead>
           <tbody>{rows.map((p) => (
             <tr key={p.id} className={starters.has(p.id) ? "starter" : ""}>
               <td className="num muted">{p.jersey ?? ""}</td><td>{playerLink(id, p)} <InjuryTag i={hurt.get(p.id)} /></td><td>{p.pos}</td><td><Rating v={p.ovr} /></td>
-              <td>{p.class}</td><td>{heightStr(p.height)}</td><td>{p.weight ?? ""}</td><td className="muted">{p.stars ? "★".repeat(p.stars) : ""}</td>
+              <td>{p.class}</td><td>{heightStr(p.height)}</td><td>{p.weight ?? ""}</td><td className="muted">{p.stars ? "★".repeat(p.stars) : ""}</td><td className="small">{personas[p.id] ?? ""}</td>
               {attrs.map((a) => <td key={a} className="num">{p.attrs[a]}</td>)}
               <td className="muted small">{slotsOf(depth, p.id).join(", ")}</td>
             </tr>
@@ -118,6 +128,7 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
           <div className="bio">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
           <div className="chips">
             {data.slots.length > 0 && <span className="chip">{data.slots.join(", ")}</span>}
+            <span className="chip" title={data.persona.label}>{data.persona.name}</span>
             {p.stars ? <span className="chip">{"★".repeat(p.stars)} recruit{p.natl_rank ? `, No. ${p.natl_rank}` : ""}</span> : null}
             {injury && <span className="chip bad">Injured: {injury.type}, {outUntil(injury)}</span>}
             {data.awards.some((a) => a.type === "heisman") && <span className="chip gold">Heisman winner</span>}
@@ -173,6 +184,7 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
       {tab === "future" && (data.portal ? <PortalCard row={data.portal} /> : data.future && <FutureTab f={data.future} />)}
       {tab === "bio" && (
         <div className="cols even">
+          <div>
           <Panel title="Background">
             <table className="grid tight"><tbody>
               <tr><td>Recruiting</td><td>{p.stars ? `${"★".repeat(p.stars)} (${p.composite?.toFixed(4)})` : "Unranked"}{p.natl_rank ? `, #${p.natl_rank} nationally` : ""}</td></tr>
@@ -181,6 +193,8 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
               <tr><td>Hometown</td><td>{[p.home.city, p.home.state].filter(Boolean).join(", ") || "Unknown"}</td></tr>
             </tbody></table>
           </Panel>
+          <PersonaPanel v={data.persona} talkable={mine} />
+          </div>
           <div>
             {data.awards.length > 0 && (
               <Panel title="Honors">

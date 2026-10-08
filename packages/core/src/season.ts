@@ -19,7 +19,7 @@ import {
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
-import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
+import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
@@ -226,8 +226,6 @@ const winTerm = (prestige: number, winPct: number, power: boolean, q: number) =>
 const homeTerm = (mi: number, sameState: boolean) => RECRUIT_FIT.log_distance * Math.log1p(mi / 50) + RECRUIT_FIT.home_state * (sameState ? 1 : 0);
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 const STAY = { playing: 1.6, winning: 0.6 };
-/** The personality your staff assumes for a player it hasn't talked with. */
-const AVERAGE_PERSONA: Persona = { kind: "steady", money: 1, playing: 1, development: 1, fit: 1, winning: 1, home: 1, loyalty: 1 };
 const money = (x: number) => (x >= 1_000_000 ? `$${(x / 1_000_000).toFixed(2)}M` : `$${Math.round(x / 1000)}K`);
 const softmax = (xs: number[]) => { const m = Math.max(...xs), e = xs.map((x) => Math.exp(x - m)), t = e.reduce((a, b) => a + b, 0); return e.map((x) => x / t); };
 const chooseIdx = (xs: number[], u: number) => { const c = softmax(xs); for (let i = 0; i < c.length; i++) { if (u < c[i]) return i; u -= c[i]; } return c.length - 1; };
@@ -1333,7 +1331,7 @@ export class Season {
       const nowGap = arrivalOvr(view.potential.est) - (view.ovr ? (view.ovr.lo + view.ovr.hi) / 2 : arrivalOvr(view.potential.est));
       ratings = ATTRS[p.pos].map((a) => { const arrival = fromZ(zz + 0.47 * rng.gauss(0, 1)); return { attr: a, now: Math.max(15, Math.round(arrival - nowGap)), arrival }; });
     }
-    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10 };
+    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id) };
   }
 
   /** The schools a prospect is considering, best first (see RecruitWeek.considering). */
@@ -1783,9 +1781,11 @@ export class Season {
     return v > 0 ? Math.round(now * vNext / v) : 0;
   }
 
-  /** The personality your staff assumes until you've talked with him. */
+  /** Whether you've talked with him: until then your staff assumes his class's typical personality. */
   private known(pid: number): boolean { return this.state.talked?.[pid] != null; }
-  private personaOf(pid: number, truth: boolean): Persona { return truth ? persona(this.state.seed, pid) : AVERAGE_PERSONA; }
+  private personaOf(pid: number, truth: boolean): Persona { const w = persona(this.state.seed, pid); return truth ? w : typicalPersona(w.kind); }
+  /** A player's (or prospect's) personality as his page shows it: his class always, his own traits once you've talked with him. */
+  personaRead(pid: number) { return personaView(this.state.seed, pid, this.known(pid)); }
 
   /**
    * A player's portal watch as you see it: his chance to enter, the reasons and what would keep him. Your staff's
@@ -1808,7 +1808,7 @@ export class Season {
     const why = top === "playing" ? (ctx.start_away > ctx.start_here ? `He wants to start: he's behind ${STARTERS[p.pos] === 1 ? "the starter" : "the starters"} here and would start elsewhere.` : "He wants more playing time.")
       : top === "winning" ? "He wants to play for a winner." : top === "home" ? "He wants to be closer to home." : top === "fit" ? "He doesn't fit your scheme." : top === "development" ? "He doesn't think he's developing here." : top === "unhappy" ? "He's unhappy here." : null;
     return {
-      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: committed ? "Committed" : WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
+      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: committed ? "Committed" : WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: PERSONA_NAMES[w.kind],
       reasons, leaving, value: ctx.value, pay: ctx.pay, keep, walk_range: walk == null ? null : [roundPay(walk * (this.known(pid) ? 0.95 : 0.8)), roundPay(walk * (this.known(pid) ? 1.05 : 1.25))],
       fix: leaving ? "He's out of eligibility after this season." : committed ? `He's committed to stay next season (${money(s.next_deals?.[pid]?.amount ?? ctx.pay)}).` : keep == null ? `${reasons[0]?.reason === "pay" ? "Money alone won't settle him." : "Money won't fix this."} ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : this.known(pid) ? `Pay him ${money(keep)} next season and he'll commit to stay.` : `Your staff thinks about ${money(keep)} next season would keep him.`,
       promise: s.promises?.[pid] ?? null,

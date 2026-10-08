@@ -185,7 +185,14 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (sort === "est") rows.sort((a, b) => (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || byRank(a, b));
         else if (sort === "hi") rows.sort((a, b) => (b.potential?.hi ?? 0) - (a.potential?.hi ?? 0) || byRank(a, b));
         else if (sort === "board") rows.sort((a, b) => (a.board < 0 ? Infinity : a.board) - (b.board < 0 ? Infinity : b.board) || byRank(a, b));
+        else if (sort === "name") { const last = (r: typeof rows[number]) => r.name.split(" ").slice(1).join(" ") || r.name; rows.sort((a, b) => last(a).localeCompare(last(b)) || a.name.localeCompare(b.name) || byRank(a, b)); }
+        else if (sort === "pos") rows.sort((a, b) => a.pos.localeCompare(b.pos) || byRank(a, b));
+        else if (sort === "home") rows.sort((a, b) => (a.home.state ?? "~").localeCompare(b.home.state ?? "~") || (a.home.city ?? "").localeCompare(b.home.city ?? "") || byRank(a, b));
+        else if (sort === "now") rows.sort((a, b) => (b.ovr?.hi ?? 0) - (a.ovr?.hi ?? 0) || byRank(a, b));
+        else if (sort === "status") rows.sort((a, b) => (a.commit ? (a.commit.signed ? 2 : 1) : 0) - (b.commit ? (b.commit.signed ? 2 : 1) : 0) || byRank(a, b));
         else rows.sort(byRank);
+        // A second click on a column header flips it.
+        if (url.searchParams.get("dir") === "rev") rows.reverse();
         const staff = me != null ? S.staff(me) : [];
         const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
         const time = timeSplit(u.time, S.inSeason(s.date));
@@ -296,7 +303,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (c && c.team_id === id && c.mode === "fresh") coaches = coaches.map((x) => (x.role === "HC" ? { ...x, first: c.coach.first, last: c.coach.last, career: [], source: "you" } : x));
         const stats = S.roster(id).flatMap((pl) => { const st = s.player_stats?.[pl.id]; return st ? [statRow(pl.id, st)!] : []; });
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats };
+        // Personality classes are public (like OOTP's); the traits behind them stay a read until you talk with him.
+        const personas = Object.fromEntries(S.roster(id).map((pl) => [pl.id, S.personaRead(pl.id).name]));
+        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats, personas };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
@@ -321,7 +330,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           const snaps = d.snaps?.[pl.id];
           return Object.keys(line).length || snaps ? [{ game: gameRow(g), line, snaps: snaps ?? 0 }] : [];
         });
-        return { player: pl, team: S.team(pl.team_id), slots, log, potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
+        return { player: pl, team: S.team(pl.team_id), slots, log, persona: S.personaRead(pl.id), potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).

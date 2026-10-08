@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSort } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
 import { api, type FutureData, type RenewalRule, type RetentionRow, type TalkView, type WatchLevel, type WatchView } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
@@ -107,7 +108,7 @@ export function FutureTab({ f }: { f: FutureData }) {
         <Panel title="Portal watch" right={<WatchChip w={w} />}>
           {w.leaving ? <p>{w.fix}</p> : <>
             <div className="meter"><span className={`w-${w.watch}`} style={{ width: `${Math.max(3, Math.round(w.p * 100))}%` }} /></div>
-            <p className="small muted">{Math.round(w.p * 100)}% chance he enters the portal in January{w.known ? `. You've talked with him (${w.persona}).` : ": your staff's read of a typical player. Talk with him to learn his real reasons."}</p>
+            <p className="small muted">{Math.round(w.p * 100)}% chance he enters the portal in January{w.known ? `. You've talked with him (${w.persona.toLowerCase()}).` : `: your staff's read of a typical ${w.persona.toLowerCase()}. Talk with him to learn his real reasons.`}</p>
             <h4>Why he might leave</h4>
             <Reasons w={w} />
             <h4>What keeps him</h4>
@@ -161,6 +162,9 @@ export function RetentionScreen() {
       : all.filter((r) => !r.watch.leaving && (r.watch.watch !== "settled" || (r.talk && !r.talk.outcome && r.talk.plan?.kind === "needs_you")));
     return pick.sort((a, b) => ORDER[a.watch.watch] - ORDER[b.watch.watch] || a.importance - b.importance);
   }, [data, filter]);
+  const { rows: sorted, th } = useSort(rows, {
+    name: (r) => r.name, ovr: (r) => r.ovr, watch: (r) => r.watch.p, why: (r) => r.watch.reasons[0]?.label, pay: (r) => r.pay, keep: (r) => r.watch.keep,
+  });
   if (!data) return state.user_team_id == null ? <Panel title="Retention"><p className="muted">Pick a team in Settings.</p></Panel> : <p className="muted">Loading...</p>;
   const count = (w: WatchLevel) => data.rows.filter((r) => !r.watch.leaving && r.watch.watch === w).length;
   const b = data.budget, pct = b.total ? Math.min(100, (100 * b.committed) / b.total) : 0;
@@ -193,8 +197,8 @@ export function RetentionScreen() {
         {err && <p className="error small">{err}</p>}
         {!rows.length ? <p className="muted">{filter === "risk" ? "Nobody is at risk right now." : "Nobody here."}</p> : (
           <table className="grid tight">
-            <thead><tr><th>Player</th><th className="num">Ovr</th><th>Watch</th><th>Why</th><th className="num">Pays now</th><th>What keeps him</th>{data.talks_open && <th>Talks</th>}<th></th></tr></thead>
-            <tbody>{rows.map((r) => <Row key={r.pid} r={r} talksOpen={data.talks_open} busy={busy} act={act} />)}</tbody>
+            <thead><tr>{th("name", "Player")}{th("ovr", "Ovr", { className: "num" })}{th("watch", "Watch")}{th("why", "Why")}{th("pay", "Pays now", { className: "num" })}{th("keep", "What keeps him")}{data.talks_open && <th>Talks</th>}<th></th></tr></thead>
+            <tbody>{sorted.map((r) => <Row key={r.pid} r={r} talksOpen={data.talks_open} busy={busy} act={act} />)}</tbody>
           </table>
         )}
       </Panel>

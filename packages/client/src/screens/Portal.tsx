@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSort } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
 import { api, type PortalData, type PortalRow } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
@@ -85,6 +86,10 @@ export function PortalScreen() {
     const by = show === "mine" ? all.filter((r) => r.mine) : show === "from_me" ? all.filter((r) => r.from === me) : show === "done" ? all.filter((r) => r.status !== "open") : all.filter((r) => r.status === "open");
     return by.filter((r) => (!pos || r.pos === pos) && (!needOnly || (data?.needs[r.pos] && r.next >= data.needs[r.pos].floor))).sort((a, b) => b.next - a.next || a.pid - b.pid);
   }, [data, show, pos, needOnly, me]);
+  const { rows: sorted, th } = useSort(rows, {
+    name: (r) => r.name, pos: (r) => r.pos, from: (r) => team(r.from)?.school, ovr: (r) => r.ovr, next: (r) => r.next, ask: (r) => r.ask, offers: (r) => r.offers,
+    why: (r) => r.reasons[0], leaning: (r) => r.top[0]?.share,
+  });
   if (!data) return <p className="muted">Loading...</p>;
   if (!data.open && !data.entries.length) {
     return <Panel title="Transfer portal"><p className="muted">The portal opens {data.window ? shortDate(data.window) : "January 2"}, after renewal talks. Players whose school's season is still going enter the day after their last game.</p></Panel>;
@@ -121,8 +126,8 @@ export function PortalScreen() {
           <span className="muted">{rows.length} players</span>
         </div>
         <table className="grid tight">
-          <thead><tr><th>Player</th><th>From</th><th className="num" title="Overall now">Ovr</th><th className="num" title="Expected overall next season">Next</th><th>Why he left</th><th className="num">Asks</th><th className="num">Offers</th><th>Leaning</th>{me != null && show !== "done" && <th>Your bid</th>}</tr></thead>
-          <tbody>{rows.slice(0, 300).map((r) => (
+          <thead><tr>{th("name", "Player")}{th("from", "From")}{th("ovr", "Ovr", { className: "num", title: "Overall now" })}{th("next", "Next", { className: "num", title: "Expected overall next season" })}{th("why", "Why he left")}{th("ask", "Asks", { className: "num" })}{th("offers", "Offers", { className: "num" })}{th("leaning", "Leaning")}{me != null && show !== "done" && <th>Your bid</th>}</tr></thead>
+          <tbody>{sorted.slice(0, 300).map((r) => (
             <tr key={r.pid} className={r.mine ? "mine" : ""}>
               <td><a href={`#/l/${id}/player/${r.pid}`}>{r.name}</a> <span className="muted small">{r.pos} · {r.cls}{r.stars ? ` · ${"★".repeat(r.stars)}` : ""}</span>{r.costs_season && <span className="tag" title="A second transfer costs him a season">-1 yr</span>}</td>
               <td className="nowrap"><Logo team={team(r.from)} size={16} /> {team(r.from)?.school}</td>

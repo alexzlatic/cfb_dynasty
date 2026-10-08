@@ -1,6 +1,6 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
-export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan };
+export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
 export type CareerView = Career & { security: number; label: string };
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
@@ -21,7 +21,7 @@ export interface DevelopmentView {
 // ---- keeping players and the portal ----
 export type WatchLevel = "settled" | "restless" | "shopping" | "gone";
 export interface WatchView {
-  p: number; watch: WatchLevel; label: string; known: boolean; persona: string | null;
+  p: number; watch: WatchLevel; label: string; known: boolean; persona: string;
   reasons: { reason: string; weight: number; label: string }[]; leaving: boolean; value: number; pay: number;
   /** Pay that settles him (null: money won't fix it), and your staff's range for the least he'd stay for. */
   keep: number | null; walk_range: [number, number] | null; fix: string; promise: { year: number; broken?: boolean } | null;
@@ -97,6 +97,7 @@ export interface ProspectPageData extends ProspectRow {
   history: { date: string; est: number; lo: number; hi: number }[];
   ratings: { attr: string; now: number; arrival: number }[];
   years_out: number;
+  persona: PersonaView;
 }
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
@@ -169,12 +170,12 @@ export const api = {
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
   team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
-    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[] }>(`/api/leagues/${id}/teams/${tid}`),
+    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[]; personas: Record<number, string> }>(`/api/leagues/${id}/teams/${tid}`),
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
     season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
-    potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null }>(`/api/leagues/${id}/players/${pid}`),
+    potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
