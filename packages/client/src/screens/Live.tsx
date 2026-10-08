@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLeague } from "../App.tsx";
 import { api, type LiveMode, type LiveResult, type UserCall } from "../api.ts";
 import type { PlayRecord } from "@cfb/engine";
 import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
+import { FieldView } from "./Field.tsx";
 
-const PACE: Record<string, number> = { instant: 0, fast: 350, slow: 1200 };
+/** Milliseconds per snap at each pace; the rest of the log (timeouts, subs, kicks after scores) goes quicker. */
+const PACE: Record<string, number> = { instant: 0, fast: 1300, slow: 2600 };
+const QUICK: Record<string, number> = { TIMEOUT: 0.3, SUB: 0.3, INJURY: 0.5, END: 0.5, PENALTY: 0.6, PAT: 0.6 };
+const playMs = (p: PlayRecord | undefined, pace: string) => (PACE[pace] ?? 1300) * (p ? QUICK[p.play_type] ?? 1 : 1);
 const ORD = ["", "1st", "2nd", "3rd", "4th"];
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const qtr = (q: number, ot = false) => (ot || q > 4 ? "OT" : `Q${q}`);
@@ -26,11 +30,17 @@ export function LiveScreen() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const loaded = useRef(false);
+  // When the play on the field started, so the next one waits only for what's left of it.
+  const revealedAt = useRef(0);
+  const [settled, setSettled] = useState(-1);
+  // A play picked from the play-by-play to watch again (index), and a counter so the same one can rerun.
+  const [replay, setReplay] = useState<{ i: number; n: number } | null>(null);
 
-  const take = (v: LiveResult | null) => {
+  const take = (v: LiveResult | null, skip = false) => {
     if (!v) return;
     setView(v);
     setPlays((old) => [...old.slice(0, v.since), ...v.plays]);
+    if (skip) setShown(v.since + v.plays.length);
   };
   useEffect(() => {
     if (loaded.current) return;
@@ -40,18 +50,24 @@ export function LiveScreen() {
   // Reveal new plays one at a time at the chosen pace.
   useEffect(() => {
     if (shown >= plays.length) return;
-    const ms = PACE[pace] ?? 350;
-    if (!ms) { setShown(plays.length); return; }
-    const t = setTimeout(() => setShown((n) => n + 1), ms);
+    if (!PACE[pace]) { setShown(plays.length); return; }
+    const ms = shown > 0 ? playMs(plays[shown - 1], pace) : 0;
+    const t = setTimeout(() => { revealedAt.current = performance.now(); setReplay(null); setShown((n) => n + 1); }, Math.max(0, revealedAt.current + ms - performance.now()));
     return () => clearTimeout(t);
   }, [shown, plays.length, pace]);
 
-  const act = async (f: () => Promise<LiveResult>) => {
+  const act = async (f: () => Promise<LiveResult>, skip = false) => {
     setBusy(true); setErr(null);
-    try { take(await f()); } catch (e) { setErr((e as Error).message); }
+    try { take(await f(), skip); } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
-  const call = (c: UserCall, toEnd = false) => act(() => api.liveCall(id, c, plays.length, toEnd));
+  // Sim to the end jumps straight to the final instead of replaying the rest of the game.
+  const call = (c: UserCall, toEnd = false) => act(() => api.liveCall(id, c, plays.length, toEnd), toEnd);
+  const qbs = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of plays) { const m = /^(.+?) (?:pass |sacked|scrambles|kneels)/.exec(p.description); if (m) s.add(m[1]); }
+    return s;
+  }, [plays.length]);
   const setMode = (m: Partial<LiveMode>) => act(() => api.liveMode(id, m));
   const savePace = (p: string) => { setPace(p); try { localStorage.setItem("cfb.pace", p); } catch { /* private window */ } };
 
@@ -77,11 +93,15 @@ export function LiveScreen() {
   }
 
   const H = team(view.home_id), A = team(view.away_id);
-  const revealing = shown < plays.length;
+  // Still showing plays the server has already played (the last one counts until its dots stop).
+  const revealing = shown < plays.length || (PACE[pace] > 0 && shown > 0 && settled !== shown && !replay);
   const last = revealing ? plays[Math.max(0, shown - 1)] : null;
+  // While a play is on the field the scoreboard shows the snap it came from (the score after it).
   const sb = last
     ? { q: last.quarter, clock: last.clock, hs: last.home_score, as: last.away_score }
     : { q: view.quarter, clock: view.clock, hs: view.home_score, as: view.away_score };
+  // The play-by-play lists a play once it has finished on the field.
+  const listed = last ? shown - 1 : shown;
   const ytg = view.yards_to_goal;
   const offTeam = view.possession === "home" ? H : A;
   const spot = ytg > 50 ? `${offTeam?.abbr ?? ""} ${100 - ytg}` : ytg === 50 ? "50" : `${(view.possession === "home" ? A : H)?.abbr ?? ""} ${ytg}`;
@@ -96,27 +116,28 @@ export function LiveScreen() {
         <div className="sbteam"><Logo team={A} size={44} /><span className="sbname">{A?.school}</span>{view.possession === "away" && !view.final && <span className="ball">●</span>}<span className="sbscore">{sb.as}</span></div>
         <div className="sbmid">
           <div className="sbclock">{view.final && !revealing ? "Final" : `${qtr(sb.q, view.overtime)} ${clock(sb.clock)}`}</div>
-          {!view.final && <div className="small">{ORD[view.down] ?? view.down} &amp; {view.distance >= ytg ? "Goal" : view.distance} at {spot}</div>}
+          {last ? <div className="small">{last.down ? `${ORD[last.down]} & ${last.distance >= last.yards_to_goal ? "Goal" : last.distance} at ${last.yardline}` : "\u00a0"}</div>
+            : !view.final && <div className="small">{ORD[view.down] ?? view.down} &amp; {view.distance >= ytg ? "Goal" : view.distance} at {spot}</div>}
           <div className="small muted">Timeouts {A?.abbr} {view.away_timeouts} · {H?.abbr} {view.home_timeouts}</div>
         </div>
         <div className="sbteam right"><span className="sbscore">{sb.hs}</span>{view.possession === "home" && !view.final && <span className="ball">●</span>}<span className="sbname">{H?.school}</span><Logo team={H} size={44} /></div>
       </div>
-      {!view.final && (
-        <div className="field" title={`Ball on ${spot}`}>
-          <div className="endzone left" style={{ background: A?.color }} /><div className="endzone right" style={{ background: H?.color }} />
-          {/* Home defends the right end zone in this picture: the ball's x is from the left goal line. */}
+      <div className="livetop">
+        <div>
           {(() => {
-            const fromLeft = view.possession === "home" ? ytg : 100 - ytg;
-            const toGain = view.possession === "home" ? Math.max(0, ytg - view.distance) : Math.min(100, 100 - ytg + view.distance);
-            return <>
-              <div className="ballspot" style={{ left: `${5 + fromLeft * 0.9}%` }} />
-              <div className="togain" style={{ left: `${5 + toGain * 0.9}%` }} />
-            </>;
+            const i = replay ? replay.i : shown - 1;
+            // A play that has already finished doesn't run again when a replay ends.
+            const ms = i < 0 || (!replay && settled === shown) ? 0 : playMs(plays[i], replay && !PACE[pace] ? "fast" : pace);
+            return <FieldView home={H} away={A} qbs={qbs} play={i >= 0 ? plays[i] : null} playKey={replay ? -replay.n : shown} ms={ms}
+              onSettled={(k) => (k < 0 ? setReplay(null) : setSettled(k))}
+              idle={view.final || revealing ? null : { offHome: view.possession === "home", ytg, distance: view.distance }} />;
           })()}
+          <p className="small muted fieldskip">
+            {replay ? <>Replay: {qtr(plays[replay.i].quarter)} {clock(plays[replay.i].clock)} <button className="link" onClick={() => setReplay(null)}>Back to the game</button></>
+              : shown < plays.length ? <>Play {shown} of {plays.length} <button className="link" onClick={() => setShown(plays.length)}>Skip to now</button></>
+              : "Click a play in the play-by-play to watch it again."}
+          </p>
         </div>
-      )}
-      {err && <p className="error">{err}</p>}
-      <div className="cols">
         <div>
           {view.final && !revealing ? (
             <Panel title="Final">
@@ -133,11 +154,17 @@ export function LiveScreen() {
               </div>
               <p className="small muted">Highlighted: your coordinator's call. <button className="link" disabled={busy} onClick={() => call(null)}>Let the coordinator call it</button></p>
             </Panel>
-          ) : <Panel title="Play-by-play"><p className="muted">{revealing ? "Playing..." : "Waiting..."}</p></Panel>}
+          ) : <Panel title="On the field"><p className="muted">{revealing ? "Playing..." : "Waiting..."}</p></Panel>}
+        </div>
+      </div>
+      {err && <p className="error">{err}</p>}
+      <div className="cols">
+        <div>
           <Panel title="Play-by-play">
             <table className="grid pbp"><tbody>
-              {plays.slice(0, shown).slice(-60).reverse().map((p, i) => (
-                <tr key={shown - i} className={/TOUCHDOWN|INTERCEPT|FUMBLE|INJURY/.test(p.description) ? "hl" : ""}>
+              {plays.slice(0, listed).slice(-60).reverse().map((p, i) => (
+                <tr key={listed - i} className={`replayable ${/TOUCHDOWN|INTERCEPT|FUMBLE|INJURY/.test(p.description) ? "hl" : ""} ${replay?.i === listed - 1 - i ? "on" : ""}`}
+                  title="Watch it again" onClick={() => setReplay((r) => ({ i: listed - 1 - i, n: (r?.n ?? 0) + 1 }))}>
                   <td className="nowrap muted small">{qtr(p.quarter)} {clock(p.clock)}</td>
                   <td className="nowrap small">{p.down ? `${ORD[p.down]} & ${p.distance}` : ""}</td>
                   <td><span className="muted small">{p.offense}</span> {p.description}</td>

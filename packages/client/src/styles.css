@@ -181,13 +181,19 @@ a.button:hover { text-decoration: none; border-color: var(--accent); }
 .sbclock { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .scoreboard .muted { color: #9aa6b4; }
 .ball { color: #f5c542; font-size: 14px; }
-.field { position: relative; height: 34px; border-radius: 6px; margin-bottom: 12px;
-  background: repeating-linear-gradient(90deg, #2f7d3b 0, #2f7d3b 9%, #2a7136 9%, #2a7136 18%); }
-.field .endzone { position: absolute; top: 0; bottom: 0; width: 5%; opacity: 0.9; }
-.field .endzone.left { left: 0; border-radius: 6px 0 0 6px; }
-.field .endzone.right { right: 0; border-radius: 0 6px 6px 0; }
-.field .ballspot { position: absolute; top: 8px; width: 16px; height: 18px; margin-left: -8px; border-radius: 50%; background: #8b4a1c; border: 2px solid #fff; }
-.field .togain { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: #f5c542; }
+.livetop { display: grid; grid-template-columns: minmax(0, 2.3fr) minmax(270px, 1fr); gap: 12px; align-items: start; }
+.livetop .calls { grid-template-columns: 1fr 1fr; }
+@media (max-width: 900px) { .livetop { grid-template-columns: 1fr; } }
+.fieldview { margin-bottom: 10px; }
+.fieldview svg { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.fieldview .fnum { fill: rgba(255,255,255,.75); font: 700 3.2px Arial, sans-serif; text-anchor: middle; }
+.fieldview .fez { font: 800 5px Arial, sans-serif; text-anchor: middle; letter-spacing: 1px; }
+.fieldview .flabel { fill: #fff; font: 700 2.4px Arial, sans-serif; text-anchor: middle; paint-order: stroke; stroke: rgba(0,0,0,.75); stroke-width: 0.5px; }
+.fieldview .fbanner { fill: #f5c542; font: 900 5.5px Arial, sans-serif; text-anchor: middle; paint-order: stroke; stroke: rgba(0,0,0,.7); stroke-width: 0.8px; letter-spacing: 0.5px; }
+.fielddesc { min-height: 1.4em; margin-top: 6px; font-size: 14px; }
+.fieldskip { margin: -4px 0 8px; }
+.pbp tr.replayable { cursor: pointer; }
+.pbp tr.replayable:hover td, .pbp tr.replayable.on td { background: rgba(74, 163, 255, .12); }
 .calls { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
 .calls button { padding: 12px 8px; font-weight: 600; }
 .calls button.suggested { border: 2px solid var(--accent); }

@@ -150,7 +150,7 @@ export class LiveGame {
       if (req.kind === "snap") { gdp?.(req, this.sim); this.watchInjuries(); continue; }
       const ai = this.caller.prepare(req, this.sim);
       if (!this.caller.isUserTurn(req)) { answer = this.caller.answer(req, this.sim, ai, undefined); continue; }
-      const alert = toEnd ? null : this.stopFor(req);
+      const alert = toEnd ? undefined : this.stopFor(req);
       if (alert !== undefined) { this.pending = { req, ai, alert }; return; }
       this.calls.push(null);
       answer = this.caller.answer(req, this.sim, ai, null);
