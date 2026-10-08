@@ -1,6 +1,6 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
-export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart };
+export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan };
 export type CareerView = Career & { security: number; label: string };
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
@@ -9,6 +9,14 @@ export type LiveResult = LiveView & { since: number; result?: Game };
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
+/** Your staff's read on one of your players: development beyond what was expected so far, and his traits. */
+export interface StaffPlayer { pid: number; growth: number; expected: number; leadership: number; adaptability: number }
+export type UnitRead = { development: number; fit: number; chemistry: number };
+export interface DevelopmentView {
+  team_id: number | null; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
+  staff: { known: number; units: Record<"off" | "def", UnitRead>; players: StaffPlayer[] } | null;
+  players: { pid: number; name: string; pos: string; class: string; years: number; ovr: number }[]; depth: DepthChart;
+}
 
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
@@ -49,6 +57,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  development: (id: string) => req<DevelopmentView>(`/api/leagues/${id}/development`),
   leaders: (id: string) => req<Record<string, StatRow[]>>(`/api/leagues/${id}/leaders`),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
@@ -57,7 +66,7 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number }>(`/api/leagues/${id}/players/${pid}`),
+    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null }>(`/api/leagues/${id}/players/${pid}`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; defenders: Record<string, { name: string; pos: string; team_id: number } | null> }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),

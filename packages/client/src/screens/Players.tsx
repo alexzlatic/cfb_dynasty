@@ -154,6 +154,18 @@ export function PlayerPage({ pid }: { pid: number }) {
             {p.tend.scramble != null && <p className="small">Scrambles on {(p.tend.scramble * 100).toFixed(0)}% of dropbacks.</p>}
             <p className="muted small">Potential and work ethic are hidden until scouting arrives.</p>
           </Panel>
+          {data.staff && data.staff.growth != null && (
+            <Panel title="Your staff's read" right={<a href={`#/l/${id}/development`}>Development</a>}>
+              <table className="grid tight"><tbody>
+                <tr><td>Expected progress so far</td><td className="num">{data.staff.expected! > 0 ? "+" : ""}{data.staff.expected!.toFixed(1)}</td></tr>
+                <tr><td>Beyond what was expected</td><td className={"num " + (data.staff.growth >= 1 ? "win" : data.staff.growth <= -1 ? "loss" : "")}>{data.staff.growth > 0 ? "+" : ""}{data.staff.growth.toFixed(1)}</td></tr>
+                <tr><td>Leadership</td><td className="num">{data.staff.leadership}</td></tr>
+                <tr><td>Adaptability</td><td className="num">{data.staff.adaptability}</td></tr>
+                <tr><td>Development plan</td><td className="num">{data.staff.plan ? data.staff.plan.area[0].toUpperCase() + data.staff.plan.area.slice(1) : "None"}</td></tr>
+              </tbody></table>
+              <p className="muted small">Overall points. Only your staff sees this; his listed rating is what scouts see.</p>
+            </Panel>
+          )}
           {data.injuries.length > 0 && (
             <Panel title="Injuries">
               <table className="grid tight"><tbody>{data.injuries.map((i) => (

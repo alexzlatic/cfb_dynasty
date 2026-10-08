@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { AWARD_NAMES, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { AWARD_NAMES, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -101,6 +101,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const byId = new Map(s.games.map((g) => [g.id, g]));
         return { career: career(), trail: S.securityTrail().map((x) => ({ ...x, game: gameRow(byId.get(x.game_id)!) })) };
       }
+      case route === "development": {
+        // Your staff's read on your own team; nobody else's hidden scores are ever sent.
+        const me = s.user_team_id;
+        if (me == null) return { team_id: null };
+        const v = S.staffView(me);
+        const ctx = S.teamContext(me);
+        const players = S.roster(me).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr }));
+        return { team_id: me, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v, players, depth: S.depthChart(me) };
+      }
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {
         const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));
@@ -182,7 +191,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         });
         return { player: pl, team: S.team(pl.team_id), slots, log, injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
-          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES };
+          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
+          // Your staff's read on your own players (development so far, traits, his plan).
+          staff: pl.team_id === s.user_team_id ? { ...S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), plan: s.lab?.[pl.id] ?? null } : null };
       }
       case route === "schedule": {
         const team = url.searchParams.get("team"), date = url.searchParams.get("date"), week = url.searchParams.get("week");
