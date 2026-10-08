@@ -552,3 +552,29 @@ describe("money", () => {
     again.close();
   }, 60_000);
 });
+
+describe("custom conferences", () => {
+  it("starts a league with your conferences, keeps them through a reopen and replays", async () => {
+    const real = await get("/api/seed/conferences");
+    expect(real.conferences.find((c: { name: string }) => c.name === "Big Ten").members).toHaveLength(18);
+    const confs = structuredClone(real.conferences) as { name: string; members: number[]; conf_games: number; divisions: unknown }[];
+    const nd = manager.seed().teams.find((t) => t.school === "Notre Dame")!.id;
+    for (const c of confs) c.members = c.members.filter((x) => x !== nd);
+    confs.find((c) => c.name === "ACC")!.members.push(nd);
+    const bad = await post("/api/leagues", { name: "Bad confs", team_id: nd, conferences: { conferences: confs.filter((c) => c.name !== "SEC") } });
+    expect(bad.error).toMatch(/no conference/);
+    const { id } = await post("/api/leagues", { name: "Custom confs", team_id: nd, seed: 4, conferences: { conferences: confs, tie_ins: real.tie_ins } });
+    const lg = manager.get(id)!;
+    expect(lg.season.teamById.get(nd)!.conference).toBe("ACC");
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-20" } });
+    const view = await get(`/api/leagues/${id}/conferences`);
+    expect(view.conferences.find((c: { name: string }) => c.name === "ACC").members).toContain(nd);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("custom-confs-check", manager.path(id));
+    expect(again.season.teamById.get(nd)!.conference).toBe("ACC");
+    expect(again.digest()).toBe(lg.digest());
+    again.close();
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+  }, 120_000);
+});

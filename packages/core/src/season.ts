@@ -21,6 +21,7 @@ import {
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { conferenceSchedule, isPower, placeTeams, realConferences, tieInsFor, validateSetup, type ConferenceDef, type ConferenceSetup, type TieIns } from "./conferences.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -28,7 +29,7 @@ import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type Col
 import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
-import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
+import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type Bowl, type BowlTeam } from "./bowls.ts";
 import { records, updatePower } from "./ranking.ts";
 import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
@@ -137,6 +138,9 @@ export interface SeasonState {
   next_deals?: Record<number, { amount: number; years: number }>;
   /** Your promises of a starting job, by player id: the season each is for (and whether it broke). */
   promises?: Record<number, { year: number; broken?: boolean }>;
+  /** The league's conferences (members, rules) and every bowl's conference tie-ins; absent in leagues saved before they existed (the real ones). */
+  conferences?: ConferenceDef[];
+  tie_ins?: TieIns;
   /** Players you've talked to this season (you know their real reasons), by the date of the talk. */
   talked?: Record<number, ISODate>;
   /** Your players' portal watch (their chance to enter in January), updated every Monday. */
@@ -203,7 +207,6 @@ export function injuryOutlook(days: number): string {
   return weeks <= 1 ? "will miss about a week" : `will miss about ${weeks} weeks`;
 }
 
-const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 
 // ---- the portal's helpers ------------------------------------------------------------------------
 /** Each level (power, Group of Five, FCS): what it pays for value, its starters' rating by position, how it looks to a player. */
@@ -231,7 +234,6 @@ const AVERAGE_PERSONA: Persona = { kind: "steady", money: 1, playing: 1, develop
 const money = (x: number) => (x >= 1_000_000 ? `$${(x / 1_000_000).toFixed(2)}M` : `$${Math.round(x / 1000)}K`);
 const softmax = (xs: number[]) => { const m = Math.max(...xs), e = xs.map((x) => Math.exp(x - m)), t = e.reduce((a, b) => a + b, 0); return e.map((x) => x / t); };
 const chooseIdx = (xs: number[], u: number) => { const c = softmax(xs); for (let i = 0; i < c.length; i++) { if (u < c[i]) return i; u -= c[i]; } return c.length - 1; };
-const INDEPENDENT = "FBS Independents";
 
 export class Season {
   readonly teams: Team[];
@@ -245,7 +247,9 @@ export class Season {
   constructor(public state: SeasonState, seed: SeedBundle) {
     this.seed = seed;
     // Teams in id order, the order a league file returns them in, so polls draw the same noise after a reopen.
-    this.teams = [...seed.teams].sort((a, b) => a.id - b.id);
+    state.conferences ??= realConferences(seed.teams, state.games.filter((g) => g.kind === "regular"));
+    state.tie_ins ??= tieInsFor(state.conferences);
+    this.teams = placeTeams(seed.teams, state.conferences).sort((a, b) => a.id - b.id);
     this.teamById = new Map(this.teams.map((t) => [t.id, t]));
     this.ratings = new Map(Object.entries(seed.ratings).map(([k, v]) => [Number(k), v.ratings]));
     for (const t of Object.values(seed.players ?? {})) for (const p of t.players) this.playerById.set(p.id, p);
@@ -331,8 +335,18 @@ export class Season {
   }
 
   /** A new league on the seed's start date. */
-  static create(seed: SeedBundle, opts: { seed: number; user_team_id?: number | null; settings?: Partial<Settings>; career?: CareerStart }): Season {
-    const games: Game[] = seed.schedule.map((g) => ({
+  static create(seed: SeedBundle, opts: { seed: number; user_team_id?: number | null; settings?: Partial<Settings>; career?: CareerStart; conferences?: ConferenceSetup | null }): Season {
+    // The league's conferences: the real ones, or the user's with conference schedules built for the ones that changed.
+    const setup = opts.conferences ?? null;
+    const confs = setup?.conferences ?? realConferences(seed.teams, seed.schedule);
+    let schedule = seed.schedule;
+    if (setup) {
+      const bad = validateSetup(setup, seed.teams, { pcsa: !!opts.settings?.pcsa, playoff_teams: (opts.settings?.playoff?.format ?? "playoff") === "playoff" ? opts.settings?.playoff?.teams ?? DEFAULT_SETTINGS.playoff.teams : 0 });
+      if (bad) throw new Error(bad);
+      schedule = conferenceSchedule(seed.schedule, seed.teams, placeTeams(seed.teams, confs), confs, opts.seed >>> 0, seed.season, 8_000_001);
+      seed = { ...seed, schedule };
+    }
+    const games: Game[] = schedule.map((g) => ({
       id: g.id, kind: "regular", week: g.week, date: g.date, kickoff_et: g.kickoff_et, home_id: g.home_id, away_id: g.away_id,
       neutral: g.neutral, conference_game: g.conference_game, venue: g.venue, label: g.notes, status: "scheduled",
       home_score: null, away_score: null, overtime: false,
@@ -346,7 +360,8 @@ export class Season {
       year: seed.season, seed: opts.seed >>> 0, date: seed.start_date, settings,
       user_team_id: opts.user_team_id ?? null, games, events: seasonEvents(seed.season, seed.start_date, seed.schedule, settings.playoff),
       polls: [], news: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
-      next_game_id: 9_000_001, writers: generateWriters(seed.teams, seed.rosters, opts.seed >>> 0), stars: {},
+      next_game_id: 9_000_001, writers: generateWriters(placeTeams(seed.teams, confs), seed.rosters, opts.seed >>> 0), stars: {},
+      conferences: confs, tie_ins: tieInsFor(confs, setup?.tie_ins),
     };
     const season = new Season(state, seed);
     season.startHidden(seed.coaches ?? []);
@@ -441,7 +456,7 @@ export class Season {
       arrived: Object.fromEntries([...Object.entries(s.arrived ?? {}).filter(([pid]) => kept.has(Number(pid))),
         ...[...transfers.keys()].map((pid) => [String(pid), ny] as const), ...Object.values(incoming).flat().map((p) => [String(p.id), ny] as const)]),
       promises: Object.fromEntries(Object.entries(s.promises ?? {}).filter(([, x]) => x.year === ny)),
-      renewal_rule: s.renewal_rule,
+      renewal_rule: s.renewal_rule, conferences: s.conferences, tie_ins: s.tie_ins,
     };
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
@@ -989,7 +1004,7 @@ export class Season {
     const now = s.facilities[me][area];
     if (now >= 5) throw new Error(`the ${AREAS[area].toLowerCase()} is already among the best in the country`);
     const t = this.team(me);
-    const { cost, years } = projectCost(area, now + 1, ["SEC", "Big Ten", "ACC", "Big 12"].includes(t.conference) || t.school === "Notre Dame");
+    const { cost, years } = projectCost(area, now + 1, isPower(t));
     const surplus = this.budget(me)!.surplus;
     const c = s.career, ad = c ? `${c.ad.first} ${c.ad.last}` : "Your athletic director";
     const $ = (x: number) => `$${(x / 1e6).toFixed(1)}M`;
@@ -1087,7 +1102,7 @@ export class Season {
     if (me == null || !st) return null;
     const t = this.team(me);
     return { id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null, regions: st.user.regions,
-      national: P4.has(t.conference) || t.school === "Notre Dame", width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
+      national: isPower(t), width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
   }
 
   /** What your staff already knows when it starts looking: the weeks of looking behind it (KNOWN_WEEKS) at once. */
@@ -1135,7 +1150,7 @@ export class Season {
     const frozen = st.frozen?.year === s.year ? st.frozen.schools : this.freezeSchools();
     return this.teams.map((t): School => {
       const staff = this.staff(t.id);
-      const fbs = t.level === "fbs", power = P4.has(t.conference) || t.school === "Notre Dame";
+      const fbs = t.level === "fbs", power = isPower(t);
       const time = timeSplit(t.id === me ? st.user.time : inSeason ? SEASON_TIME : OFFSEASON_TIME, inSeason);
       return {
         id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null,
@@ -1152,7 +1167,7 @@ export class Season {
     const s = this.state, st = s.recruiting!;
     const last = s.past?.[s.past.length - 1];
     // Money: each school's revenue-share budget for football against the median power program's.
-    const pools = this.teams.filter((t) => P4.has(t.conference)).map((t) => s.pools?.[t.id] ?? 0).sort((a, b) => a - b);
+    const pools = this.teams.filter((t) => t.level === "fbs" && isPower(t) && t.school !== "Notre Dame").map((t) => s.pools?.[t.id] ?? 0).sort((a, b) => a - b);
     const mid = pools[Math.floor(pools.length / 2)] || 1;
     return Object.fromEntries(this.teams.map((t) => {
       const staff = this.staff(t.id), roster = this.roster(t.id), fbs = t.level === "fbs";
@@ -1352,7 +1367,7 @@ export class Season {
   /** Power program, Group of Five or FCS. */
   private tierOf(tid: number): 0 | 1 | 2 {
     const t = this.team(tid);
-    return t.level !== "fbs" ? 2 : P4.has(t.conference) || t.school === "Notre Dame" ? 0 : 1;
+    return t.level !== "fbs" ? 2 : isPower(t) ? 0 : 1;
   }
 
   /** January's deadline: players with eligibility left decide whether to enter the draft. */
@@ -2468,7 +2483,7 @@ export class Season {
     const ao = this.award({ type: "potw_off", date, pid: o.pid, team_id: o.team_id, line: lineText(o.line) });
     const ad = this.award({ type: "potw_def", date, pid: d.pid, team_id: d.team_id, line: lineText(d.line) });
     const confs = new Map<string, WeekLine[]>();
-    for (const w of week) { const c = this.team(w.team_id).conference; if (c !== INDEPENDENT) confs.set(c, [...(confs.get(c) ?? []), w]); }
+    for (const w of week) { const c = this.team(w.team_id).conference; if (this.inConference(c)) confs.set(c, [...(confs.get(c) ?? []), w]); }
     const lines: string[] = [];
     for (const [conf, ws] of [...confs].sort()) {
       const co = best(ws, off, OFF_POS), cd = best(ws, def, DEF_POS);
@@ -2507,7 +2522,7 @@ export class Season {
 
     // Conference players of the year.
     const confs = new Map<string, typeof rows>();
-    for (const r of rows) { const c = this.team(r.st.team_id).conference; if (c !== INDEPENDENT) confs.set(c, [...(confs.get(c) ?? []), r]); }
+    for (const r of rows) { const c = this.team(r.st.team_id).conference; if (this.inConference(c)) confs.set(c, [...(confs.get(c) ?? []), r]); }
     const conf: string[] = [];
     for (const [c, rs] of [...confs].sort()) {
       const o = rs.filter((r) => OFF_POS.has(r.p.pos)).sort((a, b) => offScore(b.st) + 2 * wins(b.st.team_id) - offScore(a.st) - 2 * wins(a.st.team_id) || a.pid - b.pid)[0];
@@ -2848,6 +2863,14 @@ export class Season {
   }
   private has(kind: GameKind): Game[] { return this.state.games.filter((g) => g.kind === kind); }
 
+  /** The league's conferences, and one by name. */
+  conferences(): ConferenceDef[] { return this.state.conferences!; }
+  conference(name: string): ConferenceDef | undefined { return this.state.conferences!.find((c) => c.name === name); }
+  /** A real conference (not the independents) that plays for a title. */
+  inConference(name: string): boolean { const c = this.conference(name); return !!c && c.tier !== "independent"; }
+  /** Every bowl in selection order with the league's tie-ins (the New Year's Six first). */
+  bowlSlate(): Bowl[] { return [...NY6, ...BOWLS].map((b) => ({ ...b, sides: this.state.tie_ins?.[b.name] ?? b.sides })); }
+
   private buildPostseason(rep: DayReport): void {
     const s = this.state;
     // Conference title games, once every conference game before championship weekend is final
@@ -2896,7 +2919,7 @@ export class Season {
 
   private buildConfTitles(rep: DayReport): void {
     const byConf = new Map<string, Team[]>();
-    for (const t of this.teams) if (t.level === "fbs" && t.conference !== INDEPENDENT) byConf.set(t.conference, [...(byConf.get(t.conference) || []), t]);
+    for (const t of this.teams) if (this.inConference(t.conference) && this.conference(t.conference)!.title_game) byConf.set(t.conference, [...(byConf.get(t.conference) || []), t]);
     const date = this.eventDate("conf_championships");
     for (const [conf, teams] of [...byConf].sort()) {
       let a: Team, b: Team;
@@ -2909,16 +2932,18 @@ export class Season {
         const st = this.confStandings(conf, teams);
         [a, b] = [st[0].t, st[1].t];
       }
-      this.addGame(rep, { kind: "conf_champ", date, home_id: a.id, away_id: b.id, neutral: P4.has(conf), venue: null, label: `${conf} Championship` });
+      this.addGame(rep, { kind: "conf_champ", date, home_id: a.id, away_id: b.id, neutral: this.conference(conf)!.tier === "power", venue: null, label: `${conf} Championship` });
     }
   }
 
   private crownChampions(titles: Game[], rep: DayReport): void {
     const s = this.state;
     for (const g of titles) s.conf_champs[this.team(g.home_id).conference] = this.winner(g).team_id;
-    if (titles.length === 0) {
-      const confs = new Set(this.teams.filter((t) => t.level === "fbs" && t.conference !== INDEPENDENT).map((t) => t.conference));
-      for (const c of confs) s.conf_champs[c] = this.confStandings(c, this.teams.filter((t) => t.conference === c))[0].t.id;
+    // Conferences without a title game (or every one, when the league plays none) crown their standings leader.
+    for (const c of this.conferences()) {
+      if (c.tier === "independent" || s.conf_champs[c.name] != null) continue;
+      const ts = this.teams.filter((t) => t.conference === c.name);
+      if (ts.length) s.conf_champs[c.name] = this.confStandings(c.name, ts)[0].t.id;
     }
     for (const [conf, id] of Object.entries(s.conf_champs).sort()) {
       rep.news.push(this.news(s.date, "conf_champ", `${this.team(id).school} wins the ${conf} title`, "", [id]));
@@ -2948,8 +2973,15 @@ export class Season {
     const ranking = this.poll("cfp", date, COMMITTEE_PANEL);
     rep.polls.push(ranking);
     const champs = new Set(Object.values(s.conf_champs));
-    const auto = ranking.ranks.filter((r) => champs.has(r.team_id)).slice(0, p.auto_bids).map((r) => r.team_id);
-    const field = [...auto];
+    // Conferences' guaranteed spots go to their best teams in the ranking, then the highest-ranked champions take the automatic bids.
+    const field: number[] = [];
+    for (const c of this.conferences()) {
+      if (!c.cfp_bids || c.tier === "independent") continue;
+      field.push(...ranking.ranks.filter((r) => this.team(r.team_id).conference === c.name).slice(0, c.cfp_bids).map((r) => r.team_id));
+    }
+    const auto = ranking.ranks.filter((r) => champs.has(r.team_id) && !field.includes(r.team_id)).slice(0, p.auto_bids).map((r) => r.team_id);
+    field.push(...auto);
+    field.splice(p.teams);
     for (const r of ranking.ranks) { if (field.length >= p.teams) break; if (!field.includes(r.team_id)) field.push(r.team_id); }
     // Straight seeding by the committee's ranking (the 2025 rule), with the guaranteed champions kept in.
     const order = new Map(ranking.ranks.map((r, i) => [r.team_id, i]));
@@ -2994,7 +3026,7 @@ export class Season {
       .sort((a, b) => (rank.get(a.id) ?? 99) - (rank.get(b.id) ?? 99) || pct(b.id) - pct(a.id) ||
         (s.power[b.id] ?? 0) - (s.power[a.id] ?? 0) || a.id - b.id);
     const played = new Set(s.games.filter((g) => g.kind === "regular").map((g) => (g.home_id < g.away_id ? `${g.home_id}-${g.away_id}` : `${g.away_id}-${g.home_id}`)));
-    const bowls = [...NY6.filter((b) => !usedByPlayoff.has(b.name)), ...BOWLS].map((bowl) => ({ bowl, date: bowlDate(bowl, s.year) }));
+    const bowls = this.bowlSlate().filter((b) => !usedByPlayoff.has(b.name)).map((bowl) => ({ bowl, date: bowlDate(bowl, s.year) }));
     const picks = selectBowls(bowls, pool, played);
     for (const pk of picks) {
       const g = this.addGame(rep, { kind: "bowl", date: pk.date, home_id: pk.home, away_id: pk.away, neutral: true, venue: pk.bowl.venue, label: pk.bowl.name });

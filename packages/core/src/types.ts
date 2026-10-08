@@ -18,6 +18,8 @@ export interface Team {
   level: Level; color: string; alt_color: string; logo: string | null; logo_dark: string | null; venue: Venue;
   /** 0-100 brand pull with poll voters (2021-25 wins and 2022-26 recruiting). */
   prestige: number;
+  /** Set from the league's conferences: a power program (absent = the real power conferences and Notre Dame). */
+  power?: boolean;
 }
 
 export interface Conference { id: number | null; name: string; short: string; abbr: string | null; level: string | null }

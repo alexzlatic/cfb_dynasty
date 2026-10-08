@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, subscribe, type LeagueSummary, type Team } from "../api.ts";
+import { api, subscribe, type ConferenceSetup, type LeagueSummary, type Team } from "../api.ts";
+import { ConferenceEditor, sortConfs } from "./Conferences.tsx";
 import { go } from "../router.ts";
 import { Logo, fmtDate } from "../util.tsx";
 
@@ -74,19 +75,35 @@ export function NewLeague() {
   const [mode, setMode] = useState<"real" | "fresh">("real");
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
-  useEffect(() => { api.seedTeams().then(setTeams); api.seedCoaches().then(setCoaches).catch(() => {}); }, []);
+  const [real, setReal] = useState<Awaited<ReturnType<typeof api.seedConferences>> | null>(null);
+  const [custom, setCustom] = useState<ConferenceSetup | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.seedTeams().then(setTeams); api.seedCoaches().then(setCoaches).catch(() => {});
+    api.seedConferences().then(setReal).catch(() => {});
+  }, []);
+  // Schools grouped by conference: the real ones, or yours while you edit them.
   const byConf = useMemo(() => {
+    const byId = new Map(teams.map((t) => [t.id, t]));
+    const confs = custom?.conferences ?? real?.conferences;
+    const match = (t: Team) => !q || t.school.toLowerCase().includes(q.toLowerCase());
+    if (confs) return sortConfs(confs, byId).map((c) => [c.name, c.members.map((id) => byId.get(id)).filter((t): t is Team => !!t && match(t))] as [string, Team[]]).filter(([, ts]) => ts.length);
     const m = new Map<string, Team[]>();
-    for (const t of teams) if (!q || t.school.toLowerCase().includes(q.toLowerCase())) m.set(t.conference, [...(m.get(t.conference) || []), t]);
+    for (const t of teams) if (match(t)) m.set(t.conference, [...(m.get(t.conference) || []), t]);
     return [...m].sort((a, b) => b[1].reduce((s, t) => s + t.prestige, 0) / b[1].length - a[1].reduce((s, t) => s + t.prestige, 0) / a[1].length);
-  }, [teams, q]);
+  }, [teams, q, custom, real]);
   const chosen = teams.find((t) => t.id === pick);
   const create = async () => {
     setBusy(true);
     const [f, n] = format.split("-");
     const playoff = f === "playoff" ? { format: "playoff", teams: Number(n), byes: n === "12" ? 4 : n === "24" ? 8 : 0, auto_bids: Number(n) >= 12 ? 5 : 0 } : { format: f };
-    const { id } = await api.createLeague(name, pick, { playoff } as never, mode === "real" ? { mode } : { mode, first, last });
-    go("l", id, "home");
+    try {
+      const { id } = await api.createLeague(name, pick, { playoff } as never, mode === "real" ? { mode } : { mode, first, last }, custom);
+      go("l", id, "home");
+    } catch (e) {
+      setErr((e as Error).message);
+      setBusy(false);
+    }
   };
   return (
     <div className="page">
@@ -109,9 +126,15 @@ export function NewLeague() {
           <label><input type="radio" checked={mode === "fresh"} onChange={() => setMode("fresh")} /> Start fresh under your own name, an unknown</label>
           {mode === "fresh" && <div className="names"><input placeholder="First name" value={first} onChange={(e) => setFirst(e.target.value)} /><input placeholder="Last name" value={last} onChange={(e) => setLast(e.target.value)} /></div>}
         </div>
+        <label>Conferences <select value={custom ? "custom" : "real"} disabled={!real} onChange={(e) => setCustom(e.target.value === "custom" && real ? { conferences: structuredClone(real.conferences), tie_ins: structuredClone(real.tie_ins) } : null)}>
+          <option value="real">Real 2026 conferences</option>
+          <option value="custom">Custom conferences</option>
+        </select></label>
         <label>Find a school <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" /></label>
         <button className="primary" disabled={busy || !pick || (mode === "fresh" && !last.trim())} onClick={create}>{chosen ? `Start as ${chosen.school}` : "Pick a team"}</button>
       </div>
+      {err && <p className="warn">{err}</p>}
+      {custom && real && <ConferenceEditor teams={teams} value={custom} onChange={setCustom} bowls={real.bowls} cap={real.pcsa_cap} />}
       {byConf.map(([conf, ts]) => (
         <section key={conf} className="confpick">
           <h3>{conf}</h3>

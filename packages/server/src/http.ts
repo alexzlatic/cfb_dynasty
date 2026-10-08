@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
+import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
 
@@ -61,6 +62,11 @@ export function startServer(opts: ServerOptions, port: number): Server {
       return { ok: true };
     }
     if (p[0] === "seed" && p[1] === "teams") return manager.seed().teams.filter((t) => t.level === "fbs");
+    if (p[0] === "seed" && p[1] === "conferences") {
+      const sd = manager.seed();
+      const conferences = realConferences(sd.teams, sd.schedule);
+      return { conferences, tie_ins: tieInsFor(conferences), bowls: ALL_BOWLS.map((b) => ({ name: b.name, ny6: NY6.includes(b), sides: b.sides })), pcsa_cap: PCSA_CAP };
+    }
     if (p[0] === "seed" && p[1] === "coaches") {
       return Object.fromEntries(manager.seed().coaches.filter((c) => c.role === "HC").map((c) => [c.team_id, { first: c.first, last: c.last, career: c.career }]));
     }
@@ -68,7 +74,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
     if (p.length === 1) {
       if (req.method === "POST") {
         const b = await body(req);
-        const lg = manager.create({ name: String(b.name || "My Dynasty"), user_team_id: b.team_id ?? null, seed: b.seed, settings: b.settings, career: b.career });
+        const lg = manager.create({ name: String(b.name || "My Dynasty"), user_team_id: b.team_id ?? null, seed: b.seed, settings: b.settings, career: b.career, conferences: b.conferences ?? null });
         return { id: lg.id };
       }
       return manager.list();
@@ -349,6 +355,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return { game: gameRow(g), detail, defenders };
       }
       case route === "standings": return lg.standings();
+      case route === "conferences": return { conferences: lg.season.conferences(), tie_ins: lg.season.state.tie_ins, champs: lg.season.state.conf_champs };
       case route === "polls": return s.polls.map((x) => ({ ...x, ranks: x.ranks.slice(0, 25) }));
       case route === "news": {
         const kind = url.searchParams.get("kind"), author = url.searchParams.get("author"), team = url.searchParams.get("team");
