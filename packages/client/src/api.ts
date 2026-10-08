@@ -9,8 +9,8 @@ export type LiveResult = LiveView & { since: number; result?: Game };
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
-/** Your staff's read on one of your players: development beyond what was expected so far, and his traits. */
-export interface StaffPlayer { pid: number; growth: number; expected: number; leadership: number; adaptability: number }
+/** Your staff's read on one of your players: development beyond what was expected so far, his traits and his fit in the system (SDs; null for specialists). */
+export interface StaffPlayer { pid: number; growth: number; expected: number; leadership: number; adaptability: number; fit: number | null }
 export type UnitRead = { development: number; fit: number; chemistry: number };
 export interface DevelopmentView {
   team_id: number | null; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
@@ -172,7 +172,7 @@ export const api = {
   team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
     players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[]; personas: Record<number, string> }>(`/api/leagues/${id}/teams/${tid}`),
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
-    gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
+    gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
     season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
     potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),

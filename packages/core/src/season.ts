@@ -1617,10 +1617,15 @@ export class Season {
     })) as Record<Unit, { development: number; fit: number; chemistry: number }>;
     // Traits read like a scout's grade: to the nearest 5, sharper the longer the staff has had him.
     const trait = (x: number) => Math.round(Math.max(1, Math.min(99, x + (1 - known) * 15 * rng.gauss(0, 1))) / 5) * 5;
+    // Each player's fit in the coaches' system (adaptable players shrug off a poor one), from its own stream so
+    // adding it left the other reads where they were. Kickers and snappers have no system to fit.
+    const frng = new Rng(mixSeed(s.seed, s.year, teamId, "staff-fit", week));
     const players = this.roster(teamId).map((p) => {
       const hp = hiddenPlayer(s.seed, s.year, p);
+      const f = hp.fit < 0 ? hp.fit * (1 - 0.6 * hp.adaptability / 99) : hp.fit;
+      const fit = unitOf(p.pos) ? Math.round((f + (1 - known) * 1.2 * frng.gauss(0, 1)) * 10) / 10 : null;
       return { pid: p.id, growth: blur(h.growth.get(p.id) ?? 0, 3), expected: Math.round(hp.expected * progress(s.year, date) * 10) / 10,
-        leadership: trait(hp.leadership), adaptability: trait(hp.adaptability) };
+        leadership: trait(hp.leadership), adaptability: trait(hp.adaptability), fit };
     });
     return { known, units, players };
   }

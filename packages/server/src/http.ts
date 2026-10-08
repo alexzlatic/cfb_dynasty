@@ -313,7 +313,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const mine = id === s.user_team_id;
         const gp = Object.fromEntries(S.roster(id).map((pl) => [pl.id, s.player_stats?.[pl.id]?.gp ?? 0]));
         return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries,
-          gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES };
+          gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES,
+          // Your staff's read on how each of your players fits the coaches' system; nobody else's is sent.
+          fit: mine ? Object.fromEntries((S.staffView(id)?.players ?? []).filter((x) => x.fit != null).map((x) => [x.pid, x.fit])) : {} };
       }
       case p[2] === "players" && p.length === 4: {
         const pl = S.playerById.get(Number(p[3]));

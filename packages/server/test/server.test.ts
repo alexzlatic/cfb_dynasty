@@ -189,6 +189,10 @@ describe("depth charts", () => {
     const d = await get(`/api/leagues/${id}/teams/2509/depth`);
     expect(d.players.length).toBeGreaterThan(80);
     expect(d.depth.QB.length).toBeGreaterThan(1);
+    // Your staff's read of each player's scheme fit: yours only, and none for specialists.
+    expect(typeof d.fit[d.depth.QB[0]]).toBe("number");
+    expect(d.fit[d.depth.K[0]]).toBeUndefined();
+    expect((await get(`/api/leagues/${id}/teams/158/depth`)).fit).toEqual({});
     const lg = manager.get(id);
     const before = lg.season.teamRatings(2509)!;
     // Start the backup QB.
