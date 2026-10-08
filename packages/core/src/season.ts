@@ -479,33 +479,37 @@ export class Season {
    */
   weeklyMorale(): void {
     const s = this.state;
-    const pm = { ...s.player_morale };
+    const pm = (s.player_morale ??= {});
     const raw = new Map<number, Record<Unit, number>>();
+    const hurt = new Set(s.injuries!.filter((i) => i.back > s.date).map((i) => i.pid));
+    // Once a team's season is over its players' morale holds (and its chemistry no longer matters) until next year.
+    const playing = new Set(s.games.filter((g) => g.status !== "final").flatMap((g) => [g.home_id, g.away_id]));
+    const done = !!s.team_mood && s.games.some((g) => g.status === "final");
+    const frozen: Record<number, Record<Unit, number>> = {};
     for (const t of this.teams) {
       const roster = this.roster(t.id);
       if (t.level !== "fbs" || !roster.length || !s.pools?.[t.id]) continue;
+      if (done && !playing.has(t.id)) { if (s.team_mood![t.id]) frozen[t.id] = s.team_mood![t.id]; continue; }
       const depth = this.depthChart(t.id);
       const starters = new Set(Object.values(depth).map((ids) => ids[0]).filter((x) => x != null));
-      const hurt = new Set(this.injured(t.id).map((i) => i.pid));
       // A player expects to start when his value ranks among his position's starting jobs.
       const jobs = new Map<string, number>();
       for (const id of starters) { const p = this.playerById.get(id); if (p) jobs.set(p.pos, (jobs.get(p.pos) ?? 0) + 1); }
-      const value = new Map(roster.map((p) => [p.id, playerValue(p)]));
+      const byPos = new Map<string, RatedPlayer[]>();
+      for (const p of roster) { const g = byPos.get(p.pos); if (g) g.push(p); else byPos.set(p.pos, [p]); }
       const expects = new Set<number>();
-      for (const [pos, n] of jobs) roster.filter((p) => p.pos === pos).sort((a, b) => value.get(b.id)! - value.get(a.id)! || a.id - b.id).slice(0, n).forEach((p) => expects.add(p.id));
-      const { mood, room } = moods(roster.map((p) => ({ id: p.id, pos: p.pos, unit: unitOf(p.pos), value: value.get(p.id)!, pay: this.pay(p.id),
+      for (const [pos, n] of jobs) byPos.get(pos)?.sort((a, b) => this.value(b.id) - this.value(a.id) || a.id - b.id).slice(0, n).forEach((p) => expects.add(p.id));
+      const { mood, room } = moods(roster.map((p) => ({ id: p.id, pos: p.pos, unit: unitOf(p.pos), value: this.value(p.id), pay: this.pay(p.id),
         starter: starters.has(p.id), expects_start: expects.has(p.id) && !hurt.has(p.id) })));
       for (const [id, m] of mood) pm[id] = Math.round((0.7 * (pm[id] ?? 0) + 0.3 * m) * 100) / 100 + 0;
-      const field = lineup(depth, this.playerById).slot;
-      const unit = (slots: readonly string[]) => slots.map((k) => field[k as keyof typeof field]?.id).filter((x): x is number => x != null).map((id) => pm[id] ?? 0);
+      const unit = (slots: readonly string[]) => slots.map((k) => depth[k as keyof DepthChart]?.[0]).filter((x): x is number => x != null).map((id) => pm[id] ?? 0);
       raw.set(t.id, { off: unitMood(unit(OFFENSE_FIELD), room.off), def: unitMood(unit(DEFENSE_FIELD), room.def) });
     }
     // Against the rest of the country, so the scouted view stays unbiased.
     const avg = (u: Unit) => [...raw.values()].reduce((a, x) => a + x[u], 0) / Math.max(1, raw.size);
     const ao = avg("off"), ad = avg("def");
-    const tm: Record<number, Record<Unit, number>> = {};
+    const tm: Record<number, Record<Unit, number>> = { ...frozen };
     for (const [id, x] of raw) tm[id] = { off: Math.round((x.off - ao) * 100) / 100 + 0, def: Math.round((x.def - ad) * 100) / 100 + 0 };
-    s.player_morale = pm;
     s.team_mood = tm;
   }
 
@@ -539,9 +543,13 @@ export class Season {
   expectedCrowd(g: Game, price = this.ticketPrice(g)): number {
     const s = this.state, b = s.budgets?.[g.home_id];
     if (!b) return 0;
-    const r = records(s.games.filter((x) => x.status === "final"), this.teams).get(g.home_id);
-    const n = r ? r.w + r.l : 0;
-    return crowd(b, { price, winPct: n ? r!.w / n : null, ranked: this.rankOf(g.home_id) != null, oppRanked: this.rankOf(g.away_id) != null,
+    let w = 0, n = 0;
+    for (const x of s.games) {
+      if (x.status !== "final" || (x.home_id !== g.home_id && x.away_id !== g.home_id)) continue;
+      n++;
+      if ((x.home_id === g.home_id) === (x.home_score! > x.away_score!)) w++;
+    }
+    return crowd(b, { price, winPct: n ? w / n : null, ranked: this.rankOf(g.home_id) != null, oppRanked: this.rankOf(g.away_id) != null,
       oppFcs: this.teamById.get(g.away_id)?.level === "fcs", prestige: this.team(g.home_id).prestige ?? 0 });
   }
 
@@ -604,10 +612,12 @@ export class Season {
     return { approved: true, reason };
   }
 
+  private values = new Map<number, number>();
   /** A player's market value this year. */
   value(pid: number): number {
-    const p = this.playerById.get(pid);
-    return p ? playerValue(p) : 0;
+    let v = this.values.get(pid);
+    if (v == null) { const p = this.playerById.get(pid); v = p ? playerValue(p) : 0; this.values.set(pid, v); }
+    return v;
   }
 
   // ---- true vs scouted ratings ------------------------------------------------------------------
