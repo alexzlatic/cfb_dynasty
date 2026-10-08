@@ -173,8 +173,22 @@ describe("live games", () => {
     const made = await post("/api/leagues", { name: "Live", team_id: 158, seed: 6 });
     expect(made.error).toBeUndefined();
     const id = made.id;
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_game_plan", payload: { run_pass: 9 } })).error).toMatch(/run_pass/);
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_game_plan", payload: { run_pass: -1, blitz: 1, emphasis: { outside_run: 1 } } })).error).toBeUndefined();
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_practice", payload: [
+      { intensity: "hard", focus: "offense" }, { intensity: "hard", focus: "defense" }, { intensity: "normal", focus: "situations" }, { intensity: "light", focus: "opponent" }] })).error).toBeUndefined();
     await post(`/api/leagues/${id}/actions`, { type: "sim", payload: { kind: "my_next_game" } });
+    const plan = await get(`/api/leagues/${id}/plan`);
+    expect(plan.plan.run_pass).toBe(-1);
+    expect(plan.scout.team_id).toBeGreaterThan(0);
+    expect(plan.edge.offense).toBeGreaterThan(0);
     let v = await post(`/api/leagues/${id}/live/start`, { mode: { offense: "me", defense: "coordinator" } });
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_game_plan", payload: {} })).error).toMatch(/live game/);
+    const qb = v.sideline.find((x: any) => x.slot === "QB");
+    const backup = qb.options.find((o: any) => o.id !== qb.on);
+    const subbed = await post(`/api/leagues/${id}/live/sub`, { slot: "QB", pid: backup.id });
+    expect(subbed.error).toBeUndefined();
+    expect(subbed.sideline.find((x: any) => x.slot === "QB").options[0].id).toBe(backup.id);
     expect(v.stop).not.toBeNull();
     expect((await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 158, depth: null } })).error).toMatch(/live game/);
     let since = 0, n = 0;

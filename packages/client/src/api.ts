@@ -1,5 +1,6 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall } from "@cfb/core";
-export type { LiveView, LiveMode, UserCall };
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury } from "@cfb/core";
+import type { TeamRatings, UnitRates } from "@cfb/engine";
+export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan };
 export type LiveResult = LiveView & { since: number; result?: Game };
 
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
@@ -18,6 +19,14 @@ export type DepthChart = Record<string, number[]>;
 export type { Injury } from "@cfb/core";
 import type { Injury } from "@cfb/core";
 export type PlayerLine = Record<string, number>;
+
+export interface PlanInfo {
+  plan: GamePlan; practice: PracticePlan; prep: Prep | null; edge: PrepEdge; next_game: GameRow | null; league: UnitRates;
+  scout: {
+    team_id: number; record: { w: number; l: number } | null; rank: number | null; power: number; last: GameRow[]; injuries: CoreInjury[];
+    ratings: Pick<TeamRatings, "offense" | "defense" | "pass_rate" | "plays_per_game" | "aggressiveness"> | null;
+  } | null;
+}
 
 export interface LeagueSummary { id: string; name: string; date: string; user_team_id: number | null; played_at: number }
 
@@ -53,6 +62,8 @@ export const api = {
   liveStart: (id: string, mode: Partial<LiveMode> = {}) => req<LiveResult>(`/api/leagues/${id}/live/start`, { method: "POST", body: JSON.stringify({ mode }) }),
   liveCall: (id: string, call: UserCall, since: number, to_end = false) => req<LiveResult>(`/api/leagues/${id}/live/call`, { method: "POST", body: JSON.stringify({ call, since, to_end }) }),
   liveMode: (id: string, mode: Partial<LiveMode>) => req<LiveResult>(`/api/leagues/${id}/live/mode`, { method: "POST", body: JSON.stringify({ mode }) }),
+  liveSub: (id: string, slot: string, pid: number) => req<LiveResult>(`/api/leagues/${id}/live/sub`, { method: "POST", body: JSON.stringify({ slot, pid }) }),
+  plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
   liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),
   act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),
 };

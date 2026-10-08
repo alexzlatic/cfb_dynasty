@@ -188,6 +188,20 @@ export function LiveScreen() {
             </tbody></table>
             {!view.final && <p><button disabled={busy} onClick={() => confirm("Hand the rest of the game to your coordinators?") && call(null, true)}>Sim to the end</button></p>}
           </Panel>
+          {view.adjustments.length > 0 && (
+            <Panel title="Coordinator adjustments">
+              <ul className="adjust">
+                {view.adjustments.slice(0, 6).map((a) => (
+                  <li key={a.side + a.call}>
+                    <span className="muted small">{team(a.team_id)?.abbr}</span>{" "}
+                    {a.call === "load_box" || a.call === "coverage" ? a.label : `${a.more ? "More" : "Less"} ${a.label.toLowerCase()}`}
+                    <span className="muted small"> · {a.call === "load_box" ? `their runs ${Math.round(100 * a.success)}% success in ${a.plays}` : a.call === "coverage" ? `their passes ${Math.round(100 * a.success)}% success in ${a.plays}` : `${Math.round(100 * a.success)}% success in ${a.plays} plays`}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          )}
+          {!view.final && view.sideline.length > 0 && <Sideline view={view} busy={busy || revealing || !st} onSub={(slot, pid) => act(() => api.liveSub(id, slot, pid))} />}
           {(["offense_calls", "defense_calls"] as const).map((k) => view[k].length > 0 && (
             <Panel key={k} title={k === "offense_calls" ? "Offensive calls this game" : "Defensive calls this game"}>
               <table className="grid tight"><thead><tr><th>Call</th><th className="num">Plays</th><th className="num">{k === "offense_calls" ? "Yds/play" : "Yds allowed"}</th><th className="num">{k === "offense_calls" ? "Success" : "Their success"}</th></tr></thead><tbody>
@@ -200,5 +214,47 @@ export function LiveScreen() {
         </div>
       </div>
     </div>
+  );
+}
+
+const SLOT_SHORT: Record<string, string> = {
+  QB: "QB", RB1: "RB", WR_X: "WR (X)", WR_Z: "WR (Z)", WR_SLOT: "Slot", TE1: "TE", LT: "LT", LG: "LG", C: "C", RG: "RG", RT: "RT",
+  DE1: "DE", DE2: "DE", DT1: "DT", DT2: "DT", LB1: "LB", LB2: "LB", CB1: "CB", CB2: "CB", NB: "Nickel", S1: "S", S2: "S",
+};
+
+/** Your players on the field and who could come in; a change holds for the rest of the game. */
+function Sideline({ view, busy, onSub }: { view: LiveResult; busy: boolean; onSub: (slot: string, pid: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const rows = view.sideline;
+  const half = (off: boolean) => rows.filter((r) => (["QB", "RB1", "WR_X", "WR_Z", "WR_SLOT", "TE1", "LT", "LG", "C", "RG", "RT"].includes(r.slot)) === off);
+  const energy = (e: number) => (e >= 0.95 ? "" : ` · ${Math.round(e * 100)}% fresh`);
+  return (
+    <Panel title="Lineup" right={<button className="link" onClick={() => setOpen(!open)}>{open ? "Hide" : "Make a change"}</button>}>
+      {!open ? (
+        <p className="small muted">QB {rows.find((r) => r.slot === "QB")?.options.find((o) => o.id === rows.find((r) => r.slot === "QB")?.on)?.name ?? "-"}.
+          Sub anyone in at a stoppage; tired players also rotate on their own.</p>
+      ) : (
+        <>
+          {busy && <p className="small muted">Changes can be made when the game stops for your call.</p>}
+          {[true, false].map((off) => (
+            <table key={String(off)} className="grid tight sideline"><tbody>
+              {half(off).map((r) => (
+                <tr key={r.slot}>
+                  <td className="nowrap">{SLOT_SHORT[r.slot] ?? r.slot}</td>
+                  <td>
+                    <select value={r.on ?? ""} disabled={busy} onChange={(e) => onSub(r.slot, Number(e.target.value))}>
+                      {r.on == null && <option value="">(nobody)</option>}
+                      {r.options.map((o) => (
+                        <option key={o.id} value={o.id} disabled={o.hurt}>{o.name} · {o.pos} {o.overall}{o.hurt ? " · hurt" : energy(o.energy)}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody></table>
+          ))}
+        </>
+      )}
+    </Panel>
   );
 }

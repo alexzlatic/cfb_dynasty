@@ -1,4 +1,5 @@
-import { LEAGUE, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type Rng, type SnapMod } from "@cfb/engine";
+import { LEAGUE, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type PlayRecord, type Rng, type SnapMod } from "@cfb/engine";
+import { DEFAULT_PLAN, PREP_UNIT, type GamePlan, type PrepEdge } from "./plan.ts";
 
 /**
  * Play calls (M1 plan, "Play calling"). Each offensive call against each defensive call moves the
@@ -151,15 +152,57 @@ const pick = <T,>(rows: [T, number][], u: number): T => {
 
 export interface CallPair { side: "home" | "away"; off: OffCall; def: DefCall; offByUser: boolean; defByUser: boolean }
 
+/** Did the snap keep the offense on schedule: 40% of the distance on 1st down, 60% on 2nd, all of it on 3rd and 4th. */
+export const successful = (p: PlayRecord) => (p.down === 1 ? p.yards >= 0.4 * p.distance : p.down === 2 ? p.yards >= 0.6 * p.distance : p.yards >= p.distance);
+
+/** How far the plan and the game so far move the coordinators' mix (log scale). */
+const EMPHASIS = 0.7;
+const LEAN = 0.07;
+const LEARN = 3;
+const LEARN_CAP = 0.6;
+/** A call's success rate is shrunk toward the side's overall rate as if it had this many average snaps. */
+const LEARN_PRIOR = 4;
+
+/** What one side's coordinators have seen work this game. */
+interface Learned {
+  off: Map<OffCall, [n: number, ok: number]>;
+  /** Their offense's run and pass snaps against this side's defense. */
+  vsRun: [number, number];
+  vsPass: [number, number];
+}
+const learned = (): Learned => ({ off: new Map(), vsRun: [0, 0], vsPass: [0, 0] });
+const clamp = (x: number, c: number) => Math.max(-c, Math.min(c, x));
+
+export interface CallerOptions {
+  /** Each side's game plan (default: no plan, the coordinators' usual mix). */
+  plans?: Partial<Record<"home" | "away", GamePlan>>;
+  /** Each side's practice edge for this game. */
+  prep?: Partial<Record<"home" | "away", PrepEdge>>;
+}
+
+/** Where a coordinator has moved off his usual mix, for the live screen. */
+export interface Adjustment { side: "home" | "away"; call: string; label: string; more: boolean; plays: number; success: number }
+
 /**
  * Drives the calls for a game with play calling: answers the user's decisions (from a list or, in a
  * live game, one at a time) and lets the coordinators call the rest. Every scrimmage call draws two
  * numbers from its own stream whether or not anyone uses them, so the stream never depends on who called.
+ *
+ * The coordinators call from their side's game plan and adjust, within bounds, to what has worked
+ * this game: more of the calls that are moving the ball, and on defense, more run fits or more
+ * coverage depending on which is hurting them.
  */
 export class Caller {
   /** The calls on the last scrimmage snap. */
   last: CallPair | null = null;
-  constructor(readonly userSide: "home" | "away" | null, private rng: Rng) {}
+  /** Every scrimmage snap with calls, and the play that came of it. */
+  readonly history: { pair: CallPair; play: PlayRecord; success: boolean }[] = [];
+  private learned = { home: learned(), away: learned() };
+  private seen = 0;
+
+  constructor(readonly userSide: "home" | "away" | null, private rng: Rng, private opts: CallerOptions = {}) {}
+
+  private plan(side: "home" | "away"): GamePlan { return this.opts.plans?.[side] ?? DEFAULT_PLAN; }
 
   /** Whether this decision belongs to the user (their offense, their defense on the other team's snap, their kicks and tries). */
   isUserTurn(req: DecisionRequest): boolean {
@@ -167,38 +210,147 @@ export class Caller {
     return req.kind === "playCall" || req.side === this.userSide;
   }
 
+  /** Settle the last snap: who called what, how it went, and what each side's coordinators learn from it. */
+  observe(game: GameSim): void {
+    const last = this.last;
+    if (!last || game.plays.length === this.seen) return;
+    const p = game.plays.slice(this.seen).find((x) => x.play_type === "RUN" || x.play_type === "PASS");
+    this.seen = game.plays.length;
+    if (!p) return;
+    this.last = null;
+    const ok = successful(p);
+    this.history.push({ pair: last, play: p, success: ok });
+    const o = this.learned[last.side], d = this.learned[last.side === "home" ? "away" : "home"];
+    const st = o.off.get(last.off) ?? [0, 0];
+    st[0]++; st[1] += +ok;
+    o.off.set(last.off, st);
+    const v = OFF.get(last.off)!.kind === "run" ? d.vsRun : d.vsPass;
+    v[0]++; v[1] += +ok;
+  }
+
+  /** Multipliers on the offense's usual mix from what is working (each call against the side's overall rate). */
+  private offLearn(side: "home" | "away"): Map<OffCall, number> {
+    const L = this.learned[side], out = new Map<OffCall, number>();
+    let n = 0, k = 0;
+    for (const [a, b] of L.off.values()) { n += a; k += b; }
+    if (!n) return out;
+    const all = (k + 2) / (n + 4);
+    for (const [c, [a, b]] of L.off) {
+      const rate = (b + LEARN_PRIOR * all) / (a + LEARN_PRIOR);
+      out.set(c, Math.exp(clamp(LEARN * (rate - all), LEARN_CAP)));
+    }
+    return out;
+  }
+
+  /** Run-fit versus coverage tilt for a defense: positive when the other team's runs work better than its passes. */
+  private defLearn(side: "home" | "away"): number {
+    const { vsRun: [rn, rk], vsPass: [pn, pk] } = this.learned[side];
+    const all = (rk + pk + 2) / (rn + pn + 4);
+    const r = (rk + LEARN_PRIOR * all) / (rn + LEARN_PRIOR), p = (pk + LEARN_PRIOR * all) / (pn + LEARN_PRIOR);
+    return clamp(LEARN * (r - p), LEARN_CAP);
+  }
+
   /** The coordinators' calls for a request (drawn before anyone answers it). */
   prepare(req: DecisionRequest, game: GameSim): { off: OffCall; def: DefCall } | null {
+    this.observe(game);
     if (req.kind !== "playCall") return null;
-    const u1 = this.rng.random(), u2 = this.rng.random();
+    let u1 = this.rng.random();
+    const u2 = this.rng.random();
     const s = req.situation;
+    const offSide = req.side, defSide = offSide === "home" ? "away" : "home";
+    const op = this.plan(offSide), dp = this.plan(defSide);
     const lead = (s.offense_home ? s.away_score - s.home_score : s.home_score - s.away_score);
     const late = !s.overtime && (s.quarter === 4 || s.quarter === 2) && s.clock <= 120;
-    const def = late && s.quarter === 4 && lead >= 9 ? pick(LATE_LEAD_MIX, u2) : pick(DEF_MIX, u2);
-    void game;
-    return { off: pick(OFF_MIX[req.suggestion], u1), def };
+    // The plan's run/pass lean turns some of the engine's calls the other way, outside the end of a half.
+    let kind = req.suggestion;
+    const lean = LEAN * op.run_pass;
+    if (lean && !late && !(s.quarter === 4 && s.clock <= 300) && kind === (lean > 0 ? "run" : "pass")) {
+      const q = Math.abs(lean);
+      if (u1 < q) { kind = lean > 0 ? "pass" : "run"; u1 = u1 / q; } else u1 = (u1 - q) / (1 - q);
+    }
+    const ol = this.offLearn(offSide);
+    const offMix = OFF_MIX[kind].map(([c, w]) => [c, w * Math.exp(EMPHASIS * (op.emphasis[c] ?? 0)) * (ol.get(c) ?? 1)] as [OffCall, number]);
+    let def: DefCall;
+    if (late && s.quarter === 4 && lead >= 9) def = pick(LATE_LEAD_MIX, u2);
+    else {
+      const tilt = this.defLearn(defSide);
+      def = pick(DEF_MIX.map(([d, w]) => {
+        let m = 1;
+        if (d === "blitz") m *= Math.exp(EMPHASIS * dp.blitz);
+        if (d === "load_box") m *= Math.exp(EMPHASIS * dp.box + tilt);
+        if (d === "cover2" || d === "cover3" || d === "man") m *= Math.exp(-tilt) * (dp.coverage === d ? 2.5 : 1);
+        return [d, w * m] as [DefCall, number];
+      }), u2);
+    }
+    return { off: pick(offMix, u1), def };
+  }
+
+  /** What the coordinator does with a decision that is not a play call (undefined = the engine's own call). */
+  coordinator(req: DecisionRequest): DecisionAnswer {
+    if (req.kind !== "twoPoint") return undefined;
+    const phil = this.plan(req.side).two_point;
+    if (phil === "standard" || req.situation.overtime) return undefined;
+    const s = req.situation;
+    const m = req.side === "home" ? s.home_score - s.away_score : s.away_score - s.home_score;
+    // Conservative coaches chase two only late in the game; aggressive ones also go for it to get ahead of the next score.
+    if (phil === "conservative") return req.suggestion && s.quarter === 4 && s.clock < 600;
+    return req.suggestion || (s.quarter >= 3 && [-8, -4, -1, 2, 6].includes(m)) || (s.quarter === 4 && m === -9);
   }
 
   /** Answer a request with the user's call (null or undefined = the coordinator's) and set the snap's odds. */
   answer(req: DecisionRequest, game: GameSim, ai: { off: OffCall; def: DefCall } | null, user: UserCall | undefined): DecisionAnswer {
     const mine = this.isUserTurn(req) && user != null;
-    if (req.kind !== "playCall") return mine ? (user as FourthDownCall | boolean) : undefined;
+    if (req.kind !== "playCall") return mine ? (user as FourthDownCall | boolean) : this.coordinator(req);
     const userOnOffense = req.side === this.userSide;
     const off = mine && userOnOffense && isOffCall(user) ? user : ai!.off;
     const def = mine && !userOnOffense && isDefCall(user) ? user : ai!.def;
-    game.snapMod = snapMod(off, def);
+    game.snapMod = this.withPrep(snapMod(off, def), req);
     this.last = { side: req.side, off, def, offByUser: off === user && userOnOffense, defByUser: def === user && !userOnOffense };
+    this.seen = game.plays.length;
     return OFF.get(off)!.kind;
   }
 
-  /** A provider that replays a game's recorded user calls in order (missing ones go to the coordinator). */
-  replay(calls: UserCall[]): DecisionProvider {
+  /** Practice: the offense's edge minus the defense's, with the situational work on 3rd and 4th down and in the red zone. */
+  private withPrep(m: SnapMod, req: DecisionRequest): SnapMod {
+    const prep = this.opts.prep;
+    if (!prep) return m;
+    const o = prep[req.side], d = prep[req.side === "home" ? "away" : "home"];
+    const s = req.situation, key = s.down >= 3 || s.yl <= 20;
+    const k = (o?.offense ?? 0) - (d?.defense ?? 0) + (key ? 1.5 * ((o?.situations ?? 0) - (d?.situations ?? 0)) : 0);
+    if (!k) return m;
+    const out: SnapMod = { ...m };
+    for (const f of FIELDS) if (PREP_UNIT[f]) out[f] = Math.round(((out[f] ?? 0) + k * PREP_UNIT[f]!) * 1000) / 1000;
+    return out;
+  }
+
+  /** Where each side's coordinators have moved off their usual mix so far, biggest first. */
+  adjustments(): Adjustment[] {
+    const out: Adjustment[] = [];
+    for (const side of ["home", "away"] as const) {
+      const L = this.learned[side];
+      for (const [c, mult] of this.offLearn(side)) {
+        if (Math.abs(Math.log(mult)) < 0.15) continue;
+        const [n, k] = L.off.get(c)!;
+        out.push({ side, call: c, label: OFF.get(c)!.label, more: mult > 1, plays: n, success: k / n });
+      }
+      const t = this.defLearn(side);
+      if (Math.abs(t) >= 0.15) {
+        const [n, k] = t > 0 ? L.vsRun : L.vsPass;
+        out.push({ side, call: t > 0 ? "load_box" : "coverage", label: t > 0 ? "Stacking the box against the run" : "Dropping more into coverage", more: true, plays: n, success: n ? k / n : 0 });
+      }
+    }
+    return out.sort((a, b) => b.plays - a.plays);
+  }
+
+  /** A provider that replays a game's recorded user calls in order (missing ones go to the coordinator). `before(i)` runs before user decision i is answered. */
+  replay(calls: UserCall[], before?: (i: number) => void): DecisionProvider {
     let i = 0;
     return (req, game) => {
       if (req.kind === "snap") return undefined;
       const ai = this.prepare(req, game);
-      const user = this.isUserTurn(req) ? calls[i++] : undefined;
-      return this.answer(req, game, ai, user);
+      if (!this.isUserTurn(req)) return this.answer(req, game, ai, undefined);
+      before?.(i);
+      return this.answer(req, game, ai, calls[i++]);
     };
   }
 }

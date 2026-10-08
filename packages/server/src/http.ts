@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { autoDepth, type Game } from "@cfb/core";
+import { autoDepth, prepEdge, records, type Game } from "@cfb/core";
+import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
 
@@ -96,6 +97,27 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return lg.liveCall(b.call ?? null, !!b.to_end, Number(b.since ?? 0));
       }
       case route === "live/mode" && req.method === "POST": return lg.liveMode((await body(req)).mode ?? {});
+      case route === "live/sub" && req.method === "POST": {
+        const b = await body(req);
+        return lg.liveSub(b.slot, Number(b.pid));
+      }
+      case route === "plan": {
+        const g = S.nextUserGame();
+        const me = s.user_team_id;
+        const oppId = g && me != null ? (g.home_id === me ? g.away_id : g.home_id) : null;
+        let scout = null;
+        if (oppId != null) {
+          const rec = records(s.games, S.teams).get(oppId);
+          const r = S.teamRatings(oppId);
+          const last = s.games.filter((x) => x.status === "final" && (x.home_id === oppId || x.away_id === oppId)).slice(-3).reverse().map(gameRow);
+          scout = {
+            team_id: oppId, record: rec ?? null, rank: S.rankOf(oppId), power: s.power[oppId], last,
+            injuries: S.injured(oppId).filter((i) => i.starter),
+            ratings: r ? { offense: r.offense, defense: r.defense, pass_rate: r.pass_rate, plays_per_game: r.plays_per_game, aggressiveness: r.aggressiveness } : null,
+          };
+        }
+        return { plan: S.gamePlan, practice: S.practicePlan, prep: s.prep ?? null, edge: prepEdge(s.prep), next_game: g ? gameRow(g) : null, scout, league: LEAGUE };
+      }
       case route === "live/leave" && req.method === "POST": lg.live = null; return { ok: true };
       case route === "teams": return S.teams;
       case p[2] === "teams" && p.length === 4: {
