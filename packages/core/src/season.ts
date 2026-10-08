@@ -376,7 +376,8 @@ export class Season {
   hidden(teamId: number, date = this.state.date): HiddenTeam | null {
     const s = this.state;
     const roster = this.roster(teamId);
-    if (!roster.length || !s.hidden_ctx) return null;
+    // FCS rosters are generated filler, with nothing true for scouts to miss; they play their ratings.
+    if (!roster.length || !s.hidden_ctx || this.teamById.get(teamId)?.level === "fcs") return null;
     const lab = teamId === s.user_team_id ? s.lab : undefined;
     const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}`;
     const c = this.hiddenCache.get(teamId);
