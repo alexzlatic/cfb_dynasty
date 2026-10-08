@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LEAGUE } from "@cfb/engine";
-import { ATTRS, autoDepth, compileTeam, lineup, loadSeed, RATES, type Pos, type RatedPlayer } from "../src/index.ts";
+import { ATTRS, autoDepth, compileTeam, lineup, loadSeed, RATES, seedDir, type Pos, type RatedPlayer } from "../src/index.ts";
 
 const seed = loadSeed();
 const byId = new Map<number, RatedPlayer>();
@@ -30,6 +30,22 @@ describe("ratings compiler", () => {
     for (const [tid, tp] of Object.entries(seed.players!)) {
       const base = seed.ratings[tid].ratings;
       const r = compileTeam(base, lineup(tp.depth, byId), tp.scheme, tp.kicking);
+      for (const k of RATES) {
+        expect(r.offense[k] / base.offense[k]).toBeCloseTo(1, 6);
+        expect(r.defense[k] / base.defense[k]).toBeCloseTo(1, 6);
+      }
+      expect(r.fg_skill).toBeCloseTo(base.fg_skill, 3);
+    }
+  });
+
+  it("the 2025 replay seed compiles to its preseason team ratings too", () => {
+    const s25 = loadSeed(seedDir(2025));
+    const ids = new Map<number, RatedPlayer>();
+    for (const t of Object.values(s25.players!)) for (const p of t.players) ids.set(p.id, p);
+    expect(Object.keys(s25.players!).length).toBe(s25.teams.length);
+    for (const [tid, tp] of Object.entries(s25.players!)) {
+      const base = s25.ratings[tid].ratings;
+      const r = compileTeam(base, lineup(tp.depth, ids), tp.scheme, tp.kicking);
       for (const k of RATES) {
         expect(r.offense[k] / base.offense[k]).toBeCloseTo(1, 6);
         expect(r.defense[k] / base.defense[k]).toBeCloseTo(1, 6);
