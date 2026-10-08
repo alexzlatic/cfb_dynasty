@@ -21,7 +21,7 @@ import {
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
-import { KNOWN_FRONTS, drawSchemes, inferFronts, inferOffense, type TeamSchemes } from "./schemes.ts";
+import { KNOWN_FRONTS, drawSchemes, fitSD, inferFronts, inferOffense, schemeRating, type TeamSchemes } from "./schemes.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -195,6 +195,7 @@ export interface DayReport {
 const CYCLE_CARRY = 0.8, CYCLE_SD = 0.5;
 /** The yearly chance a program changes head coaches (a stand-in for the carousel). */
 const COACH_CHANGE = 0.2;
+const OFF_OR_DEF = { off: new Set<string>(OFFENSE_FIELD as readonly string[]), def: new Set<string>(DEFENSE_FIELD as readonly string[]) };
 const scaleEdge = <T extends object>(e: T, k: number): T => (k === 1 ? e : Object.fromEntries(Object.entries(e).map(([x, v]) => [x, (v as number) * k])) as T);
 const gameOrder = (a: Game, b: Game) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id);
 
@@ -1563,6 +1564,35 @@ export class Season {
     return out;
   }
 
+  private fitCache = new Map<number, Map<number, number>>();
+  /**
+   * Each player's fit from his ratings in his coaches' schemes, in SDs: at his slot in the opening depth
+   * chart, or his best slot for a backup. Kickers, punters and snappers have none.
+   */
+  schemeFits(teamId: number): Map<number, number> {
+    let m = this.fitCache.get(teamId);
+    if (m) return m;
+    m = new Map();
+    const sc = this.allSchemes()[teamId];
+    const depth = this.seed.players?.[teamId]?.depth ?? {};
+    const slotOf = new Map<number, string>();
+    for (const [slot, ids] of Object.entries(depth)) if (ids?.[0] != null && !slotOf.has(ids[0])) slotOf.set(ids[0], slot);
+    for (const p of this.roster(teamId)) {
+      const u = unitOf(p.pos);
+      if (!sc || !u) continue;
+      const slot = slotOf.get(p.id) as Parameters<typeof schemeRating>[2];
+      const scheme = u === "off" ? sc.off : sc.def;
+      m.set(p.id, fitSD(p, schemeRating(p, scheme, slot && OFF_OR_DEF[u].has(slot) ? slot : undefined)));
+    }
+    this.fitCache.set(teamId, m);
+    return m;
+  }
+
+  /** A player's hidden makeup this season, with his scheme fit. */
+  hiddenOf(p: RatedPlayer): ReturnType<typeof hiddenPlayer> {
+    return hiddenPlayer(this.state.seed, this.state.year, p, this.schemeFits(p.team_id).get(p.id));
+  }
+
   teamContext(teamId: number): TeamContext {
     return this.state.hidden_ctx?.[teamId] ?? { new_coach: false, new_qb: false, continuity: false, coach: 0 };
   }
@@ -1589,7 +1619,7 @@ export class Season {
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
     const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
-      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood });
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood, schemeFit: this.schemeFits(teamId) });
     this.hiddenCache.set(teamId, { key, h });
     return h;
   }
@@ -1648,7 +1678,7 @@ export class Season {
     // Traits read like a scout's grade: to the nearest 5, sharper the longer the staff has had him.
     const trait = (x: number) => Math.round(Math.max(1, Math.min(99, x + (1 - known) * 15 * rng.gauss(0, 1))) / 5) * 5;
     const players = this.roster(teamId).map((p) => {
-      const hp = hiddenPlayer(s.seed, s.year, p);
+      const hp = this.hiddenOf(p);
       return { pid: p.id, growth: blur(h.growth.get(p.id) ?? 0, 3), expected: Math.round(hp.expected * progress(s.year, date) * 10) / 10,
         leadership: trait(hp.leadership), adaptability: trait(hp.adaptability) };
     });
@@ -1788,7 +1818,7 @@ export class Season {
       value, pay, ratio_away: away.ratio, demand: 1 + 0.4 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
       start_here, start_away: best.start,
       dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
-      fit: Math.max(-1.5, Math.min(1.5, hiddenPlayer(s.seed, s.year, p).fit)),
+      fit: Math.max(-1.5, Math.min(1.5, this.hiddenOf(p).fit)),
       win_here: winTerm(me.prestige, me.win, me.tier === 0, q), win_away: winTerm(best.tier === 0 ? 70 : best.tier === 1 ? 40 : 25, 0.55, best.tier === 0, q),
       home_here: home, home_away: homeTerm(250, false),
       morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier, tier_away: best.tier,
@@ -2714,6 +2744,7 @@ export class Season {
     // Your games are always called: by you live, or by your coordinators from your game plan.
     const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls")), {
       plans: { [userSide]: this.gamePlan }, prep: { [userSide]: scaleEdge(prepEdge(this.prepFor(g.id)), this.prepFactor()) },
+      schemes: { home: this.allSchemes()[g.home_id], away: this.allSchemes()[g.away_id] },
     }) : null;
     if (hs && as) {
       const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")),

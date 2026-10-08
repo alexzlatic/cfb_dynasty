@@ -81,11 +81,17 @@ const DEV_W: Partial<Record<string, number>> = { QB: 3 };
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
-export function hiddenPlayer(seed: number, year: number, p: RatedPlayer): HiddenPlayer {
+/** How much of a player's fit his ratings explain (schemes.ts: his scheme rating against his overall); the rest is unseen. */
+export const FIT_FROM_RATINGS = 0.5;
+
+/** `schemeFit`: his fit from his ratings in his coaches' schemes, in SDs (absent: all of his fit is unseen). */
+export function hiddenPlayer(seed: number, year: number, p: RatedPlayer, schemeFit?: number): HiddenPlayer {
   const rng = new Rng(mixSeed(seed, year, p.id, "hidden"));
   const g = () => rng.gauss(0, 1);
   const trait = () => Math.round(clamp(50 + 15 * g(), 1, 99));
-  return { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  const out = { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  if (schemeFit != null) out.fit = FIT_FROM_RATINGS * schemeFit + Math.sqrt(1 - FIT_FROM_RATINGS ** 2) * out.fit;
+  return out;
 }
 
 /**
@@ -115,10 +121,12 @@ export function hiddenTeam(o: {
   roster: RatedPlayer[]; starters: Record<Unit, RatedPlayer[]>; morale?: number; lab?: Record<number, LabPlan>;
   /** Chemistry from players' morale about pay and playing time, in points by unit (morale.ts). */
   mood?: Record<Unit, number>;
+  /** Each player's fit from his ratings in the coaches' schemes, in SDs (see hiddenPlayer). */
+  schemeFit?: Map<number, number>;
 }): HiddenTeam {
   const { seed, year, ctx } = o;
   const phi = progress(year, o.date);
-  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p)]));
+  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p, o.schemeFit?.get(p.id))]));
   const rng = new Rng(mixSeed(seed, year, o.team_id, "hidden-team"));
   const fit = { off: 0, def: 0 }, chem = { off: 0, def: 0 };
   const labDays = (pid: number) => {

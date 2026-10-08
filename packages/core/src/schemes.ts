@@ -46,11 +46,10 @@ export interface SchemeDef {
   /** Values for every slot a position plays, unless the slot sets its own. */
   values: Partial<Record<Pos, Record<string, number>>>;
   /**
-   * Tendencies: multipliers on the coordinators' usual mix of calls (calls.ts OFF_MIX / DEF_MIX) and a lean
-   * on run versus pass (-1 run to 1 pass, on top of the engine's own call).
+   * Tendencies: multipliers on the coordinators' usual mix of calls (calls.ts OFF_MIX / DEF_MIX). How often
+   * a team runs or passes comes from its real play-calling (the engine's pass tendencies), not the scheme.
    */
   mix: Partial<Record<string, number>>;
-  run_pass: number;
 }
 
 const DEF_SLOT_ROLE = (s: Slot): SlotRole => ({ label: SLOT_LABELS[s], pos: SLOT_POS[s] });
@@ -66,7 +65,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       TE: { route: 1.4, hands: 1.2, speed: 1.1, pass_block: 0.8, run_block: 0.4 },
       OL: { pass_block: 1.5, run_block: 0.5, discipline: 0.6 },
     },
-    mix: { quick: 1.35, intermediate: 1.1, screen: 1.1, deep: 1.05, play_action: 0.6, inside_run: 1.1, outside_run: 0.9, qb_run: 0.7 }, run_pass: 0.8,
+    mix: { quick: 1.35, intermediate: 1.1, screen: 1.1, deep: 1.05, play_action: 0.6, inside_run: 1.1, outside_run: 0.9, qb_run: 0.7 },
   },
   spread_rpo: {
     id: "spread_rpo", side: "off", name: "Spread RPO", blurb: "Tempo from the gun with run-pass options; the quarterback's legs keep the box honest.",
@@ -78,7 +77,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       TE: { route: 1.1, hands: 1, speed: 1, run_block: 0.8, pass_block: 0.6 },
       OL: { run_block: 1.1, pass_block: 1, discipline: 0.8 },
     },
-    mix: { qb_run: 1.5, outside_run: 1.15, screen: 1.25, quick: 1.1, play_action: 0.9, inside_run: 0.9, deep: 0.95 }, run_pass: 0,
+    mix: { qb_run: 1.5, outside_run: 1.15, screen: 1.25, quick: 1.1, play_action: 0.9, inside_run: 0.9, deep: 0.95 },
   },
   pro_style: {
     id: "pro_style", side: "off", name: "Pro-style", blurb: "Under center and in the gun, tight ends and play-action; the quarterback wins from the pocket.",
@@ -90,7 +89,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       TE: { run_block: 1.2, route: 1.1, hands: 1, pass_block: 1, speed: 0.7 },
       OL: { run_block: 1, pass_block: 1.1, discipline: 0.9 },
     },
-    mix: { play_action: 1.4, intermediate: 1.15, deep: 1.1, quick: 0.85, screen: 0.8, inside_run: 1.1, qb_run: 0.4 }, run_pass: 0,
+    mix: { play_action: 1.4, intermediate: 1.15, deep: 1.1, quick: 0.85, screen: 0.8, inside_run: 1.1, qb_run: 0.4 },
   },
   power_run: {
     id: "power_run", side: "off", name: "Power run", blurb: "Two tight ends, gap runs and play-action off them; win up front and shorten the game.",
@@ -102,7 +101,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       TE: { run_block: 1.6, pass_block: 1.1, hands: 0.8, route: 0.7, speed: 0.4 },
       OL: { run_block: 1.6, pass_block: 0.6, discipline: 0.9 },
     },
-    mix: { inside_run: 1.35, outside_run: 0.85, qb_run: 0.4, play_action: 1.5, deep: 1.1, quick: 0.8, screen: 0.7, intermediate: 0.9 }, run_pass: -0.8,
+    mix: { inside_run: 1.35, outside_run: 0.85, qb_run: 0.4, play_action: 1.5, deep: 1.1, quick: 0.8, screen: 0.7, intermediate: 0.9 },
   },
   option: {
     id: "option", side: "off", name: "Option", blurb: "Flexbone or spread option: the quarterback reads the defense on every run and throws only to punish it.",
@@ -117,7 +116,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       TE: { run_block: 1.6, pass_block: 0.5, route: 0.5, hands: 0.5, speed: 0.6 },
       OL: { run_block: 1.7, pass_block: 0.4, discipline: 1 },
     },
-    mix: { qb_run: 2.6, outside_run: 1.2, inside_run: 0.9, deep: 1.6, play_action: 1.4, quick: 0.55, screen: 0.4, intermediate: 0.7 }, run_pass: -1,
+    mix: { qb_run: 2.6, outside_run: 1.2, inside_run: 0.9, deep: 1.6, play_action: 1.4, quick: 0.55, screen: 0.4, intermediate: 0.7 },
   },
   "4-2-5": {
     id: "4-2-5", side: "def", name: "4-2-5 nickel", blurb: "Four down linemen, two linebackers and a nickel back on every down; built to defend the spread.",
@@ -128,7 +127,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       S: { zone: 1.1, range: 1.1, ball: 0.9, tackle: 0.9, run_sup: 0.9 },
       LB: { speed: 1.2, coverage: 1.1, run_fit: 1, tackle: 1, blitz: 0.7 },
     },
-    mix: { cover3: 1.15, cover2: 1.1, blitz: 0.95 }, run_pass: 0,
+    mix: { cover3: 1.15, cover2: 1.1, blitz: 0.95 },
   },
   "4-3": {
     id: "4-3", side: "def", name: "4-3", blurb: "Four down linemen and three linebackers; strong against the run, with a SAM linebacker where others play a nickel.",
@@ -141,7 +140,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       DE: { run_def: 1.2, pass_rush: 1.1, shed: 0.9 },
       LB: { run_fit: 1.4, tackle: 1.3, speed: 0.9, coverage: 0.8, blitz: 0.8 },
     },
-    mix: { load_box: 1.4, base: 1.15, cover3: 1.1, cover2: 0.85, man: 0.9 }, run_pass: 0,
+    mix: { load_box: 1.4, base: 1.15, cover3: 1.1, cover2: 0.85, man: 0.9 },
   },
   "3-4": {
     id: "3-4", side: "def", name: "3-4", blurb: "Three linemen who take on blocks and four linebackers; the outside backers rush the passer.",
@@ -153,7 +152,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       LB1: { label: "Inside linebacker (MIKE)", pos: ["LB"] }, LB2: { label: "Inside linebacker (MOE)", pos: ["LB"] },
     },
     values: { LB: { run_fit: 1.3, tackle: 1.2, blitz: 1, coverage: 0.9, speed: 0.9 } },
-    mix: { blitz: 1.35, man: 1.2, cover3: 1.05, cover2: 0.85, load_box: 1 }, run_pass: 0,
+    mix: { blitz: 1.35, man: 1.2, cover3: 1.05, cover2: 0.85, load_box: 1 },
   },
   "3-3-5": {
     id: "3-3-5", side: "def", name: "3-3-5 odd stack", blurb: "Three down linemen, three stacked linebackers and five defensive backs; speed, disguise and pressure from anywhere.",
@@ -168,7 +167,7 @@ export const SCHEMES: Record<Scheme, SchemeDef> = {
       S: { range: 1.2, zone: 1.2, ball: 1, tackle: 0.9, run_sup: 0.9 },
       DE: { pass_rush: 1.1, run_def: 1, shed: 1.1 },
     },
-    mix: { blitz: 1.45, cover3: 1.2, man: 0.9, load_box: 0.85, base: 0.9 }, run_pass: 0,
+    mix: { blitz: 1.45, cover3: 1.2, man: 0.9, load_box: 0.85, base: 0.9 },
   },
 };
 
@@ -243,6 +242,15 @@ export function schemeRating(p: RatedPlayer, scheme: Scheme, slot?: Slot): Schem
   }
   return best!;
 }
+
+/**
+ * A scheme rating's fit in SDs. Fit runs about 1.2 rating points across FBS starters; each position's
+ * average (measured across the 2026 seed's starters in their inferred schemes) is taken out, so a
+ * position whose scheme weights simply read lower than its overall weights doesn't count as a poor fit.
+ */
+const FIT_SD = 1.2;
+const FIT_CENTER: Partial<Record<Pos, number>> = { QB: 0.1, RB: 0.25, WR: 0.3, TE: 0.05, OL: -0.5, DE: 0.05, DT: 0.1, LB: -0.35, CB: 0, S: 0.1 };
+export const fitSD = (p: RatedPlayer, r: SchemeRating) => Math.max(-3, Math.min(3, (r.fit - (FIT_CENTER[p.pos] ?? 0)) / FIT_SD));
 
 export interface TeamSchemes { off: OffScheme; def: DefScheme }
 
