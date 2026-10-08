@@ -15,7 +15,8 @@ import { ATTR_LABELS, OVR_WEIGHTS, type Pos, type RatedPlayer } from "./players.
  *   - scheme fit: how the starters fit the coaches' system. New head coaches swing it most; adaptable
  *     players and good coaches raise it through camp.
  *   - chemistry: built from leaders (a leader at QB matters most), helped by scheme fit; continuity makes
- *     a good locker room better and a bad one worse, and it moves a little with how the season is going.
+ *     a good locker room better and a bad one worse. For one game after an upset it also carries momentum
+ *     (Season.updateMorale), which never touches development.
  *
  * Sizes are calibrated to real seasons (reports/surprise-sizes.md: 658 FBS team-seasons): a team's true
  * strength lands about 6.6 points from its preseason rating on average, 4.7 for a continuity team and 7.8
@@ -81,11 +82,17 @@ const DEV_W: Partial<Record<string, number>> = { QB: 3 };
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
-export function hiddenPlayer(seed: number, year: number, p: RatedPlayer): HiddenPlayer {
+/** How much of a player's fit his ratings explain (schemes.ts: his scheme rating against his overall); the rest is unseen. */
+export const FIT_FROM_RATINGS = 0.5;
+
+/** `schemeFit`: his fit from his ratings in his coaches' schemes, in SDs (absent: all of his fit is unseen). */
+export function hiddenPlayer(seed: number, year: number, p: RatedPlayer, schemeFit?: number): HiddenPlayer {
   const rng = new Rng(mixSeed(seed, year, p.id, "hidden"));
   const g = () => rng.gauss(0, 1);
   const trait = () => Math.round(clamp(50 + 15 * g(), 1, 99));
-  return { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  const out = { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  if (schemeFit != null) out.fit = FIT_FROM_RATINGS * schemeFit + Math.sqrt(1 - FIT_FROM_RATINGS ** 2) * out.fit;
+  return out;
 }
 
 /**
@@ -159,10 +166,12 @@ export function hiddenTeam(o: {
   roster: RatedPlayer[]; starters: Record<Unit, RatedPlayer[]>; morale?: number; lab?: Record<number, LabPlan>;
   /** Chemistry from players' morale about pay and playing time, in points by unit (morale.ts). */
   mood?: Record<Unit, number>;
+  /** Each player's fit from his ratings in the coaches' schemes, in SDs (see hiddenPlayer). */
+  schemeFit?: Map<number, number>;
 }): HiddenTeam {
   const { seed, year, ctx } = o;
   const phi = progress(year, o.date);
-  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p)]));
+  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p, o.schemeFit?.get(p.id))]));
   const rng = new Rng(mixSeed(seed, year, o.team_id, "hidden-team"));
   const fit = { off: 0, def: 0 }, chem = { off: 0, def: 0 };
   const labDays = (pid: number) => {
@@ -187,12 +196,16 @@ export function hiddenTeam(o: {
     // Continuity: a good locker room gets better and a bad one worse.
     if (ctx.continuity) cz *= 1.15;
     const sd = ctx.continuity ? CHEM_SD.continuity : u === "off" && ctx.new_qb ? CHEM_SD.new_qb : CHEM_SD.same_qb;
-    chem[u] = r2(phi * sd * cz + 0.5 * (o.morale ?? 0) + (o.mood?.[u] ?? 0));
+    chem[u] = r2(phi * sd * cz + (o.mood?.[u] ?? 0));
   }
+  // Development follows the locker room, not last week's score.
+  const settled = { ...chem };
+  // Momentum: last week's result against expectations, split across both units (see Season.updateMorale).
+  for (const u of ["off", "def"] as const) chem[u] = r2(chem[u] + 0.5 * (o.morale ?? 0));
   // Development: better chemistry, faster development (young players gain the most from it); a staff
   // development plan adds about 2 overall points over 80 days (2.5 at most).
   const dev = new Map<number, number>(), growth = new Map<number, number>();
-  const rate = (u: Unit) => clamp(1 + 0.25 * chem[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
+  const rate = (u: Unit) => clamp(1 + 0.25 * settled[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
   for (const p of o.roster) {
     const h = hp.get(p.id)!, u = unitOf(p.pos);
     const lab = o.lab?.[p.id] && o.lab[p.id].area !== "leadership" ? 2 * labDays(p.id) / 80 : 0;

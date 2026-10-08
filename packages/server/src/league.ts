@@ -65,7 +65,7 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
   "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges"] as const;
@@ -132,7 +132,7 @@ export class League {
       subs: meta.subs ?? {}, game_plan: meta.game_plan ?? undefined, practice: meta.practice ?? undefined, prep: meta.prep ?? null,
       player_stats: meta.player_stats ?? undefined, award_week: meta.award_week ?? undefined, awards: meta.awards ?? undefined,
       redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
-      hidden_ctx: meta.hidden_ctx ?? undefined, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
+      hidden_ctx: meta.hidden_ctx ?? undefined, schemes: meta.schemes ?? undefined, film: meta.film ?? null, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
       contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, retention: meta.retention ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
       player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
       budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
@@ -274,8 +274,8 @@ export class League {
       a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
     }
     if (a.type === "staff_time") {
-      const t = { recruiting: Number(a.payload?.recruiting), scouting: Number(a.payload?.scouting), prep: Number(a.payload?.prep) };
-      if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep <= 0) throw new Error("staff time is three shares that add up to more than 0");
+      const t = { recruiting: Number(a.payload?.recruiting), scouting: Number(a.payload?.scouting), prep: Number(a.payload?.prep), opponent: Number(a.payload?.opponent ?? 0.15) };
+      if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep + t.opponent <= 0) throw new Error("staff time is four shares that add up to more than 0");
       a = { type: a.type, payload: t };
     }
     if (a.type === "talk_player" || a.type === "portal_pitch") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };

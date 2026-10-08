@@ -1,5 +1,6 @@
-import { LEAGUE, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type PlayRecord, type Rng, type SnapMod } from "@cfb/engine";
+import { LEAGUE, LEAGUE_PASS_RATE, situationBucket, type TeamRatings, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type PlayRecord, type Rng, type SnapMod } from "@cfb/engine";
 import { DEFAULT_PLAN, PREP_UNIT, type GamePlan, type PrepEdge } from "./plan.ts";
+import { SCHEMES, type DefScheme, type OffScheme, type TeamSchemes } from "./schemes.ts";
 
 /**
  * Play calls (M1 plan, "Play calling"). Each offensive call against each defensive call moves the
@@ -95,15 +96,22 @@ function pairMod(o: OffCall, d: DefCall): Mod {
   return o === "qb_run" && d === "man" ? add(m, QB_RUN_VS_MAN) : m;
 }
 
+type OffMix = Record<PlayCall, [OffCall, number][]>;
+type DefMix = [DefCall, number][];
+
 /**
  * Shifts on the log-odds and log scales average to zero but the outcomes they produce do not (a
  * screen's extra completions are worth less than a deep shot's lost ones), so one offset per kind of
- * play brings the usual mix's expected completion, sack, interception and scramble rates and yards back
- * to a league-average matchup's.
+ * play brings a mix's expected completion, sack, interception and scramble rates and yards back to a
+ * league-average matchup's.
  */
-const KIND_OFFSET: Record<PlayCall, Mod> = (() => {
+function kindOffset(offMix: OffMix, defMix: DefMix): Record<PlayCall, Mod> {
   const lgt = (p: number) => Math.log(p / (1 - p)), sig = (x: number) => 1 / (1 + Math.exp(-x));
-  const pairs = (kind: PlayCall) => OFF_MIX[kind].flatMap(([o, wo]) => DEF_MIX.map(([d, wd]) => ({ m: pairMod(o, d), w: wo * wd })));
+  const tot = (rows: [unknown, number][]) => rows.reduce((t, [, w]) => t + w, 0);
+  const pairs = (kind: PlayCall) => {
+    const to = tot(offMix[kind]), td = tot(defMix);
+    return offMix[kind].flatMap(([o, wo]) => defMix.map(([d, wd]) => ({ m: pairMod(o, d), w: (wo / to) * (wd / td) })));
+  };
   const solve = (p0: number, rows: { s: number; w: number }[]) => {
     let c = 0;
     for (let k = 0; k < 40; k++) {
@@ -133,11 +141,39 @@ const KIND_OFFSET: Record<PlayCall, Mod> = (() => {
       explosive: solve(LEAGUE.rush_explosive, R.map(({ m, w }) => ({ s: m.explosive ?? 0, w }))),
     },
   };
-})();
+}
+const KIND_OFFSET = kindOffset(OFF_MIX, DEF_MIX);
+
+/** A scheme's usual mix: the coordinators' mix leaned by the scheme's tendencies (schemes.ts). */
+export function schemeOffMix(x: OffScheme | undefined): OffMix {
+  const t = x ? SCHEMES[x].mix : {};
+  return { run: OFF_MIX.run.map(([c, w]) => [c, w * (t[c] ?? 1)]), pass: OFF_MIX.pass.map(([c, w]) => [c, w * (t[c] ?? 1)]) };
+}
+export function schemeDefMix(x: DefScheme | undefined): DefMix {
+  const t = x ? SCHEMES[x].mix : {};
+  return DEF_MIX.map(([d, w]) => [d, w * (t[d] ?? 1)]);
+}
+
+const offsetCache = new Map<string, Record<PlayCall, Mod>>();
+/**
+ * The offset for an offense's scheme against a defense's, centered on the pair's usual mixes: a scheme is
+ * a style, not an edge for an average roster. What a game plan, the user's calls and in-game adjustments
+ * do off those mixes still counts.
+ */
+function schemeOffset(off: OffScheme | undefined, def: DefScheme | undefined): Record<PlayCall, Mod> {
+  if (!off && !def) return KIND_OFFSET;
+  const key = `${off ?? ""}|${def ?? ""}`;
+  let o = offsetCache.get(key);
+  if (!o) {
+    o = kindOffset(schemeOffMix(off), schemeDefMix(def));
+    offsetCache.set(key, o);
+  }
+  return o;
+}
 
 /** The snap's odds for an offensive call against a defensive call. */
-export function snapMod(o: OffCall, d: DefCall): SnapMod {
-  const m = add(pairMod(o, d), KIND_OFFSET[OFF.get(o)!.kind]);
+export function snapMod(o: OffCall, d: DefCall, schemes?: { off?: OffScheme; def?: DefScheme }): SnapMod {
+  const m = add(pairMod(o, d), schemeOffset(schemes?.off, schemes?.def)[OFF.get(o)!.kind]);
   const out: SnapMod = { ...OFF_BALL[o] };
   for (const f of FIELDS) if (m[f]) out[f] = Math.round(m[f]! * 1000) / 1000;
   return out;
@@ -155,6 +191,15 @@ export interface CallPair { side: "home" | "away"; off: OffCall; def: DefCall; o
 /** Did the snap keep the offense on schedule: 40% of the distance on 1st down, 60% on 2nd, all of it on 3rd and 4th. */
 export const successful = (p: PlayRecord) => (p.down === 1 ? p.yards >= 0.4 * p.distance : p.down === 2 ? p.yards >= 0.6 * p.distance : p.yards >= p.distance);
 
+/** How far full knowledge of an opponent tilts the coordinators' calls toward the counters (log scale per unit of COUNTERS, and per unit of pass-rate habit). */
+const SCOUT_TILT = { off: 15, def: 15, habit: 6 };
+/**
+ * What knowing an opponent fully, against not at all, is worth on each snap (units of PREP_UNIT), on top of
+ * the tilts above (which change what gets called more than how it goes): about 0.9 points of margin a game
+ * in all (calls-check.ts "scout": +0.25 scored, -0.63 allowed). There is no real data on this; it is sized
+ * a little under a full week of practice on both sides of the ball.
+ */
+const SCOUT_EDGE = 0.55;
 /** How far the plan and the game so far move the coordinators' mix (log scale). */
 const EMPHASIS = 0.7;
 const LEAN = 0.07;
@@ -178,6 +223,11 @@ export interface CallerOptions {
   plans?: Partial<Record<"home" | "away", GamePlan>>;
   /** Each side's practice edge for this game. */
   prep?: Partial<Record<"home" | "away", PrepEdge>>;
+  /** Each side's coordinators' schemes: their usual mix leans the scheme's way. */
+  schemes?: Partial<Record<"home" | "away", TeamSchemes>>;
+  /** How well each side's staff knows the other team (0 to 1, scouting.ts), and each side's run/pass tendencies. */
+  scout?: Partial<Record<"home" | "away", number>>;
+  ratings?: Partial<Record<"home" | "away", Pick<TeamRatings, "pass_rate" | "pass_tendency">>>;
 }
 
 /** Where a coordinator has moved off his usual mix, for the live screen. */
@@ -269,13 +319,19 @@ export class Caller {
       if (u1 < q) { kind = lean > 0 ? "pass" : "run"; u1 = u1 / q; } else u1 = (u1 - q) / (1 - q);
     }
     const ol = this.offLearn(offSide);
-    const offMix = OFF_MIX[kind].map(([c, w]) => [c, w * Math.exp(EMPHASIS * (op.emphasis[c] ?? 0)) * (ol.get(c) ?? 1)] as [OffCall, number]);
+    // Scouting: an offense that knows the front leans toward what beats it; a defense that knows the offense
+    // leans toward its counters and reads its down-and-distance habits.
+    const sc = this.opts.schemes, ko = this.opts.scout?.[offSide] ?? 0, kd = this.opts.scout?.[defSide] ?? 0;
+    const front = sc?.[defSide]?.def, offense = sc?.[offSide]?.off;
+    const offMix = schemeOffMix(offense)[kind].map(([c, w]) => [c, w * Math.exp(EMPHASIS * (op.emphasis[c] ?? 0) + (front ? SCOUT_TILT.off * ko * (COUNTERS.off[front][c] ?? 0) : 0)) * (ol.get(c) ?? 1)] as [OffCall, number]);
+    const tr = this.opts.ratings?.[offSide];
+    const habit = kd && tr ? teamPass(tr, s.down, s.distance, s.yl) - basePass(s.down, s.distance, s.yl) : 0;
     let def: DefCall;
     if (late && s.quarter === 4 && lead >= 9) def = pick(LATE_LEAD_MIX, u2);
     else {
       const tilt = this.defLearn(defSide);
-      def = pick(DEF_MIX.map(([d, w]) => {
-        let m = 1;
+      def = pick(schemeDefMix(this.opts.schemes?.[defSide]?.def).map(([d, w]) => {
+        let m = Math.exp((offense ? SCOUT_TILT.def * kd * (COUNTERS.def[offense][d] ?? 0) : 0) + SCOUT_TILT.habit * kd * habit * (d === "load_box" ? -1 : d === "cover2" || d === "cover3" || d === "man" ? 0.5 : 0));
         if (d === "blitz") m *= Math.exp(EMPHASIS * dp.blitz);
         if (d === "load_box") m *= Math.exp(EMPHASIS * dp.box + tilt);
         if (d === "cover2" || d === "cover3" || d === "man") m *= Math.exp(-tilt) * (dp.coverage === d ? 2.5 : 1);
@@ -304,7 +360,8 @@ export class Caller {
     const userOnOffense = req.side === this.userSide;
     const off = mine && userOnOffense && isOffCall(user) ? user : ai!.off;
     const def = mine && !userOnOffense && isDefCall(user) ? user : ai!.def;
-    game.snapMod = this.withPrep(snapMod(off, def), req);
+    const sc = this.opts.schemes;
+    game.snapMod = this.withPrep(snapMod(off, def, sc && { off: sc[req.side]?.off, def: sc[req.side === "home" ? "away" : "home"]?.def }), req);
     this.last = { side: req.side, off, def, offByUser: off === user && userOnOffense, defByUser: def === user && !userOnOffense };
     this.seen = game.plays.length;
     return OFF.get(off)!.kind;
@@ -312,11 +369,14 @@ export class Caller {
 
   /** Practice: the offense's edge minus the defense's, with the situational work on 3rd and 4th down and in the red zone. */
   private withPrep(m: SnapMod, req: DecisionRequest): SnapMod {
-    const prep = this.opts.prep;
-    if (!prep) return m;
-    const o = prep[req.side], d = prep[req.side === "home" ? "away" : "home"];
+    const prep = this.opts.prep, scout = this.opts.scout;
+    if (!prep && !scout) return m;
+    const other = req.side === "home" ? "away" : "home";
+    const o = prep?.[req.side], d = prep?.[other];
     const s = req.situation, key = s.down >= 3 || s.yl <= 20;
-    const k = (o?.offense ?? 0) - (d?.defense ?? 0) + (key ? 1.5 * ((o?.situations ?? 0) - (d?.situations ?? 0)) : 0);
+    // Knowing the other team better than it knows you: the staff that watched more film is a step ahead on every snap.
+    const film = SCOUT_EDGE * ((scout?.[req.side] ?? 0) - (scout?.[other] ?? 0));
+    const k = film + (o?.offense ?? 0) - (d?.defense ?? 0) + (key ? 1.5 * ((o?.situations ?? 0) - (d?.situations ?? 0)) : 0);
     if (!k) return m;
     const out: SnapMod = { ...m };
     for (const f of FIELDS) if (PREP_UNIT[f]) out[f] = Math.round(((out[f] ?? 0) + k * PREP_UNIT[f]!) * 1000) / 1000;
@@ -354,3 +414,78 @@ export class Caller {
     };
   }
 }
+
+/** A rough worth of a snap's odds to the offense (completions, yards, sacks, picks, stuffs, explosive runs). */
+export function modValue(m: SnapMod): number {
+  return (m.comp ?? 0) * 0.5 + (m.ypcomp ?? 0) * 1.5 - (m.sack ?? 0) * 0.15 - (m.int ?? 0) * 0.15 + (m.ypc ?? 0) * 2 + (m.explosive ?? 0) * 0.3 - (m.stuff ?? 0) * 0.3;
+}
+
+/**
+ * What knowing a scheme's leanings is worth, per call: for a defense facing an offensive scheme, how much
+ * better each defensive call does against the scheme's mix than against the usual mix (positive = a
+ * counter), and the same for an offense facing a defensive front. Centered so the usual mix's tilt is 0.
+ */
+export const COUNTERS = (() => {
+  const share = (rows: [string, number][]) => { const t = rows.reduce((a, [, w]) => a + w, 0); return new Map(rows.map(([c, w]) => [c, w / t])); };
+  const vs: Record<string, Partial<Record<DefCall, number>>> = {};
+  for (const x of Object.values(SCHEMES)) {
+    if (x.side !== "off") continue;
+    const out: Partial<Record<DefCall, number>> = {};
+    const mix = schemeOffMix(x.id as OffScheme);
+    for (const kind of ["run", "pass"] as const) {
+      const a = share(mix[kind]), b = share(OFF_MIX[kind]);
+      for (const d of DEF_CALLS) {
+        if (d.id === "prevent") continue;
+        let v = 0;
+        for (const [c] of OFF_MIX[kind]) v += ((a.get(c) ?? 0) - (b.get(c) ?? 0)) * -modValue(pairMod(c, d.id));
+        out[d.id] = (out[d.id] ?? 0) + v / 2;
+      }
+    }
+    vs[x.id] = out;
+  }
+  const off: Record<string, Partial<Record<OffCall, number>>> = {};
+  for (const x of Object.values(SCHEMES)) {
+    if (x.side !== "def") continue;
+    const a = share(schemeDefMix(x.id as DefScheme)), b = share(DEF_MIX), out: Partial<Record<OffCall, number>> = {};
+    for (const o of OFF_CALLS) {
+      let v = 0;
+      for (const [d] of DEF_MIX) v += ((a.get(d) ?? 0) - (b.get(d) ?? 0)) * modValue(pairMod(o.id, d));
+      out[o.id] = v;
+    }
+    // Center within run calls and within pass calls: knowing the front changes which run or which pass, not whether.
+    for (const kind of ["run", "pass"] as const) {
+      const ids = OFF_CALLS.filter((o) => o.kind === kind).map((o) => o.id), m = ids.reduce((s, c) => s + out[c]!, 0) / ids.length;
+      for (const c of ids) out[c] = out[c]! - m;
+    }
+    off[x.id] = out;
+  }
+  // Center the defense's tilts too.
+  for (const t of Object.values(vs)) { const ids = Object.keys(t) as DefCall[], m = ids.reduce((s, d) => s + t[d]!, 0) / ids.length; for (const d of ids) t[d] = t[d]! - m; }
+  return { def: vs as Record<OffScheme, Partial<Record<DefCall, number>>>, off: off as Record<DefScheme, Partial<Record<OffCall, number>>> };
+})();
+
+/** How often an offense with no tendencies of its own throws in a situation (the engine's passProb before late-game rules). */
+export function basePass(down: number, ytg: number, yl = 50): number {
+  let p = LEAGUE_PASS_RATE;
+  if (down === 3) p = ytg >= 8 ? 0.86 : ytg >= 5 ? 0.70 : ytg >= 3 ? 0.52 : 0.32;
+  else if (down === 4) p = ytg >= 5 ? 0.75 : ytg >= 3 ? 0.55 : 0.3;
+  else if (down === 2) p += ytg >= 8 ? 0.12 : (ytg <= 3 ? -0.08 : 0);
+  else if (down === 1 && ytg < 10) p -= 0.08;
+  if (yl <= 3) p -= 0.15;
+  return Math.min(0.95, Math.max(0.05, p));
+}
+
+/** How often this offense throws in a situation (its real tendencies; engine.ts passProb without the clock). */
+export function teamPass(r: Pick<TeamRatings, "pass_rate" | "pass_tendency">, down: number, ytg: number, yl = 50): number {
+  const tend = r.pass_tendency && Object.keys(r.pass_tendency).length ? r.pass_tendency : null;
+  if (!tend) {
+    // Without tendencies the engine starts from the team's own pass rate on 1st and 2nd down.
+    const shift = (r.pass_rate ?? LEAGUE_PASS_RATE) - LEAGUE_PASS_RATE;
+    return Math.min(0.95, Math.max(0.05, basePass(down, ytg, yl) + (down <= 2 ? shift : 0)));
+  }
+  let p = Math.min(0.97, Math.max(0.03, basePass(down, ytg, yl)));
+  const off = tend[situationBucket(down, ytg)] ?? 0;
+  p = 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + off)));
+  return Math.min(0.95, Math.max(0.05, p));
+}
+

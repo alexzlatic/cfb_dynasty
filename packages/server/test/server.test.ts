@@ -189,6 +189,10 @@ describe("depth charts", () => {
     const d = await get(`/api/leagues/${id}/teams/2509/depth`);
     expect(d.players.length).toBeGreaterThan(80);
     expect(d.depth.QB.length).toBeGreaterThan(1);
+    // The scheme names each slot and rates every player at the slots he can play.
+    expect(d.schemes.layout.off).toHaveLength(14);
+    expect(d.schemes.layout.def).toHaveLength(11);
+    expect(d.schemes.ratings[d.depth.QB[0]].QB.rating).toBeGreaterThan(0);
     // Your staff's read of each player's scheme fit: yours only, and none for specialists.
     expect(typeof d.fit[d.depth.QB[0]]).toBe("number");
     expect(d.fit[d.depth.K[0]]).toBeUndefined();
@@ -231,6 +235,9 @@ describe("live games", () => {
     expect(plan.plan.run_pass).toBe(-1);
     expect(plan.scout.team_id).toBeGreaterThan(0);
     expect(plan.edge.offense).toBeGreaterThan(0);
+    // The week before the game went into film of the opponent.
+    expect(plan.film.opponent).toBe(plan.scout.team_id);
+    expect(plan.film.hours).toBeGreaterThan(0);
     let v = await post(`/api/leagues/${id}/live/start`, { mode: { offense: "me", defense: "coordinator" } });
     expect((await post(`/api/leagues/${id}/actions`, { type: "set_game_plan", payload: {} })).error).toMatch(/live game/);
     const qb = v.sideline.find((x: any) => x.slot === "QB");

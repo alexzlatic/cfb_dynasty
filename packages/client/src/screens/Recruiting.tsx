@@ -258,8 +258,9 @@ function StaffAndScouting({ head }: { head: RecruitingView }) {
   const { busy, err, act } = useAct();
   const u = head.settings;
   if (head.team_id == null) return <p className="muted">You need a team.</p>;
-  const t = time ?? u.time;
-  const tsum = t.recruiting + t.scouting + t.prep || 1;
+  const t0 = time ?? u.time;
+  const t = { ...t0, opponent: t0.opponent ?? 0.15 };
+  const tsum = t.recruiting + t.scouting + t.prep + t.opponent || 1;
   return (
     <div className="cols even">
       <div>
@@ -267,14 +268,15 @@ function StaffAndScouting({ head }: { head: RecruitingView }) {
         <Panel title="Your staff's week">
           <p><label className="check"><input type="checkbox" checked={u.auto} disabled={busy} onChange={(e) => act("recruit_auto", { on: e.target.checked })} /> Let the staff run the board</label></p>
           <table className="grid tight"><tbody>
-            {(["recruiting", "scouting", "prep"] as const).map((k) => <tr key={k}>
-              <td>{k === "prep" ? "Game preparation" : k === "recruiting" ? "Recruiting" : "Scouting"}</td>
+            {(["recruiting", "scouting", "prep", "opponent"] as const).map((k) => <tr key={k}>
+              <td>{k === "prep" ? "Practice and game plan" : k === "opponent" ? "Opponent film" : k === "recruiting" ? "Recruiting" : "Scouting prospects"}</td>
               <td><input type="range" min={0} max={100} value={Math.round(100 * t[k] / tsum)} onChange={(e) => setTime({ ...t, [k]: Number(e.target.value) / 100 })} /></td>
               <td className="num">{pct(t[k] / tsum)}</td><td className="num muted small">{Math.round(head.hours * t[k] / tsum)} h</td></tr>)}
           </tbody></table>
           {time && <p><button className="primary" disabled={busy} onClick={async () => { await act("staff_time", time); setTime(null); }}>Save</button> <button className="link" onClick={() => setTime(null)}>Cancel</button></p>}
-          <p className="small muted">In season the usual week is 30% recruiting, 10% scouting and 60% preparing for Saturday; less preparation costs you on the field.
-            More scouting time finds more prospects and narrows reads. Out of season there is no game to prepare for.</p>
+          <p className="small muted">In season the usual week is 30% recruiting, 10% scouting prospects, 45% practice and the game plan and 15% film of the next opponent.
+            Less practice costs you on the field; more film finds more of the opponent's tendencies (Game plan, Film room). More scouting time finds more prospects and narrows reads.
+            Out of season there is no game to prepare for.</p>
         </Panel>
         <Panel title="Staff skills">
           <div className="skills">{Object.entries(head.skill_names).map(([k, l]) => <div key={k} className="skill"><span>{l}</span><b>{head.skills[k]}</b></div>)}</div>

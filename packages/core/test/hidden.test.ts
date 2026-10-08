@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { averageTeam } from "@cfb/engine";
-import { applyHidden, devFocus, devPhase, hiddenPlayer, loadSeed, progress, Season } from "../src/index.ts";
+import { MOMENTUM, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, loadSeed, progress, Season } from "../src/index.ts";
 
 const sd = (a: number[]) => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); };
 
@@ -85,5 +85,17 @@ describe("hidden development, scheme fit and chemistry", () => {
     expect(r.phase.kind).toBe("season");
     expect(r.players.find((x) => x.pos === "QB")!.target).toBeGreaterThan(0);
     expect(r.players.some((x) => x.trend != null)).toBe(true);
+  });
+});
+
+describe("momentum", () => {
+  it("moves a team for about a game after an upset, never more than a point", () => {
+    const s = Season.create(loadSeed(), { seed: 21 });
+    for (let i = 0; i < 14; i++) s.advanceDay();
+    const m = Object.entries(s.state.morale ?? {});
+    expect(m.length).toBeGreaterThan(50);
+    for (const [, v] of m) expect(Math.abs(v) * POINTS_PER_UNIT).toBeLessThanOrEqual(MOMENTUM.cap + 0.01);
+    // An upset loss stings more than an upset win lifts.
+    expect(Math.min(...m.map(([, v]) => v))).toBeLessThan(-Math.max(...m.map(([, v]) => v)));
   });
 });
