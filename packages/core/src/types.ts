@@ -3,6 +3,7 @@ import type { Pos, RatedPlayer } from "./players.ts";
 import type { DefLine, InGameInjury } from "./gameday.ts";
 import type { DriveRecord, PlayRecord, TeamBox, TeamRatings } from "@cfb/engine";
 import type { ISODate } from "./dates.ts";
+import type { RecruitSeed } from "./recruiting.ts";
 
 export type Level = "fbs" | "fcs";
 
@@ -73,7 +74,7 @@ export interface Injury {
 export type EventType =
   | "dynasty_start" | "game_day" | "ap_poll" | "cfp_rankings" | "bcs_standings" | "early_signing" | "conf_championships"
   | "selection" | "playoff_round" | "title_game" | "bowls"
-  | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
+  | "signing_day" | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
 
 export interface CalEvent {
   id: string; date: ISODate; end_date: ISODate | null; type: EventType; scope: "league" | "conference" | "team";
@@ -155,6 +156,8 @@ export interface SeedBundle {
   finances?: Record<string, { attendance: number | null; home_games: number; lines: Record<string, number> | null; /** 2026 dollars, revenue share and NIL (power schools). */ roster_budget?: number | null }>;
   /** Each school's program style from its real newcomers (styles.json); absent in old seeds. */
   styles?: Record<string, { portal_share: number; style: "develop" | "balanced" | "portal" | "win_now"; newcomers: number }>;
+  /** High school recruiting: the real next class, real recent classes and the pool generated classes come from (recruiting.json); absent in old seeds. */
+  recruiting?: RecruitSeed;
 }
 
 export interface TeamPlayers {

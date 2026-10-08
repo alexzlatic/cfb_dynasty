@@ -233,3 +233,4 @@ div.mine, span.mine { background: var(--mine); }
 .rs { font-size: 10px; font-weight: 700; border: 1px solid var(--muted); color: var(--muted); border-radius: 3px; padding: 0 3px; margin-left: 4px; }
 .rs.done { border-color: #b07d0a; color: #b07d0a; }
 span.win { color: var(--up); font-weight: 700; } span.loss { color: var(--down); font-weight: 700; }
+.tabs.sub { margin: -8px -12px 12px; cursor: pointer; }

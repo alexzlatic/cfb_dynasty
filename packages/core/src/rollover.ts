@@ -99,6 +99,8 @@ export function rollRosters(o: {
   growth: (teamId: number) => Map<number, number>; gp: Record<number, number>;
   /** Each program's development rate (devRate); 1 when absent. */
   rate?: (teamId: number) => number;
+  /** Each team's signing class, rated as college freshmen (recruiting.ts); generated freshmen fill only what's left. */
+  incoming?: Record<number, RatedPlayer[]>;
 }): RosterTurn {
   const { seed, year, model } = o;
   let nextId = o.next_player_id;
@@ -130,7 +132,9 @@ export function rollRosters(o: {
     const want = new Map<Pos, number>(), have = new Map<Pos, number>();
     for (const p of tp.players) want.set(p.pos, (want.get(p.pos) ?? 0) + target / before);
     for (const p of keep) have.set(p.pos, (have.get(p.pos) ?? 0) + 1);
-    const fresh: RatedPlayer[] = [];
+    // The signing class comes first; generated players fill only what's left (stand-ins for transfers until the portal).
+    const fresh: RatedPlayer[] = [...(o.incoming?.[t.id] ?? [])];
+    for (const p of fresh) have.set(p.pos, (have.get(p.pos) ?? 0) + 1);
     const add = (ps: Pos) => { have.set(ps, (have.get(ps) ?? 0) + 1); fresh.push(freshman(nextId++, t, ps, model, rng, firsts, lasts)); };
     // Every position at least its minimum first.
     for (const ps of POSITIONS) while ((have.get(ps) ?? 0) < MIN_AT[ps]) add(ps);

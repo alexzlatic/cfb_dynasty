@@ -24,6 +24,7 @@ import { DevelopmentScreen } from "./screens/Development.tsx";
 import { PayrollScreen } from "./screens/Payroll.tsx";
 import { CollectiveScreen } from "./screens/Collective.tsx";
 import { BudgetScreen } from "./screens/Budget.tsx";
+import { RecruitingScreen } from "./screens/Recruiting.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -112,6 +113,7 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         {my && <a href={`#/l/${id}/payroll`} className={screen === "payroll" && (!arg || Number(arg) === my.id) ? "on" : ""}>Payroll</a>}
         {my && <a href={`#/l/${id}/collective`} className={screen === "collective" && (!arg || Number(arg) === my.id) ? "on" : ""}>Collective</a>}
         {my && <a href={`#/l/${id}/budget`} className={screen === "budget" && (!arg || Number(arg) === my.id) ? "on" : ""}>Budget</a>}
+        {my && <a href={`#/l/${id}/recruiting`} className={screen === "recruiting" ? "on" : ""}>Recruiting</a>}
         {my && (state.my_next_game?.date === state.date || screen === "live") && <a href={`#/l/${id}/live`} className={"gameday" + (screen === "live" ? " on" : "")}>Game day</a>}
       </nav>
       <main className="page">
@@ -137,6 +139,7 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         {screen === "payroll" && <PayrollScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "collective" && <CollectiveScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "budget" && <BudgetScreen tid={arg ? Number(arg) : undefined} />}
+        {screen === "recruiting" && <RecruitingScreen />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>

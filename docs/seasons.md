@@ -1,6 +1,7 @@
 # Seasons and the rollover (M3 step 2)
 
-A dynasty now runs past one season. When the season ends (the "Season complete" day in late January),
+A dynasty now runs past one season. When the season ends (the "Season complete" day, the day after
+national signing day in early February),
 the next sim starts the next season. In the app the sim bar shows **Start the 2027 season**.
 
 ## What happens at the rollover
@@ -17,8 +18,9 @@ the next sim starts the next season. In the app the sim bar shows **Start the 20
   hidden development he actually had last season (hidden.ts). Past his potential, growth slows.
 - **Rosters are refilled.** Each team goes back to its usual size, never over 105. The least-rated
   players at over-full positions are released first, then freshmen fill the positions furthest below
-  their share. Until recruiting arrives (step 3) the freshmen are generated: rated like the team's own
-  2026 freshmen at each position, with the same spread, and named from real rosters.
+  their share. The freshmen are the school's signees (docs/recruiting.md), rated from their true
+  potential on arrival; generated freshmen (rated like the team's own 2026 freshmen at each position)
+  fill only the spots its class left open.
 - **The schedule repeats** with home and away swapped, a year later on the same weekday (the season
   opens between August 22 and 28). Neutral-site games stay put.
 - **Preseason power** follows the rosters: 70% last preseason's, 30% how the year actually went, then
@@ -28,6 +30,9 @@ the next sim starts the next season. In the app the sim bar shows **Start the 20
   writers, your multi-year contracts and your career (job security carries; the AD sets new
   expectations). **Started fresh:** budgets, everyone else's revenue-share deals, collectives,
   hidden camp scores, injuries, depth charts and redshirts.
+- **Coaching changes.** Until the coaching carousel (M4), about one program in five gets a new head
+  coach each year (2026 had 35 of 138 FBS), of unknown quality; a new staff swings how the roster fits
+  its scheme, so those programs are the least predictable. The news reports each change.
 
 ## The record book and the league file
 

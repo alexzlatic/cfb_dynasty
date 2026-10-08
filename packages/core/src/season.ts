@@ -10,6 +10,12 @@ import { expectations, meetingText, newCareer, securityTrail, winChance, type Ca
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import {
+  RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
+  rateClasses, readSd, realClass, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
+} from "./recruiting.ts";
+import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
+import { STARTERS, miles } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -110,6 +116,8 @@ export interface SeasonState {
   next_player_id?: number;
   /** Every season played before this one, oldest first. */
   past?: SeasonSummary[];
+  /** High school recruiting: four classes of prospects, each school's recent classes, and your board and scouts. */
+  recruiting?: RecruitingState;
 }
 
 /** What a finished season leaves in the record book. */
@@ -152,6 +160,11 @@ export interface DayReport {
   stop: string | null;
 }
 
+/** Program cycles: how much of a program's momentum carries into next year, and how far it runs (utility for recruits). */
+const CYCLE_CARRY = 0.8, CYCLE_SD = 0.5;
+/** The yearly chance a program changes head coaches (a stand-in for the carousel). */
+const COACH_CHANGE = 0.2;
+const scaleEdge = <T extends object>(e: T, k: number): T => (k === 1 ? e : Object.fromEntries(Object.entries(e).map(([x, v]) => [x, (v as number) * k])) as T);
 const gameOrder = (a: Game, b: Game) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id);
 
 /** "is out for the season", "will miss about 3 weeks", ... */
@@ -178,7 +191,7 @@ export class Season {
     this.seed = seed;
     // Teams in id order, the order a league file returns them in, so polls draw the same noise after a reopen.
     this.teams = [...seed.teams].sort((a, b) => a.id - b.id);
-    this.teamById = new Map(seed.teams.map((t) => [t.id, t]));
+    this.teamById = new Map(this.teams.map((t) => [t.id, t]));
     this.ratings = new Map(Object.entries(seed.ratings).map(([k, v]) => [Number(k), v.ratings]));
     for (const t of Object.values(seed.players ?? {})) for (const p of t.players) this.playerById.set(p.id, p);
     state.depth ??= {};
@@ -287,6 +300,7 @@ export class Season {
     season.startFinance(seed.finances);
     season.weeklyMorale();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
+    season.startRecruiting();
     return season;
   }
 
@@ -308,8 +322,17 @@ export class Season {
     // Each player's development over the whole season (for teams without hidden scores, his own draw).
     const growth = (tid: number) => this.hidden(tid, `${y}-12-31`)?.growth ?? new Map(this.roster(tid).map((p) => [p.id, hiddenPlayer(s.seed, y, p).dev]));
     const gp = Object.fromEntries(Object.entries(s.player_stats ?? {}).map(([pid, st]) => [pid, st.gp]));
-    const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: s.next_player_id ?? 900_000_001, growth, gp,
-      rate: (tid) => devRate(s.facilities?.[tid]) });
+    // The signing class arrives: every senior committed to a school enrolls there.
+    let nextId = s.next_player_id ?? 900_000_001;
+    const rst = s.recruiting, incoming: Record<number, RatedPlayer[]> = {};
+    if (rst) {
+      for (const p of rst.prospects) {
+        if (gradeOf(p, y) < 3 || !p.commit || !players[p.commit.team]) continue;
+        (incoming[p.commit.team] ??= []).push(enrollPlayer(p, nextId++, p.commit.team, s.seed));
+      }
+    }
+    const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming,
+      rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     const { start, schedule } = nextSchedule(s.games, this.teams, opening, s.next_game_id);
     // Preseason expectations: mostly last preseason's, partly how the year actually went, moved by the roster turnover.
@@ -343,8 +366,12 @@ export class Season {
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
       requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
     };
+    if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
     next.startHidden(coaches);
+    for (const t of next.teams) {
+      if (t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
+    }
     next.startMoney();
     // Your deals that run into the new season stand (renewing the rest comes with the renewals screen).
     const me = s.user_team_id;
@@ -365,6 +392,44 @@ export class Season {
     }
     next.turnoverNews(turn.left, turn.added);
     return { next, left: turn.left, added: turn.added };
+  }
+
+  /**
+   * Recruiting moves on a year: the signed class is gone, every class is a grade older, a new freshman class
+   * appears, each school's range follows the class it just signed, and each program's cycle moves (a stand-in
+   * for coaching hires and momentum until the coaching carousel).
+   */
+  private nextRecruiting(rst: RecruitingState, ny: number, incoming: Record<number, RatedPlayer[]>): RecruitingState {
+    const s = this.state, rs = this.seed.recruiting!;
+    const prospects = rst.prospects.filter((p) => p.cls > ny);
+    const { firsts, lasts } = this.namePools();
+    const fresh = generateClass({ seed: s.seed, cls: ny + 4, year: ny, n: rs.class_size, rs, shape: classShape(rs), firsts, lasts, startId: rst.next_id });
+    prospects.push(...fresh);
+    const classes: Record<string, number[][]> = {};
+    for (const t of this.teams) classes[t.id] = [...(rst.classes[t.id] ?? []).slice(-2), (incoming[t.id] ?? []).map((p) => p.composite ?? 0.75)];
+    const cycle: Record<string, number> = {};
+    for (const t of this.teams) cycle[t.id] = Math.round((CYCLE_CARRY * (rst.cycle?.[t.id] ?? 0) + CYCLE_SD * Math.sqrt(1 - CYCLE_CARRY ** 2) * new Rng(mixSeed(s.seed, ny, t.id, "cycle")).gauss(0, 1)) * 1000) / 1000;
+    const live = new Set(prospects.map((p) => p.id));
+    const keep = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => live.has(Number(k))));
+    const u = rst.user;
+    const next: RecruitingState = {
+      prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0,
+      user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0 },
+    };
+    rateClasses(next.prospects, ny, s.date, 0, s.seed, rs.curve);
+    return next;
+  }
+
+  private signingNews(date: ISODate, label: string, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id, ranks = this.classRankings();
+    const name = (r: { team_id: number; points: number; commits: number; five: number; four: number }) =>
+      `${this.team(r.team_id).school} (${r.commits} signees${r.five ? `, ${r.five} five-star` : ""}${r.four ? `, ${r.four} four-star` : ""})`;
+    rep.news.push(this.news(date, "recruiting", `${label}: ${this.team(ranks[0]?.team_id ?? this.teams[0].id).school} has the No. 1 class`,
+      `Top classes: ${ranks.slice(0, 5).map(name).join("; ")}.`, ranks.slice(0, 5).map((r) => r.team_id)));
+    if (me != null) {
+      const i = ranks.findIndex((r) => r.team_id === me);
+      if (i >= 0) rep.news.push(this.news(date, "recruiting", `${this.team(me).school}'s ${s.year + 1} class ranks No. ${i + 1}`, name(ranks[i]) + ".", [me]));
+    }
   }
 
   /** News of who left and who arrived: your team in full, the rest of the country in brief. */
@@ -457,6 +522,7 @@ export class Season {
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
     if (weekday(today) === 1) this.weeklyMorale();
+    this.recruitingDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -787,7 +853,9 @@ export class Season {
     const projects = (s.projects ?? []).filter((p) => p.team_id === teamId).reduce((a, p) => a + p.cost / p.years, 0);
     // The retention fund is booster money given to the school instead of the collective.
     const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors + (s.retention?.[teamId] ?? 0), support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
-    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations, facilities: Math.round(b.fixed.facilities + projects) };
+    // Your scouts (regional scouts and evaluation trips) come out of the operations budget.
+    const scouting = teamId === s.user_team_id ? s.recruiting?.user.spend ?? 0 : 0;
+    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations + scouting, facilities: Math.round(b.fixed.facilities + projects) };
     const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
     return { revenue, expenses, surplus: sum(revenue) - sum(expenses), source: b.source };
   }
@@ -827,6 +895,262 @@ export class Season {
     return v;
   }
 
+  // ---- recruiting ------------------------------------------------------------------------------
+  private recruitWeek?: RecruitWeek;
+  private staffCache = new Map<number, StaffMember[]>();
+  /** A school's coaching staff with their skills. */
+  staff(teamId: number): StaffMember[] {
+    let st = this.staffCache.get(teamId);
+    if (!st) { st = staffOf(this.state.seed, this.seed.coaches ?? [], this.team(teamId)); this.staffCache.set(teamId, st); }
+    return st;
+  }
+  private get week(): RecruitWeek { return (this.recruitWeek ??= new RecruitWeek(this.state.seed)); }
+  private namePools(): { firsts: string[]; lasts: string[] } {
+    const all = this.teams.flatMap((t) => this.roster(t.id));
+    return { firsts: [...new Set(all.map((p) => p.first).filter(Boolean))].sort(), lasts: [...new Set(all.map((p) => p.last).filter(Boolean))].sort() };
+  }
+  /** Re-rates the service has made in this year by a date (spring, summer, after the season). */
+  private rerateIndex(date: ISODate): number {
+    const y = Number(date.slice(0, 4));
+    return RERATE_DATES(y).filter((d) => d <= date).length;
+  }
+
+  /** Start recruiting: the real senior class and three generated classes behind it, rated by the service. */
+  startRecruiting(): void {
+    const s = this.state, rs = this.seed.recruiting;
+    if (!rs) return;
+    this.recruitRev++;
+    const shape = classShape(rs), { firsts, lasts } = this.namePools();
+    const ids = new Map(this.teams.map((t) => [t.school, t.id]));
+    let next = 800_000_001;
+    const prospects: Prospect[] = realClass({ seed: s.seed, rs, shape, teamIds: ids, date: s.date, firsts, lasts, startId: next });
+    next += prospects.length;
+    for (let cls = s.year + 2; cls <= s.year + 4; cls++) {
+      const c = generateClass({ seed: s.seed, cls, year: s.year, n: rs.class_size, rs, shape, firsts, lasts, startId: next });
+      next += c.length;
+      prospects.push(...c);
+    }
+    // Each school's last three real classes set the range it recruits in.
+    const classes: Record<string, number[][]> = {};
+    for (const t of this.teams) classes[t.id] = [s.year - 2, s.year - 1, s.year].map((y) => rs.history.filter((h) => h.year === y && h.school === t.school).map((h) => h.rating ?? 0.75));
+    const rerate = Math.min(3, this.rerateIndex(s.date));
+    rateClasses(prospects, s.year, s.date, rerate, s.seed, rs.curve);
+    s.recruiting = { prospects, next_id: next, classes, rerate, user: { auto: true, hours: {}, scout: [], regions: [], evals: {}, spend: 0, time: { ...SEASON_TIME } } };
+  }
+
+  inSeason(date: ISODate): boolean {
+    const md = date.slice(5);
+    return md >= "08-20" && md <= "12-14";
+  }
+
+  /** Bumped whenever recruiting may have changed (a league file saves it only then: it is several megabytes). */
+  recruitRev = 0;
+  /**
+   * Every school as the recruiting sees it this week. What recruits weigh (record, development, money, band)
+   * and each school's class target and starters are the year's frozen values once the recruiting year has
+   * started; hours and your board are live.
+   */
+  schools(date = this.state.date): School[] {
+    const s = this.state, st = s.recruiting!, me = s.user_team_id;
+    const inSeason = this.inSeason(date);
+    const frozen = st.frozen?.year === s.year ? st.frozen.schools : this.freezeSchools();
+    return this.teams.map((t): School => {
+      const staff = this.staff(t.id);
+      const fbs = t.level === "fbs", power = P4.has(t.conference) || t.school === "Notre Dame";
+      const time = timeSplit(t.id === me ? st.user.time : inSeason ? SEASON_TIME : OFFSEASON_TIME, inSeason);
+      return {
+        id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null,
+        regions: t.id === me ? st.user.regions : [], national: power, width: scoutWidth(staffSkill(staff, "scouting")),
+        level: fbs ? "fbs" : "fcs", power, ...frozen[t.id],
+        hours: STAFF_HOURS * time.recruiting * (power ? 1.5 : fbs ? 1 : 0.6), eff: recruitEff(staffSkill(staff, "recruiting")),
+        manual: t.id === me && !st.user.auto,
+      };
+    });
+  }
+
+  /** How every school looks to recruits this year, from last season's record, its facilities, staff, money, recent classes and roster. */
+  private freezeSchools(): Record<string, FrozenSchool> {
+    const s = this.state, st = s.recruiting!;
+    const last = s.past?.[s.past.length - 1];
+    // Money: each school's revenue-share budget for football against the median power program's.
+    const pools = this.teams.filter((t) => P4.has(t.conference)).map((t) => s.pools?.[t.id] ?? 0).sort((a, b) => a - b);
+    const mid = pools[Math.floor(pools.length / 2)] || 1;
+    return Object.fromEntries(this.teams.map((t) => {
+      const staff = this.staff(t.id), roster = this.roster(t.id), fbs = t.level === "fbs";
+      const rec = last?.records[t.id];
+      const starter: Partial<Record<Pos, number>> = {};
+      for (const pos of POSITIONS) {
+        const o = roster.filter((p) => p.pos === pos).map((p) => p.ovr).sort((a, b) => b - a);
+        starter[pos] = o[Math.min(o.length, STARTERS[pos]) - 1] ?? 60;
+      }
+      const f: FrozenSchool = {
+        prestige: t.prestige ?? 30,
+        win_pct: rec && rec[0] + rec[1] > 0 ? rec[0] / (rec[0] + rec[1]) : Math.max(0.1, Math.min(0.9, 0.5 + (s.preseason_power[t.id] ?? 0) / 30)),
+        development: (devRate(s.facilities?.[t.id]) - 1) * 5 + (staffSkill(staff, "development") - 50) / 100,
+        fit: (staffSkill(staff, "scheme") - 50) / 100,
+        band: bandOf(st.classes[t.id], fbs ? "fbs" : "fcs"),
+        target: classTarget(roster, this.seed.styles?.[t.id]?.portal_share ?? 0.45, fbs ? "fbs" : "fcs"), starter,
+        buzz: st.cycle?.[t.id] ?? 0,
+        wealth: Math.round(((s.pools?.[t.id] ?? 0) / mid) * 1000) / 1000,
+      };
+      return [t.id, f];
+    }));
+  }
+
+  /** Sunday: a week of recruiting, your scouts' trips and what they cost. */
+  private recruitingDay(today: ISODate, rep: DayReport): void {
+    const s = this.state, st = s.recruiting;
+    if (!st) return;
+    this.recruitRev++;
+    // The first day of the recruiting year sets how every school looks to recruits until the next one.
+    if (st.frozen?.year !== s.year) st.frozen = { year: s.year, schools: this.freezeSchools() };
+    // The service re-rates in spring, after the summer circuit and after the season.
+    const k = this.rerateIndex(today);
+    if (k > st.rerate && RERATE_DATES(Number(today.slice(0, 4))).includes(today)) {
+      st.rerate = Math.min(3, k);
+      rateClasses(st.prospects, s.year, today, st.rerate, s.seed, this.seed.recruiting!.curve);
+    }
+    if (weekday(today) !== 0) return;
+    this.scoutingWeek(today);
+    const schools = this.schools(today);
+    const me = s.user_team_id;
+    // Your own board (when you run it): your hours on the prospects you chose.
+    if (me != null && !st.user.auto) {
+      const mine = schools.find((t) => t.id === me)!;
+      const want = Object.entries(st.user.hours).filter(([, h]) => h > 0);
+      const total = want.reduce((a, [, h]) => a + h, 0);
+      const scale = total > mine.hours ? mine.hours / total : 1;
+      const byId = new Map(st.prospects.map((p) => [p.id, p]));
+      for (const [pid, h] of want) {
+        const p = byId.get(Number(pid));
+        if (p && !p.commit?.signed) p.interest[me] = Math.round(((p.interest[me] ?? 0) + h * scale * mine.eff) * 100) / 100;
+      }
+    }
+    const ev = this.week.run({ st, year: s.year, date: today, schools, user: me, rng: new Rng(mixSeed(s.seed, s.year, today, "recruiting")) });
+    this.recruitNews(ev, today, rep);
+  }
+
+  /** Your scouts' week: trips to the prospects on your list (as many as their hours allow), and the regional scouts' pay. */
+  private scoutingWeek(today: ISODate): void {
+    const s = this.state, st = s.recruiting!, me = s.user_team_id;
+    if (me == null) return;
+    const u = st.user, t = this.team(me);
+    u.spend += Math.round(u.regions.length * SCOUT_COST.region / 52);
+    let hours = STAFF_HOURS * timeSplit(u.time, this.inSeason(today)).scouting;
+    const byId = new Map(st.prospects.map((p) => [p.id, p]));
+    for (const pid of u.scout) {
+      const p = byId.get(pid);
+      if (!p) continue;
+      const near = p.home.state === t.venue?.state || (t.venue?.lat != null && miles(p.home, { lat: t.venue.lat, lon: t.venue.lon! }) <= 300);
+      const need = near ? TRIP_HOURS.near : TRIP_HOURS.far;
+      if (hours < need) break;
+      hours -= need;
+      u.evals[pid] = (u.evals[pid] ?? 0) + 1;
+      u.spend += near ? SCOUT_COST.trip_near : SCOUT_COST.trip_far;
+    }
+  }
+
+  private recruitNews(ev: RecruitEvent[], date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id, st = s.recruiting!;
+    const byId = new Map(st.prospects.map((p) => [p.id, p]));
+    const who = (p: Prospect) => `${p.svc ? `${starsOf(p.svc.r)}-star ` : ""}${p.pos} ${p.first} ${p.last} (${p.home.city ?? ""}${p.home.state ? `, ${p.home.state}` : ""})`;
+    for (const e of ev) {
+      const p = byId.get(e.pid);
+      if (!p || e.kind === "signed") continue;
+      const top = p.svc != null && p.svc.rank <= 25 && gradeOf(p, s.year) >= 2;
+      const mine = me != null && (e.team === me || e.from === me);
+      if (!top && !mine) continue;
+      const school = this.team(e.team).school;
+      if (e.kind === "commit") rep.news.push(this.news(date, "recruiting", `${who(p)} commits to ${school}`, `${p.cls} class${p.svc ? `, No. ${p.svc.rank} nationally` : ""}.`, [e.team]));
+      else rep.news.push(this.news(date, "recruiting", `${p.first} ${p.last} flips from ${this.team(e.from!).school} to ${school}`, `${who(p)}, ${p.cls} class.`, [e.team, e.from!]));
+    }
+  }
+
+  /** The class rankings for a signing class: class points by school, best first. */
+  classRankings(cls = this.state.year + 1): { team_id: number; points: number; commits: number; five: number; four: number }[] {
+    const st = this.state.recruiting;
+    if (!st) return [];
+    const by = new Map<number, number[]>();
+    for (const p of st.prospects) if (p.cls === cls && p.commit) (by.get(p.commit.team) ?? by.set(p.commit.team, []).get(p.commit.team)!).push(p.svc?.r ?? 0.75);
+    return [...by].map(([team_id, rs]) => ({ team_id, points: classPoints(rs), commits: rs.length, five: rs.filter((r) => r >= 0.9834).length, four: rs.filter((r) => r >= 0.89 && r < 0.9834).length }))
+      .sort((a, b) => b.points - a.points || a.team_id - b.team_id);
+  }
+
+  /** How your staff sees a prospect: his scouted potential range, today's overall and the schools in his picture. */
+  prospectView(p: Prospect) {
+    const s = this.state, st = s.recruiting!, me = s.user_team_id;
+    const t = me != null ? this.team(me) : null;
+    let read: { est: number; sd: number } | null = null;
+    if (t) {
+      const eye: SchoolEye = { id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null, regions: st.user.regions,
+        national: P4.has(t.conference) || t.school === "Notre Dame", width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
+      read = schoolRead(eye, p, s.date, s.seed, st.user.evals[p.id] ?? 0);
+    }
+    const ovr = currentOvr(p, s.date);
+    const cap = (x: number) => Math.max(40, Math.min(99, x));
+    return {
+      id: p.id, name: `${p.first} ${p.last}`, cls: p.cls, grade: gradeOf(p, s.year), pos: p.pos, listed: p.listed, home: p.home, height: p.ht, weight: p.wt,
+      region: regionOf(p.home),
+      service: p.svc ? { stars: starsOf(p.svc.r), rating: p.svc.r, rank: p.svc.rank } : null,
+      // Ninety percent ranges: what your staff would bet he is today and where he tops out.
+      potential: read ? { est: Math.round(cap(read.est)), lo: Math.round(cap(read.est - 1.65 * read.sd)), hi: Math.round(cap(read.est + 1.65 * read.sd)) } : null,
+      ovr: read ? { lo: Math.round(ovr - 0.8 * read.sd), hi: Math.round(ovr + 0.8 * read.sd) } : null,
+      evals: st.user.evals[p.id] ?? 0, hours: st.user.hours[p.id] ?? 0,
+      commit: p.commit ? { team_id: p.commit.team, signed: p.commit.signed, date: p.commit.date } : null,
+      offers: p.offers, interest: me != null ? p.interest[me] ?? 0 : 0,
+      top_schools: Object.entries(p.interest).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 6).map(([id, h]) => ({ team_id: Number(id), hours: Math.round(h), offered: p.offers.includes(Number(id)) })),
+    };
+  }
+
+  // Your recruiting and scouting choices (actions).
+  setRecruitAuto(on: boolean): void { this.userRecruiting().auto = on; }
+  setRecruitHours(pid: number, hours: number): void {
+    const u = this.userRecruiting();
+    this.prospect(pid);
+    const h = { ...u.hours };
+    if (hours > 0) h[pid] = hours; else delete h[pid];
+    u.hours = h;
+  }
+  setOffer(pid: number, on: boolean): void {
+    const me = this.state.user_team_id!, p = this.prospect(pid);
+    this.userRecruiting();
+    if (p.commit?.signed) throw new Error(`${p.first} ${p.last} has signed`);
+    if (gradeOf(p, this.state.year) < 1) throw new Error("freshmen can't be offered yet");
+    if (on && !p.offers.includes(me)) p.offers = [...p.offers, me];
+    if (!on) {
+      p.offers = p.offers.filter((x) => x !== me);
+      if (p.commit?.team === me) p.commit = null;
+    }
+  }
+  setScoutTarget(pid: number, on: boolean): void {
+    const u = this.userRecruiting();
+    this.prospect(pid);
+    u.scout = on ? [...u.scout.filter((x) => x !== pid), pid] : u.scout.filter((x) => x !== pid);
+  }
+  setScoutRegion(region: Region, on: boolean): void {
+    const u = this.userRecruiting();
+    u.regions = on ? [...new Set([...u.regions, region])].sort() : u.regions.filter((r) => r !== region);
+  }
+  setStaffTime(t: StaffTime): void { this.userRecruiting().time = timeSplit(t, true); }
+  private userRecruiting() {
+    const st = this.state.recruiting;
+    if (!st) throw new Error("recruiting isn't available in this league");
+    if (this.state.user_team_id == null) throw new Error("you need a team to recruit");
+    this.recruitRev++;
+    return st.user;
+  }
+  prospect(pid: number): Prospect {
+    const p = this.state.recruiting?.prospects.find((x) => x.id === pid);
+    if (!p) throw new Error(`no prospect ${pid}`);
+    return p;
+  }
+  /** What a week of preparation is worth for your team (staff time and game planning skill). */
+  prepFactor(): number {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.recruiting) return 1;
+    return prepFactor(timeSplit(s.recruiting.user.time, true).prep, staffSkill(this.staff(me), "game_planning"));
+  }
+
   // ---- true vs scouted ratings ------------------------------------------------------------------
   /** Record what each team's camps were built on, from its coaches and opening lineup. */
   startHidden(coaches: Coach[]): void {
@@ -843,6 +1167,17 @@ export class Season {
       const returning = all.length ? all.filter((p) => p.basis === "stats").length / all.length : 0;
       ctx[t.id] = { new_coach, new_qb, continuity: !new_coach && !new_qb && returning >= 0.6,
         coach: w + l >= 24 ? Math.round(Math.max(-2, Math.min(2, (w / (w + l) - 0.5) / 0.15)) * 100) / 100 : 0 };
+    }
+    // After the first season the seed's coaches never change jobs, so until the coaching carousel (M4) about
+    // one program in five gets a new head coach each year (2026 had 35 of 138), of unknown quality. Your
+    // school keeps you.
+    if (s.past?.length) {
+      for (const t of this.teams) {
+        if (t.id === s.user_team_id) continue;
+        const rng = new Rng(mixSeed(s.seed, s.year, t.id, "coach-change"));
+        if (rng.random() >= COACH_CHANGE) continue;
+        ctx[t.id] = { ...ctx[t.id], new_coach: true, continuity: false, coach: Math.round(Math.max(-2, Math.min(2, 0.8 * rng.gauss(0, 1))) * 100) / 100 };
+      }
     }
     // Coach quality is relative to the rest of the country, so the scouted view stays unbiased.
     const ids = Object.keys(ctx).map(Number), avg = ids.reduce((a, id) => a + ctx[id].coach, 0) / Math.max(1, ids.length);
@@ -1215,6 +1550,20 @@ export class Season {
         break;
       }
       case "selection": this.seasonAwards(e.date, rep); this.select(e.date, rep); break;
+      case "early_signing": {
+        const st = s.recruiting;
+        if (!st) break;
+        earlySigning(st, s.year, new Rng(mixSeed(s.seed, s.year, "early-signing")));
+        this.signingNews(e.date, "Early signing period", rep);
+        break;
+      }
+      case "signing_day": {
+        const st = s.recruiting;
+        if (!st) break;
+        signingDay(st, s.year, this.schools(e.date), this.week, e.date, new Rng(mixSeed(s.seed, s.year, "signing-day")));
+        this.signingNews(e.date, "National signing day", rep);
+        break;
+      }
       case "season_end": {
         const poll = this.poll("ap", e.date, AP_PANEL, s.champion, rep);
         if (s.champion == null) {
@@ -1260,7 +1609,7 @@ export class Season {
     const userSide = user === g.home_id ? "home" : user === g.away_id ? "away" : null;
     // Your games are always called: by you live, or by your coordinators from your game plan.
     const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls")), {
-      plans: { [userSide]: this.gamePlan }, prep: { [userSide]: prepEdge(this.prepFor(g.id)) },
+      plans: { [userSide]: this.gamePlan }, prep: { [userSide]: scaleEdge(prepEdge(this.prepFor(g.id)), this.prepFactor()) },
     }) : null;
     if (hs && as) {
       const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")),

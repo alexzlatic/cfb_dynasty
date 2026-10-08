@@ -50,6 +50,24 @@ export interface BudgetData {
   requests: { date: string; area: string; approved: boolean; reason: string }[];
 }
 
+export interface ProspectRow {
+  id: number; name: string; cls: number; grade: number; pos: string; listed: string; region: string | null;
+  home: { city: string | null; state: string | null }; height: number | null; weight: number | null;
+  service: { stars: number; rating: number; rank: number } | null;
+  potential: { est: number; lo: number; hi: number } | null; ovr: { lo: number; hi: number } | null;
+  evals: number; hours: number; commit: { team_id: number; signed: boolean; date: string } | null;
+  offers: number[]; interest: number; top_schools: { team_id: number; hours: number; offered: boolean }[];
+}
+export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number }
+export interface RecruitingView {
+  available: boolean; team_id: number | null; year: number; date: string; cls: number; classes: { cls: number; grade: number }[];
+  total: number; prospects: ProspectRow[];
+  settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit };
+  staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
+  hours: number; regions: Record<string, { name: string; states: string[] }>; costs: { region: number; trip_near: number; trip_far: number; trip_hours: { near: number; far: number } };
+}
+export interface ClassRank { team_id: number; points: number; commits: number; five: number; four: number }
+
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
@@ -118,6 +136,8 @@ export const api = {
   liveMode: (id: string, mode: Partial<LiveMode>) => req<LiveResult>(`/api/leagues/${id}/live/mode`, { method: "POST", body: JSON.stringify({ mode }) }),
   liveSub: (id: string, slot: string, pid: number) => req<LiveResult>(`/api/leagues/${id}/live/sub`, { method: "POST", body: JSON.stringify({ slot, pid }) }),
   plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
+  recruiting: (id: string, q: Record<string, string>) => req<RecruitingView>(`/api/leagues/${id}/recruiting?` + new URLSearchParams(q)),
+  classRanks: (id: string, cls: number) => req<ClassRank[]>(`/api/leagues/${id}/recruiting/rankings?cls=${cls}&limit=25`),
   liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),
   act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),
 };

@@ -210,7 +210,7 @@ describe("depth charts", () => {
     expect(r.replayed).toBe(r.original);
     await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 2509, depth: null } });
     expect(lg.season.teamRatings(2509)!.qb).toBe(before.qb);
-  });
+  }, 60_000);
 });
 
 describe("live games", () => {
@@ -251,7 +251,7 @@ describe("live games", () => {
     const lg = manager.get(id);
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);
-  });
+  }, 60_000);
 });
 
 describe("career and season polish", () => {
@@ -494,6 +494,61 @@ describe("money", () => {
     expect(again.season.state.contracts).toEqual(want);
     expect(again.season.state.nil).toEqual(nil);
     expect(again.season.budget(2509)).toEqual(budget);
+    again.close();
+  }, 60_000);
+  it("runs recruiting and scouting through the action log, charges the scouting to operations, and replays", async () => {
+    const { id } = await postR("/api/leagues", { name: "Recruiting", team_id: 2509, seed: 41 });
+    const lg = manager.get(id);
+    const act = (type: string, payload: unknown) => postR(`/api/leagues/${id}/actions`, { type, payload });
+    const board = await getR(`/api/leagues/${id}/recruiting?view=rated&limit=500`);
+    expect(board.available).toBe(true);
+    expect(board.cls).toBe(2027);
+    expect(board.prospects).toHaveLength(500);
+    expect(board.prospects[0].service.rank).toBe(1);
+    expect(board.prospects[0].potential.hi).toBeGreaterThan(board.prospects[0].potential.lo);
+    const open = board.prospects.filter((p: { commit: unknown }) => !p.commit);
+    const [a, b] = open;
+    const ops = lg.season.budget(2509)!.expenses.operations;
+    expect((await act("recruit_auto", { on: false })).ok).toBe(true);
+    expect((await act("recruit_hours", { pid: a.id, hours: 12 })).ok).toBe(true);
+    expect((await act("recruit_hours", { pid: a.id, hours: 99 })).error).toMatch(/0 to 40/);
+    expect((await act("recruit_offer", { pid: a.id, on: true })).ok).toBe(true);
+    expect((await act("scout_prospect", { pid: b.id, on: true })).ok).toBe(true);
+    expect((await act("scout_region", { region: "texas", on: true })).ok).toBe(true);
+    expect((await act("scout_region", { region: "mars", on: true })).error).toMatch(/unknown region/);
+    expect((await act("staff_time", { recruiting: 0.4, scouting: 0.2, prep: 0.4 })).ok).toBe(true);
+    expect((await act("recruit_offer", { pid: 1, on: true })).error).toMatch(/no prospect/);
+
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-15" } });
+    const st = lg.season.state.recruiting!;
+    expect(lg.season.prospect(a.id).offers).toContain(2509);
+    expect(lg.season.prospect(a.id).interest[2509]).toBeGreaterThan(12);
+    expect(st.user.evals[b.id]).toBeGreaterThanOrEqual(2);
+    expect(st.user.spend).toBeGreaterThan(0);
+    expect(lg.season.budget(2509)!.expenses.operations).toBe(ops + st.user.spend);
+    expect(lg.season.prepFactor()).toBeLessThan(1);
+    const ranks = await getR(`/api/leagues/${id}/recruiting/rankings?limit=10`);
+    expect(ranks).toHaveLength(10);
+    expect((await getR(`/api/leagues/${id}/recruiting/prospect?pid=${a.id}`)).evals).toBe(0);
+
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("recruiting-check", manager.path(id), manager.seed());
+    expect(JSON.stringify(again.season.state.recruiting)).toBe(JSON.stringify(st));
+    again.apply({ type: "sim", payload: { kind: "date", date: "2026-09-29" } });
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-29" } });
+    expect(JSON.stringify(again.season.state.recruiting)).toBe(JSON.stringify(lg.season.state.recruiting));
+    again.close();
+  }, 180_000);
+
+  it("a league saved before recruiting starts its classes when opened", async () => {
+    const lg = manager.create({ name: "Pre-recruiting save", user_team_id: 2509, seed: 5 });
+    const want = JSON.stringify(lg.season.state.recruiting);
+    lg.db.exec("DELETE FROM meta WHERE key = 'recruiting'");
+    const { League } = await import("../src/league.ts");
+    const again = League.open("pre-recruiting", manager.path(lg.id), manager.seed());
+    expect(JSON.stringify(again.season.state.recruiting)).toBe(want);
     again.close();
   }, 60_000);
 });

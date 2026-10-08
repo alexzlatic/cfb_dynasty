@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Player, SeedBundle, TeamPlayers } from "./types.ts";
+import type { RecruitSeed } from "./recruiting.ts";
 import { ATTRS, overall, type Pos, type RatedPlayer } from "./players.ts";
 
 /** The Week 1 seed bundle for a season (2026 is the game's; 2025 is the replay check's). */
@@ -27,6 +28,21 @@ export function loadSeed(dir = DEFAULT_SEED_DIR): SeedBundle {
     players: existsSync(join(dir, "players.json")) ? unpackPlayers(read(dir, "players.json").teams, rosters) : undefined,
     finances: existsSync(join(dir, "finances.json")) ? read(dir, "finances.json").teams : undefined,
     styles: existsSync(join(dir, "styles.json")) ? read(dir, "styles.json").teams : undefined,
+    recruiting: loadRecruiting(dir, manifest.season),
+  };
+}
+
+/** The recruiting seed: the generation pool and curve, the real next class and the real classes of the last three years. */
+function loadRecruiting(dir: string, season: number): RecruitSeed | undefined {
+  const real = join(dir, `recruits_${season + 1}.json`), hist = join(dir, "history/recruits_2019_2026.json");
+  if (!existsSync(join(dir, "recruiting.json")) || !existsSync(real) || !existsSync(hist)) return undefined;
+  const r = read(dir, "recruiting.json");
+  const h = read(dir, "history/recruits_2019_2026.json") as { fields: string[]; rows: unknown[][] };
+  const f = (k: string) => h.fields.indexOf(k);
+  return {
+    curve: r.curve, class_size: r.class_size, pool: r.pool.rows, real: read(dir, `recruits_${season + 1}.json`), real_year: season + 1,
+    history: h.rows.filter((x) => (x[f("year")] as number) >= season - 2 && x[f("committed_to")])
+      .map((x) => ({ year: x[f("year")] as number, rating: (x[f("rating")] as number | null) ?? null, school: x[f("committed_to")] as string })),
   };
 }
 
