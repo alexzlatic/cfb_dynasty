@@ -101,7 +101,7 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         <a href="#/" className="brand" style={{ color: fg }}>CFB Dynasty</a>
         {my && <a className="myteam" href={`#/l/${id}/team/${my.id}`} style={{ color: fg }}><Logo team={my} size={34} /> {my.school} {my.mascot}</a>}
         <div className="today"><div className="date">{fmtDate(state.date, true)}</div><div className="small">{state.name}</div></div>
-        <SimControls busy={busy} done={state.done} onSim={sim} date={state.date} />
+        <SimControls busy={busy} done={state.done} year={state.year} onSim={sim} date={state.date} />
       </header>
       <nav className="tabs">
         {NAV.map(([k, label]) => <a key={k} href={`#/l/${id}/${k}`} className={screen === k ? "on" : ""}>{label}</a>)}
@@ -143,9 +143,16 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
   );
 }
 
-function SimControls({ busy, done, onSim, date }: { busy: boolean; done: boolean; onSim: (k: string, x?: Record<string, string>) => void; date: string }) {
+function SimControls({ busy, done, year, onSim, date }: { busy: boolean; done: boolean; year: number; onSim: (k: string, x?: Record<string, string>) => void; date: string }) {
   const [to, setTo] = useState("");
-  if (done) return <div className="sim"><span className="pill">Season complete</span></div>;
+  // Simming on after the season ends rolls the league into the next one.
+  if (done) return (
+    <div className="sim">
+      <span className="pill">{year} season complete</span>
+      <button disabled={busy} onClick={() => onSim("day")}>Start the {year + 1} season</button>
+      {busy && <span className="spinner" />}
+    </div>
+  );
   return (
     <div className="sim">
       <button disabled={busy} onClick={() => onSim("day")}>Sim 1 day</button>

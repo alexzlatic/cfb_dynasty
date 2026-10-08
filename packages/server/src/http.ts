@@ -94,7 +94,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
           champion: s.champion, upcoming, my_next_game: myGames.find((g) => g.status !== "final") ?? null,
           ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], playoff: s.playoff,
-          news: s.news.slice(-12).reverse(), career: career(),
+          news: s.news.slice(-12).reverse(), career: career(), past: s.past ?? [],
         };
       }
       case route === "career": {
@@ -208,7 +208,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const id = Number(p[3]);
         const team = S.team(id);
         if (!team) throw new HttpError(404, "no such team");
-        const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ?").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
+        const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ? AND status = 'active'").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         let coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
         // Your team's head coach is you.
         const c = s.career;

@@ -9,6 +9,7 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, off
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
+import { devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
 import { mixSeed } from "./hash.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -21,7 +22,7 @@ import { records, updatePower } from "./ranking.ts";
 import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
   DEFAULT_SETTINGS, type Ballot, type CalEvent, type Coach, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
-  type Settings, type Team,
+  type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
 
 export interface Seeded { seed: number; team_id: number }
@@ -104,6 +105,24 @@ export interface SeasonState {
   gate?: Record<number, { attendance: number; price: number; revenue: number }>;
   /** Your requests to the AD for facility upgrades and the answers. */
   requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
+  /** How generated freshmen rate (measured from the opening rosters at the first rollover), and the next new player's id. */
+  fresh_model?: FreshModel;
+  next_player_id?: number;
+  /** Every season played before this one, oldest first. */
+  past?: SeasonSummary[];
+}
+
+/** What a finished season leaves in the record book. */
+export interface SeasonSummary {
+  year: number;
+  champion: number | null;
+  /** The final AP top 25, by team id. */
+  top25: number[];
+  conf_champs: Record<string, number>;
+  heisman: { pid: number; name: string; pos: string; team_id: number } | null;
+  /** Every FBS team's record, [wins, losses]. */
+  records: Record<number, [number, number]>;
+  user: { team_id: number; w: number; l: number; rank: number | null; security: number | null } | null;
 }
 
 /** One school's budget for the fiscal year: lines so far and projected to June 30. */
@@ -176,6 +195,8 @@ export class Season {
 
   /** A team's rated players (empty with a seed that has none). */
   roster(teamId: number): RatedPlayer[] { return this.seed.players?.[teamId]?.players ?? []; }
+  /** A team's rated players with its scheme, kicking and opening depth chart, as a league file stores them. */
+  teamPlayers(teamId: number): TeamPlayers | undefined { return this.seed.players?.[teamId]; }
   depthChart(teamId: number): DepthChart { return this.state.depth?.[teamId] ?? this.seed.players?.[teamId]?.depth ?? {}; }
 
   /** Set a team's depth chart, or put back its opening one with null. */
@@ -270,6 +291,111 @@ export class Season {
   }
 
   get done(): boolean { return this.state.events.some((e) => e.type === "season_end" && e.status === "done"); }
+
+  /**
+   * The next season, once this one is over (M3 rollover). Rosters move on a year (rollover.ts), the
+   * schedule repeats with home and away swapped, and preseason power follows the rosters. Facilities,
+   * the AD's projects, players' morale, your multi-year contracts and your career carry over; budgets,
+   * revenue-share deals for everyone else, collectives and camps start fresh as they did at the start.
+   * The new season opens the day after this one ended, with spring practice, the draft and fall camp
+   * still on the calendar ahead of it.
+   */
+  nextSeason(coaches: Coach[]): { next: Season; left: Departure[]; added: RatedPlayer[] } {
+    const s = this.state, y = s.year, ny = y + 1;
+    if (!this.done) throw new Error("the season isn't over");
+    const players = this.seed.players ?? {};
+    const model = s.fresh_model ?? freshModel(players);
+    // Each player's development over the whole season (for teams without hidden scores, his own draw).
+    const growth = (tid: number) => this.hidden(tid, `${y}-12-31`)?.growth ?? new Map(this.roster(tid).map((p) => [p.id, hiddenPlayer(s.seed, y, p).dev]));
+    const gp = Object.fromEntries(Object.entries(s.player_stats ?? {}).map(([pid, st]) => [pid, st.gp]));
+    const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: s.next_player_id ?? 900_000_001, growth, gp,
+      rate: (tid) => devRate(s.facilities?.[tid]) });
+    const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
+    const { start, schedule } = nextSchedule(s.games, this.teams, opening, s.next_game_id);
+    // Preseason expectations: mostly last preseason's, partly how the year actually went, moved by the roster turnover.
+    const power: Record<number, number> = {};
+    for (const t of this.teams) {
+      const prev = 0.7 * (s.preseason_power[t.id] ?? 0) + 0.3 * (s.power[t.id] ?? 0);
+      const base = this.ratings.get(t.id), before = players[t.id], after = turn.players[t.id];
+      power[t.id] = base && before && after ? nextPower(prev, base, before, after) : Math.round(prev * 10) / 10;
+    }
+    const seed: SeedBundle = { ...this.seed, season: ny, start_date: start, schedule, players: turn.players, power };
+    const games: Game[] = schedule.map((g) => ({
+      id: g.id, kind: "regular", week: g.week, date: g.date, kickoff_et: g.kickoff_et, home_id: g.home_id, away_id: g.away_id,
+      neutral: g.neutral, conference_game: g.conference_game, venue: g.venue, label: g.notes, status: "scheduled",
+      home_score: null, away_score: null, overtime: false,
+    }));
+    // Last season's offseason (spring practice, the draft, fall camp) is still ahead on the calendar.
+    const ahead = s.events.filter((e) => e.date >= s.date && e.status !== "done");
+    const events = seasonEvents(ny, start, schedule, s.settings.playoff).map((e) => (e.type === "dynasty_start" ? { ...e, label: `The ${ny} season opens` } : e));
+    const kept = new Set(Object.values(turn.players).flatMap((t) => t.players.map((p) => p.id)));
+    // Upgrades due by the new season are finished (and paid off).
+    const facilities = structuredClone(s.facilities ?? {});
+    const projects = (s.projects ?? []).filter((p) => {
+      if (p.done > `${ny}-08-01`) return true;
+      if (facilities[p.team_id]) facilities[p.team_id][p.area] = Math.max(facilities[p.team_id][p.area], p.to);
+      return false;
+    });
+    const state: SeasonState = {
+      year: ny, seed: s.seed, date: s.date, settings: s.settings, user_team_id: s.user_team_id, games, events: sortEvents([...ahead, ...events]),
+      polls: [], news: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      next_game_id: s.next_game_id + schedule.length, writers: s.writers, stars: {},
+      player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
+      requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
+    };
+    const next = new Season(state, seed);
+    next.startHidden(coaches);
+    next.startMoney();
+    // Your deals that run into the new season stand (renewing the rest comes with the renewals screen).
+    const me = s.user_team_id;
+    if (me != null) {
+      for (const p of next.roster(me)) {
+        const c = activeContract(s.contracts?.[p.id], ny);
+        if (c) next.state.contracts![p.id] = c;
+      }
+    }
+    next.startCollectives();
+    next.startFinance(seed.finances);
+    next.state.facilities = { ...next.state.facilities, ...facilities };
+    next.state.projects = projects;
+    next.weeklyMorale();
+    if (s.career) {
+      const c = s.career;
+      next.state.career = { ...c, expect: expectations(c.team_id, next.teams, games, power, s.settings.home_field_points), start: Math.round(this.security() ?? c.start), meetings: [] };
+    }
+    next.turnoverNews(turn.left, turn.added);
+    return { next, left: turn.left, added: turn.added };
+  }
+
+  /** News of who left and who arrived: your team in full, the rest of the country in brief. */
+  private turnoverNews(left: Departure[], added: RatedPlayer[]): void {
+    const s = this.state, me = s.user_team_id;
+    const pros = left.filter((d) => d.reason === "nfl").sort((a, b) => b.ovr - a.ovr || a.pid - b.pid);
+    this.news(s.date, "offseason", `${left.length} players leave college football; ${pros.length} head for the NFL draft`,
+      `Top prospects: ${pros.slice(0, 8).map((d) => `${d.pos} ${d.name} (${this.team(d.team_id).school})`).join(", ")}. ${added.length} freshmen join FBS and FCS rosters.`, pros.slice(0, 8).map((d) => d.team_id));
+    if (me == null) return;
+    const mine = left.filter((d) => d.team_id === me).sort((a, b) => b.ovr - a.ovr || a.pid - b.pid);
+    const fr = added.filter((p) => p.team_id === me).sort((a, b) => b.ovr - a.ovr || a.id - b.id);
+    const who = (d: Departure) => `${d.pos} ${d.name} (${d.ovr})`;
+    this.news(s.date, "offseason", `${this.team(me).school}: ${mine.length} players gone, ${fr.length} freshmen arrive`,
+      `To the NFL: ${mine.filter((d) => d.reason === "nfl").map(who).join(", ") || "nobody"}. Graduated: ${mine.filter((d) => d.reason === "graduated").map(who).join(", ") || "nobody"}. ` +
+      `Best of the new class: ${fr.slice(0, 5).map((p) => `${p.pos} ${playerName(p)} (${p.ovr})`).join(", ")}.`, [me]);
+  }
+
+  /** This season for the record book. */
+  summary(): SeasonSummary {
+    const s = this.state;
+    const recs = records(s.games, this.teams);
+    const h = s.awards?.find((a) => a.type === "heisman" && a.year === s.year);
+    const me = s.user_team_id;
+    const mine = me != null ? recs.get(me) : undefined;
+    return {
+      year: s.year, champion: s.champion, top25: this.latestPoll("ap")?.ranks.slice(0, 25).map((r) => r.team_id) ?? [], conf_champs: { ...s.conf_champs },
+      heisman: h ? { pid: h.pid, name: h.name, pos: h.pos, team_id: h.team_id } : null,
+      records: Object.fromEntries(this.teams.filter((t) => t.level === "fbs").map((t) => { const r = recs.get(t.id); return [t.id, [r?.w ?? 0, r?.l ?? 0]]; })),
+      user: me != null ? { team_id: me, w: mine?.w ?? 0, l: mine?.l ?? 0, rank: this.rankOf(me), security: this.security() } : null,
+    };
+  }
   team(id: number): Team { return this.teamById.get(id)!; }
   latestPoll(type: Poll["type"] = "ap"): Poll | null {
     for (let i = this.state.polls.length - 1; i >= 0; i--) if (this.state.polls[i].type === type) return this.state.polls[i];
@@ -365,6 +491,9 @@ export class Season {
   private adMeetings(today: ISODate, rep: DayReport): void {
     const c = this.state.career;
     if (!c) return;
+    // The preseason meeting is when the season opens, not right after last season's ended.
+    const opening = this.state.events.find((e) => e.type === "dynasty_start")?.date;
+    if (opening && today < opening) return;
     const has = (k: Meeting["kind"]) => c.meetings.some((m) => m.kind === k);
     const reg = this.state.games.filter((g) => g.kind === "regular" && (g.home_id === c.team_id || g.away_id === c.team_id));
     const played = reg.filter((g) => g.status === "final").length;

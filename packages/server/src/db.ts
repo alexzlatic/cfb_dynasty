@@ -46,6 +46,13 @@ const MIGRATIONS: string[] = [
   `
   CREATE TABLE rated_teams (team_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
   `,
+  // 4: M3 seasons roll over: past seasons' games, calendar, polls and news stay in the file, tagged with their year
+  `
+  ALTER TABLE games ADD COLUMN season INTEGER;
+  ALTER TABLE events ADD COLUMN season INTEGER;
+  ALTER TABLE polls ADD COLUMN season INTEGER;
+  ALTER TABLE news ADD COLUMN season INTEGER;
+  `,
 ];
 
 export function openDb(path: string): DatabaseSync {

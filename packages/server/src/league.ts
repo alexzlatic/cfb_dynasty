@@ -42,7 +42,7 @@ const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
-  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests"] as const;
+  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -111,15 +111,17 @@ export class League {
       player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
       budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
+      fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
-      games: all<Game>("SELECT data FROM games ORDER BY rowid"),
-      events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
-      polls: all("SELECT data FROM polls ORDER BY id"),
-      news: all("SELECT data FROM news ORDER BY rowid"),
+      // This season's rows; past seasons' are tagged with their year.
+      games: all<Game>("SELECT data FROM games WHERE season IS NULL ORDER BY rowid"),
+      events: all<CalEvent>("SELECT data FROM events WHERE season IS NULL ORDER BY date, id"),
+      polls: all("SELECT data FROM polls WHERE season IS NULL ORDER BY id"),
+      news: all("SELECT data FROM news WHERE season IS NULL ORDER BY rowid"),
     };
     if (seed?.players && !db.prepare("SELECT 1 FROM rated_teams LIMIT 1").get()) tx(db, () => writeRated(db, seed));
     const rosters: Record<string, Player[]> = {};
-    for (const r of db.prepare("SELECT team_id, data FROM players").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
+    for (const r of db.prepare("SELECT team_id, data FROM players WHERE status = 'active'").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
     const packed = Object.fromEntries((db.prepare("SELECT team_id, data FROM rated_teams").all() as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]));
     const players = Object.keys(packed).length ? unpackPlayers(packed, rosters) : undefined;
     lg.season = new Season(state, { teams, ratings, players, finances: seed?.finances } as SeedBundle);
@@ -187,7 +189,6 @@ export class League {
     const s = this.season.state;
     if (a.type === "create") throw new Error("create is only valid as a league's first action");
     if (a.type === "set_user_team" && a.payload.team_id != null && !this.season.teamById.has(a.payload.team_id)) throw new Error("unknown team");
-    if (a.type === "sim" && this.season.done) throw new Error("the season is over");
     if (a.type === "set_depth") this.checkDepth(a.payload.team_id, a.payload.depth);
     if (a.type === "call_game") { checkCalls(a.payload.calls); this.checkSubs(a.payload.subs); }
     if (a.type === "set_game_plan") a = { type: a.type, payload: checkPlan(a.payload) };
@@ -248,7 +249,11 @@ export class League {
       if (a.type === "set_collective_focus") this.season.setCollectiveFocus(a.payload.focus);
       if (a.type === "set_ticket_price") this.season.setTicketPrice(a.payload.game_id, a.payload.price);
       if (a.type === "request_project") this.season.requestProject(a.payload.area);
-      if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
+      if (a.type === "sim") {
+        // A sim after the season has ended starts the next one.
+        if (this.season.done) this.nextSeason();
+        reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
+      }
       this.writeMeta();
       return l;
     });
@@ -260,6 +265,41 @@ export class League {
       });
     }
     return reports;
+  }
+
+  /** Roll the league into its next season (inside an action's transaction): rosters, schedule, calendar. */
+  private nextSeason(): void {
+    const db = this.db, old = this.season.state;
+    const { next, left } = this.season.nextSeason(this.coaches());
+    const s = next.state;
+    // Last season's rows stay in the file under its year; what's still ahead on the calendar carries over.
+    const ahead = new Set(s.events.filter((e) => e.date >= s.date).map((e) => e.id));
+    db.prepare("UPDATE games SET season = ? WHERE season IS NULL").run(old.year);
+    db.prepare("UPDATE polls SET season = ? WHERE season IS NULL").run(old.year);
+    db.prepare("UPDATE news SET season = ? WHERE season IS NULL").run(old.year);
+    const keep = db.prepare("SELECT id FROM events WHERE season IS NULL").all() as { id: string }[];
+    const tag = db.prepare("UPDATE events SET season = ? WHERE id = ?");
+    for (const r of keep) if (!ahead.has(r.id)) tag.run(old.year, r.id);
+    const e = db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data");
+    for (const x of s.events) e.run(x.id, x.date, x.type, x.status, j(x));
+    const g = db.prepare("INSERT INTO games (id, date, kind, home_id, away_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    for (const x of s.games) g.run(x.id, x.date, x.kind, x.home_id, x.away_id, x.status, j(x));
+    const n = db.prepare("INSERT OR REPLACE INTO news (id, date, kind, author, data) VALUES (?, ?, ?, ?, ?)");
+    for (const x of s.news) n.run(x.id, x.date, x.kind, x.author ?? null, j(x));
+    // Players: everyone still playing with his new class (and the freshmen), and who left and why.
+    const pl = db.prepare("INSERT INTO players (id, team_id, pos, status, data) VALUES (?, ?, ?, 'active', ?) ON CONFLICT(id) DO UPDATE SET team_id = excluded.team_id, pos = excluded.pos, status = 'active', data = excluded.data");
+    for (const t of next.teams) {
+      for (const p of next.roster(t.id)) {
+        const ident: Player = { id: p.id, first: p.first, last: p.last, pos: p.listed, class: p.class, jersey: p.jersey, height: p.height, weight: p.weight, home: p.home, recruit_ids: [] };
+        const prev = db.prepare("SELECT data FROM players WHERE id = ?").get(String(p.id)) as { data: string } | undefined;
+        if (prev) ident.recruit_ids = (JSON.parse(prev.data) as Player).recruit_ids ?? [];
+        pl.run(String(p.id), t.id, p.listed, j(ident));
+      }
+    }
+    const gone = db.prepare("UPDATE players SET status = ? WHERE id = ?");
+    for (const d of left) gone.run(d.reason, String(d.pid));
+    writeRated(db, { players: Object.fromEntries(next.teams.flatMap((t) => { const tp = next.teamPlayers(t.id); return tp ? [[t.id, tp]] : []; })) } as SeedBundle);
+    this.season = next;
   }
 
   // ---- live games ----------------------------------------------------------------------------

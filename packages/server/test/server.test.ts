@@ -65,6 +65,51 @@ describe("replay gate", () => {
     expect(again.digest()).toBe(lg.digest());
     again.close();
   });
+  it("rolls into the next season, saves it, reopens it and replays both seasons", async () => {
+    const lg = manager.create({ name: "Two seasons", user_team_id: 251, seed: 21 });
+    lg.apply({ type: "sim", payload: { kind: "end_of_season" } });
+    const old = lg.season;
+    const champ = old.state.champion;
+    const regular = old.state.games.filter((g) => g.kind === "regular");
+    // A sim after the season ends starts the next one.
+    lg.apply({ type: "sim", payload: { kind: "day" } });
+    const s = lg.season.state;
+    expect(s.year).toBe(2027);
+    expect(lg.season.done).toBe(false);
+    expect(s.past).toHaveLength(1);
+    expect(s.past![0]).toMatchObject({ year: 2026, champion: champ });
+    expect(s.past![0].user!.team_id).toBe(251);
+    // The same matchups with home and away swapped, a year later on the same weekday.
+    expect(s.games).toHaveLength(regular.length);
+    const g0 = regular.find((g) => !g.neutral && g.home_id === 251)!;
+    const n0 = s.games.find((g) => g.home_id === g0.away_id && g.away_id === 251)!;
+    expect(new Date(n0.date).getUTCDay()).toBe(new Date(g0.date).getUTCDay());
+    expect(s.games.every((g) => g.status === "scheduled")).toBe(true);
+    // Rosters moved on: nobody stays past five seasons, every team is full again, and the news says who left.
+    const fbs = lg.season.teams.filter((t) => t.level === "fbs");
+    for (const t of fbs) {
+      const r = lg.season.roster(t.id);
+      expect(r.length).toBeLessThanOrEqual(105);
+      expect(r.length).toBeGreaterThanOrEqual(80);
+      expect(r.every((p) => p.years < 5)).toBe(true);
+    }
+    expect(s.news.some((n) => n.kind === "offseason" && n.team_ids.includes(251))).toBe(true);
+    expect(s.career!.meetings).toHaveLength(0);
+    // Saved: reopening gives the same league, and the old season's games stay in the file under 2026.
+    const { League } = await import("../src/league.ts");
+    const again = League.open("two-seasons-check", manager.path(lg.id), manager.seed());
+    expect(again.season.state.year).toBe(2027);
+    expect(again.digest()).toBe(lg.digest());
+    expect(again.season.roster(251).map((p) => [p.id, p.ovr, p.class])).toEqual(lg.season.roster(251).map((p) => [p.id, p.ovr, p.class]));
+    expect((lg.db.prepare("SELECT COUNT(*) AS n FROM games WHERE season = 2026").get() as { n: number }).n).toBe(old.state.games.length);
+    again.apply({ type: "sim", payload: { kind: "date", date: "2027-09-15" } });
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2027-09-15" } });
+    expect(again.digest()).toBe(lg.digest());
+    again.close();
+    expect(lg.season.state.games.some((g) => g.status === "final")).toBe(true);
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+  }, 300_000);
   it("a league saved before players were rated picks them up from the seed", async () => {
     const lg = manager.create({ name: "Old save", user_team_id: 2509, seed: 6 });
     lg.db.exec("DELETE FROM rated_teams");
