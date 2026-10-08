@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { loadSeed, type CareerStart, type SeedBundle, type Settings } from "@cfb/core";
+import { loadSeed, type CareerStart, type ConferenceSetup, type SeedBundle, type Settings } from "@cfb/core";
 import { League } from "./league.ts";
 
 /** Opens league files from a folder and keeps them open while the server runs. */
@@ -36,7 +36,7 @@ export class LeagueManager {
     return lg;
   }
 
-  create(opts: { name: string; user_team_id: number | null; seed?: number; settings?: Partial<Settings>; career?: CareerStart }): League {
+  create(opts: { name: string; user_team_id: number | null; seed?: number; settings?: Partial<Settings>; career?: CareerStart; conferences?: ConferenceSetup | null }): League {
     const base = opts.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "league";
     let id = base;
     for (let i = 2; existsSync(this.path(id)); i++) id = `${base}-${i}`;

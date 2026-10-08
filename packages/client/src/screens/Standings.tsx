@@ -12,7 +12,9 @@ export function Standings() {
   const { id, team, rank, state } = useLeague();
   const data = useData(() => api.standings(id), []);
   if (!data) return <p className="muted">Loading...</p>;
-  const confs = data.slice().sort((a, b) => ORDER.indexOf(a.conference) - ORDER.indexOf(b.conference));
+  // Conferences the league made up go after the real power conferences, independents last.
+  const at = (c: string) => (ORDER.includes(c) ? ORDER.indexOf(c) : c === "FBS Independents" ? 99 : 3.5);
+  const confs = data.slice().sort((a, b) => at(a.conference) - at(b.conference));
   return (
     <div className="standings">
       {confs.map((c) => (

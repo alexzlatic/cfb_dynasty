@@ -3,6 +3,7 @@ import { formatDate, type ISODate } from "./dates.ts";
 import { mixSeed } from "./hash.ts";
 import type { Voter } from "./polls.ts";
 import type { Game, Player, Poll, Team } from "./types.ts";
+import { isPower } from "./conferences.ts";
 
 /**
  * AP poll voters are beat writers. Every Power 4 team has its own writer (plus Notre Dame's beat),
@@ -35,7 +36,6 @@ export interface Writer {
   voter: Voter;
 }
 
-const P4 = ["SEC", "Big Ten", "ACC", "Big 12"];
 const PAPERS = ["Courier", "Ledger", "Sentinel", "Herald", "Record", "Dispatch Weekly", "Daily Press", "Observer", "Bulletin", "Gazette Online"];
 const SITES = ["Insider", "Report", "Nation", "Huddle", "Sideline", "Illustrated", "Digest", "Beat"];
 const NATIONAL = ["The Gridiron Weekly", "College Football Desk", "Saturday Report", "The Long Snapper"];
@@ -53,8 +53,8 @@ export function generateWriters(teams: Team[], rosters: Record<string, Player[]>
   const lpool = [...lasts].filter(([, n]) => n >= 3).map(([k]) => k).sort();
   const fbs = teams.filter((t) => t.level === "fbs");
   const beats: Writer["beat"][] = [];
-  for (const t of fbs) if (P4.includes(t.conference) || t.school === "Notre Dame") beats.push({ kind: "team", team_id: t.id });
-  const confs = [...new Set(fbs.map((t) => t.conference))].filter((c) => !P4.includes(c) && c !== "FBS Independents").sort();
+  for (const t of fbs) if (isPower(t)) beats.push({ kind: "team", team_id: t.id });
+  const confs = [...new Set(fbs.map((t) => t.conference))].filter((c) => c !== "FBS Independents" && !fbs.some((t) => t.conference === c && isPower(t))).sort();
   for (const c of confs) {
     const n = fbs.filter((t) => t.conference === c).length;
     for (let i = 0; i < (n >= 12 ? 3 : 2); i++) beats.push({ kind: "conference", conference: c });

@@ -7,6 +7,7 @@ import { Home } from "./screens/Home.tsx";
 import { CalendarScreen } from "./screens/Calendar.tsx";
 import { Schedule } from "./screens/Schedule.tsx";
 import { Standings } from "./screens/Standings.tsx";
+import { Conferences } from "./screens/Conferences.tsx";
 import { Polls } from "./screens/Polls.tsx";
 import { Writers, WriterPage } from "./screens/Writers.tsx";
 import { News } from "./screens/News.tsx";
@@ -81,7 +82,7 @@ const NAV: NavSection[] = [
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
-  { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Polls", "polls"), page("Postseason", "postseason"),
+  { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Conferences", "conferences"), page("Polls", "polls"), page("Postseason", "postseason"),
     page("Awards", "awards"), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
   { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
 ];
@@ -102,9 +103,14 @@ function LeagueShell({ id, screen, arg, sub }: { id: string; screen: string; arg
   const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(() => { api.state(id).then(setState).catch((e) => setErr(e.message)); setVersion((v) => v + 1); }, [id]);
-  useEffect(() => { api.teams(id).then((t) => setTeams(new Map(t.map((x) => [x.id, x])))); refresh(); }, [id, refresh]);
+  const loadTeams = useCallback(() => api.teams(id).then((t) => setTeams(new Map(t.map((x) => [x.id, x])))), [id]);
+  useEffect(() => { loadTeams(); refresh(); }, [id, refresh, loadTeams]);
+  // Teams change conferences when the conferences are edited and at a new season.
+  const year = state?.year;
+  useEffect(() => { if (year != null) loadTeams(); }, [year, loadTeams]);
   useEffect(() => subscribe(id, (m) => {
     refresh();
+    if (m.type === "action" && m.action.type === "set_conferences") loadTeams();
     if (m.type === "days" && m.news?.length) setToast(m.news[m.news.length - 1].headline);
   }), [id, refresh]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 5000); return () => clearTimeout(t); } }, [toast]);
@@ -156,6 +162,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "calendar" && <CalendarScreen />}
         {screen === "schedule" && <Schedule date={arg} />}
         {screen === "standings" && <Standings />}
+        {screen === "conferences" && <Conferences />}
         {screen === "polls" && <Polls date={arg} />}
         {screen === "postseason" && <Postseason />}
         {screen === "writers" && <Writers />}

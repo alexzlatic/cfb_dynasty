@@ -1,5 +1,6 @@
 import { mixSeed } from "./hash.ts";
 import type { Team } from "./types.ts";
+import { isPower } from "./conferences.ts";
 
 /**
  * A football program's budget (M2). Revenue: media rights and conference distributions, tickets, donors,
@@ -43,23 +44,32 @@ export const CONF_MEDIA: Record<string, number> = {
   "Big Ten": 42_000_000, SEC: 38_000_000, ACC: 31_000_000, "Big 12": 28_000_000, "Pac-12": 5_500_000, "American Athletic": 5_000_000,
   "Mountain West": 3_500_000, "Sun Belt": 2_500_000, "Mid-American": 1_500_000, "Conference USA": 1_200_000, "FBS Independents": 2_000_000,
 };
-const SCHOOL_MEDIA: Record<string, number> = { "Notre Dame": 25_000_000, Army: 4_000_000, Navy: 4_000_000 };
+export const SCHOOL_MEDIA: Record<string, number> = { "Notre Dame": 25_000_000, Army: 4_000_000, Navy: 4_000_000 };
 
 /** A school's media money: its own TV deal (Notre Dame, the academies) or its conference's per-member payout. */
 export function conferenceMedia(conference: string, school?: string): number {
   return (school ? SCHOOL_MEDIA[school] : undefined) ?? CONF_MEDIA[conference] ?? 2_000_000;
 }
-const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 const r10k = (x: number) => Math.round(x / 10_000) * 10_000;
 
 /** A school's budget inputs: real lines where loaded, estimates for the rest. */
-export function budgetFor(t: Pick<Team, "school" | "conference" | "level" | "prestige" | "venue">,
+/**
+ * A school's conference TV money: its league deal's payout (`t.media`), else the real figure. Independents
+ * earn their own deals; Army and Navy's real numbers hold while they're in the American.
+ */
+function mediaFor(t: Pick<Team, "school" | "conference" | "media"> & { power?: boolean }): number {
+  if (t.conference === "FBS Independents") return SCHOOL_MEDIA[t.school] ?? 2_000_000;
+  if (t.conference === "American Athletic" && SCHOOL_MEDIA[t.school]) return SCHOOL_MEDIA[t.school];
+  return t.media ?? CONF_MEDIA[t.conference] ?? (isPower(t) ? 25_000_000 : 2_000_000);
+}
+
+export function budgetFor(t: Pick<Team, "school" | "conference" | "level" | "prestige" | "venue" | "media">,
   fin: { attendance: number | null; home_games?: number; lines?: Partial<Record<string, number>> | null } | undefined): Budget | null {
   if (t.level !== "fbs") return null;
   const p = (t.prestige ?? 0) / 100;
-  const big = P4.has(t.conference) || t.school === "Notre Dame";
+  const big = isPower(t);
   const est = {
-    media: conferenceMedia(t.conference, t.school),
+    media: mediaFor(t),
     donors: big ? 6_000_000 + 30_000_000 * p * p : 800_000 + 5_000_000 * p * p,
     // Most Group of Five programs lean on their university and students to cover what football doesn't earn.
     support: big ? 500_000 : 4_000_000 + 3_000_000 * p,
@@ -110,7 +120,7 @@ export type Facilities = Record<Area, number>;
 export function facilitiesFor(t: Pick<Team, "id" | "school" | "conference" | "level" | "prestige">, seed: number): Facilities | null {
   if (t.level !== "fbs") return null;
   const p = (t.prestige ?? 0) / 100;
-  const base = P4.has(t.conference) || t.school === "Notre Dame" ? 2.6 + 2.2 * p : 1.2 + 2.2 * p;
+  const base = isPower(t) ? 2.6 + 2.2 * p : 1.2 + 2.2 * p;
   let h = mixSeed(seed, t.id, "facilities");
   const out = {} as Facilities;
   for (const a of Object.keys(AREAS) as Area[]) {

@@ -1,16 +1,17 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule,
+  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
 
 export type Action =
-  | { type: "create"; payload: { name: string; seed: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart } }
+  | { type: "create"; payload: { name: string; seed: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart; conferences?: ConferenceSetup | null } }
   | { type: "sim"; payload: SimCommand }
   | { type: "set_user_team"; payload: { team_id: number | null } }
   | { type: "update_settings"; payload: Partial<Settings> }
+  | { type: "set_conferences"; payload: ConferenceSetup }
   /** A team's depth chart; null puts back the opening depth chart. */
   | { type: "set_depth"; payload: { team_id: number; depth: DepthChart | null } }
   /** The user's calls from a game they called live (null = the coordinator's call); the game plays with them tonight. */
@@ -68,7 +69,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges"] as const;
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -81,12 +82,12 @@ export class League {
   private constructor(public readonly id: string, public readonly db: DatabaseSync) {}
 
   /** Create a league file from the seed bundle. The create action is the first entry in the log. */
-  static create(id: string, path: string, seed: SeedBundle, opts: { name: string; seed?: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart }): League {
+  static create(id: string, path: string, seed: SeedBundle, opts: { name: string; seed?: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart; conferences?: ConferenceSetup | null }): League {
     const db = openDb(path);
     const lg = new League(id, db);
     const career = opts.career == null ? undefined : checkCareer(opts.career);
-    const payload = { name: opts.name, seed: opts.seed ?? randomInt(1, 2 ** 31), user_team_id: opts.user_team_id, settings: opts.settings, career };
-    lg.season = Season.create(seed, { seed: payload.seed, user_team_id: payload.user_team_id, settings: payload.settings, career });
+    const payload = { name: opts.name, seed: opts.seed ?? randomInt(1, 2 ** 31), user_team_id: opts.user_team_id, settings: opts.settings, career, conferences: opts.conferences ?? null };
+    lg.season = Season.create(seed, { seed: payload.seed, user_team_id: payload.user_team_id, settings: payload.settings, career, conferences: payload.conferences });
     lg.name = opts.name;
     tx(db, () => {
       const ins = (sql: string, rows: unknown[][]) => { const st = db.prepare(sql); for (const r of rows) st.run(...(r as never[])); };
@@ -297,7 +298,7 @@ export class League {
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
     if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
-    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
+    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
     let reports: DayReport[] = [];
     const logged = tx(this.db, () => {
@@ -315,6 +316,12 @@ export class League {
         this.db.exec("DELETE FROM events");
         const e = this.db.prepare("INSERT INTO events (id, date, type, status, data) VALUES (?, ?, ?, ?, ?)");
         for (const x of s.events) e.run(x.id, x.date, x.type, x.status, j(x));
+      }
+      if (a.type === "set_conferences") {
+        this.season.setConferences(a.payload);
+        this.db.exec("DELETE FROM games WHERE season IS NULL AND kind = 'regular'");
+        const g = this.db.prepare("INSERT INTO games (id, date, kind, home_id, away_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        for (const x of s.games) if (x.kind === "regular") g.run(x.id, x.date, x.kind, x.home_id, x.away_id, x.status, j(x));
       }
       if (a.type === "set_depth") this.season.setDepth(a.payload.team_id, a.payload.depth);
       if (a.type === "call_game") { this.season.setCalls(a.payload.game_id, a.payload.calls); this.season.setSubs(a.payload.game_id, a.payload.subs ?? []); }

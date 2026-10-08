@@ -14,6 +14,9 @@ let base = "";
 beforeAll(() => {
   manager = new LeagueManager(mkdtempSync(join(tmpdir(), "cfb-test-")));
   server = startServer({ manager }, 0);
+  // Tests run long synchronous sims between requests; keep idle sockets open longer than that so fetch
+  // never reuses one the server has just closed (ECONNRESET).
+  server.keepAliveTimeout = 300_000;
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => { server.close(); manager.closeAll(); });
@@ -565,4 +568,49 @@ describe("money", () => {
     expect(JSON.stringify(again.season.state.recruiting)).toBe(want);
     again.close();
   }, 60_000);
+});
+
+describe("custom conferences", () => {
+  it("starts a league with your conferences, keeps them through a reopen and replays", async () => {
+    const real = await get("/api/seed/conferences");
+    expect(real.conferences.find((c: { name: string }) => c.name === "Big Ten").members).toHaveLength(18);
+    const confs = structuredClone(real.conferences) as { name: string; members: number[]; conf_games: number; divisions: unknown }[];
+    const nd = manager.seed().teams.find((t) => t.school === "Notre Dame")!.id;
+    for (const c of confs) c.members = c.members.filter((x) => x !== nd);
+    confs.find((c) => c.name === "ACC")!.members.push(nd);
+    const bad = await post("/api/leagues", { name: "Bad confs", team_id: nd, conferences: { conferences: confs.filter((c) => c.name !== "SEC") } });
+    expect(bad.error).toMatch(/no conference/);
+    const { id } = await post("/api/leagues", { name: "Custom confs", team_id: nd, seed: 4, conferences: { conferences: confs, tie_ins: real.tie_ins } });
+    const lg = manager.get(id)!;
+    expect(lg.season.teamById.get(nd)!.conference).toBe("ACC");
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-20" } });
+    const view = await get(`/api/leagues/${id}/conferences`);
+    expect(view.conferences.find((c: { name: string }) => c.name === "ACC").members).toContain(nd);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("custom-confs-check", manager.path(id));
+    expect(again.season.teamById.get(nd)!.conference).toBe("ACC");
+    expect(again.digest()).toBe(lg.digest());
+    again.close();
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+  }, 120_000);
+});
+
+describe("commissioner mode", () => {
+  it("edits conferences through the action log before the first game, then refuses, and replays", () => {
+    const lg = manager.create({ name: "Commish", user_team_id: null, seed: 8, settings: { commissioner: true } });
+    expect(lg.season.canEditConferences()).toBe(true);
+    expect(lg.season.state.realign!.deals["SEC"].per_school).toBe(38_000_000);
+    const confs = structuredClone(lg.season.conferences()) as { name: string; members: number[]; conf_games: number }[];
+    const boise = manager.seed().teams.find((t) => t.school === "Boise State")!.id;
+    for (const c of confs) { c.members = c.members.filter((x) => x !== boise); c.conf_games = Math.min(c.conf_games, Math.max(0, c.members.length - 1)); }
+    confs.find((c) => c.name === "Big 12")!.members.push(boise);
+    lg.apply({ type: "set_conferences", payload: { conferences: confs } as never });
+    expect(lg.season.teamById.get(boise)!.conference).toBe("Big 12");
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-08" } });
+    expect(lg.season.canEditConferences()).toBe(false);
+    expect(() => lg.apply({ type: "set_conferences", payload: { conferences: confs } as never })).toThrow(/before the season's first game/);
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+  }, 120_000);
 });

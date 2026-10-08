@@ -465,3 +465,21 @@ th.sortable .arrow { font-size: 9px; margin-left: 3px; }
 .oop { background: #fff3c4; color: #8a5a00; }
 .dpool.over .panel { outline: 2px solid var(--accent); }
 select.dadd { width: 100%; margin-top: 4px; font-size: 12px; }
+
+/* Conferences: the new-league editor and League > Conferences */
+.confedit .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+.confgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.confcard.over { outline: 2px dashed var(--accent, #4a7); }
+.confhead { display: flex; align-items: center; gap: 6px; }
+.confhead .confname { flex: 1; font-weight: 600; min-width: 0; }
+.confrules { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 6px 0; }
+.confrules label { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0; color: var(--ink); font-size: 12px; }
+.confrules input[type=number] { width: 44px; }
+.confteams { list-style: none; padding: 0; margin: 4px 0; max-height: 360px; overflow-y: auto; }
+.confteams li { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 13px; }
+.confteams li[draggable] { cursor: grab; }
+.confteams li span { flex: 1; }
+.confteams li select { font-size: 11px; max-width: 110px; }
+.tieins select { font-size: 11px; }
+.chip { padding: 1px 6px; margin: 0 4px 2px 0; }
+ul.warn, p.warn { color: #c44; }

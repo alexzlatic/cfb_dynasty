@@ -1,5 +1,6 @@
 import type { Pos, RatedPlayer } from "./players.ts";
 import type { Team } from "./types.ts";
+import { isPower } from "./conferences.ts";
 
 /**
  * Money (M2). Two kinds of money reach players, kept apart the way the House settlement does:
@@ -83,7 +84,6 @@ export function eligibilityLeft(p: Pick<RatedPlayer, "years">): number {
   return Math.max(1, Math.min(4, 5 - p.years));
 }
 
-const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 
 /**
  * Football's revenue-share budget for a school this year. Every power-conference school (and Notre Dame)
@@ -95,7 +95,7 @@ export function footballPool(t: Pick<Team, "conference" | "school" | "level" | "
   if (t.level !== "fbs") return 0;
   // A school whose whole roster budget is smaller than the cap can't give football all of it (Boston College).
   if (rosterBudget) return round(Math.min(full, 0.85 * rosterBudget * rosterBudgetYear(year)));
-  if (P4.has(t.conference) || t.school === "Notre Dame") return round(full);
+  if (isPower(t)) return round(full);
   return round(full * Math.max(0.08, Math.min(0.6, 0.06 + 0.5 * (t.prestige ?? 0) / 100)));
 }
 

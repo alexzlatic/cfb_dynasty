@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useLeague } from "../App.tsx";
 import { api, type Settings } from "../api.ts";
 
+export const REALIGN: Record<Settings["realignment"], string> = {
+  market: "Market (TV deals, invitations and folds)", promotion: "Promotion and relegation", fixed: "Fixed (conferences never change on their own)",
+};
 const FIELDS: Record<number, number[]> = { 2: [0], 4: [0], 8: [0], 12: [4, 0], 16: [0], 24: [8] };
 
 export function SettingsScreen() {
@@ -59,6 +62,12 @@ export function SettingsScreen() {
           stops more lopsided NIL deals. Players get one free transfer (a second costs a season of eligibility) and five seasons in five years, so fourth-year players
           mostly stay for a fifth. The ban on head coaches leaving mid-season comes with coaching moves. Changing this re-signs every roster, so it can only change
           before the season's first game.</p>
+      </section>
+      <section className="panel">
+        <h3>Conferences</h3>
+        <p className="small">Realignment: <strong>{REALIGN[s.realignment ?? "market"]}</strong> <span className="muted">(set when the league started)</span></p>
+        <label className="check"><input type="checkbox" checked={!!s.commissioner} onChange={(e) => setS({ ...s, commissioner: e.target.checked })} /> Commissioner mode</label>
+        <p className="muted small">Lets you rewrite the conferences (League &gt; Conferences) in the offseason, before a season's first game. Conferences you change get new conference schedules.</p>
       </section>
       <button className="primary" onClick={save}>Save settings</button> {msg && <span className="muted">{msg}</span>}
     </div>

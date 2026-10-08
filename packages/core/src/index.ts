@@ -29,5 +29,7 @@ export * from "./recruiting.ts";
 export * from "./staff.ts";
 export * from "./draft.ts";
 export * from "./portal.ts";
+export * from "./conferences.ts";
+export * from "./realign.ts";
 export * from "./schemes.ts";
 export * from "./scouting.ts";

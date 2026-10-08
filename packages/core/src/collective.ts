@@ -1,5 +1,6 @@
 import type { Pos } from "./players.ts";
 import type { Team } from "./types.ts";
+import { isPower } from "./conferences.ts";
 
 /**
  * Collectives (M2): boosters' NIL money, on top of the school's revenue share. Each school's collective
@@ -26,7 +27,6 @@ export interface NilDeal {
   date: string;
 }
 
-const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 /** Share of a year's money a collective holds back for in-season deals. */
 export const RESERVE = 0.15;
 /** Positions the head coach can ask for at once. */
@@ -42,7 +42,7 @@ export function collectiveBase(t: Pick<Team, "conference" | "school" | "level" |
   if (t.level !== "fbs") return 0;
   if (roster) return Math.round(Math.max(300_000, roster.budget - roster.pool) / 10_000) * 10_000;
   const p = (t.prestige ?? 0) / 100;
-  const x = P4.has(t.conference) || t.school === "Notre Dame" ? 2_000_000 + 22_000_000 * p * p : 300_000 + 4_000_000 * p * p;
+  const x = isPower(t) ? 2_000_000 + 22_000_000 * p * p : 300_000 + 4_000_000 * p * p;
   return Math.round(x / 10_000) * 10_000;
 }
 
