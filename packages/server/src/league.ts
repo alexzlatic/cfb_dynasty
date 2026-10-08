@@ -22,7 +22,9 @@ export type Action =
   /** Put one of your players on the redshirt list (he plays in up to four games), or take him off. */
   | { type: "set_redshirt"; payload: { pid: number; on: boolean } }
   /** Put one of your players on an individual development plan (null takes him off). */
-  | { type: "set_lab"; payload: { pid: number; area: LabArea | null } };
+  | { type: "set_lab"; payload: { pid: number; area: LabArea | null } }
+  /** Sign one of your players to a revenue-share contract: dollars a year and seasons (amount 0 ends it). */
+  | { type: "sign_contract"; payload: { pid: number; amount: number; years: number } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -33,7 +35,7 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab"] as const;
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -98,6 +100,7 @@ export class League {
       player_stats: meta.player_stats ?? undefined, award_week: meta.award_week ?? undefined, awards: meta.awards ?? undefined,
       redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
       hidden_ctx: meta.hidden_ctx ?? undefined, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
+      contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
@@ -117,6 +120,8 @@ export class League {
     // Leagues saved before hidden ratings: the truth comes from the league seed, so it is the same as if
     // it had been there from the start (games already played stay as they were).
     if (!meta.hidden_ctx) lg.season.startHidden(lg.coaches());
+    // Leagues saved before money: athletic departments sign their contracts the way a new league's would.
+    if (!meta.contracts) lg.season.startMoney();
     return lg;
   }
 
@@ -180,6 +185,12 @@ export class League {
       if (area != null && !Object.hasOwn(LAB_AREAS, area)) throw new Error(`unknown development area ${area}`);
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), area } };
     }
+    if (a.type === "sign_contract") {
+      const amount = Math.round(Number(a.payload?.amount) / 1000) * 1000, years = Number(a.payload?.years);
+      if (!Number.isFinite(amount) || amount < 0 || amount > 10_000_000) throw new Error("a contract is $0 to $10M a year");
+      if (amount > 0 && (!Number.isInteger(years) || years < 1 || years > 4)) throw new Error("a contract runs 1 to 4 seasons");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), amount, years: amount > 0 ? years : 0 } };
+    }
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -206,6 +217,7 @@ export class League {
       if (a.type === "set_practice") this.season.setPractice(a.payload);
       if (a.type === "set_redshirt") this.season.setRedshirt(a.payload.pid, a.payload.on);
       if (a.type === "set_lab") this.season.setLab(a.payload.pid, a.payload.area);
+      if (a.type === "sign_contract") this.season.setContract(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       this.writeMeta();
       return l;

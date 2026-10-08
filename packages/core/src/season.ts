@@ -10,6 +10,7 @@ import { expectations, meetingText, newCareer, securityTrail, winChance, type Ca
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
+import { activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
 import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
@@ -79,6 +80,9 @@ export interface SeasonState {
   morale?: Record<number, number>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
+  /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
+  contracts?: Record<number, Contract>;
+  pools?: Record<number, number>;
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -228,6 +232,7 @@ export class Season {
     };
     const season = new Season(state, seed);
     season.startHidden(seed.coaches ?? []);
+    season.startMoney();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
   }
@@ -333,6 +338,49 @@ export class Season {
     const ad = `${c.ad.first} ${c.ad.last}`;
     const head = kind === "preseason" ? `Athletic director ${ad} sets the bar for ${s.year}` : kind === "midseason" ? `Midseason meeting with athletic director ${ad}` : `End-of-season meeting with athletic director ${ad}`;
     rep.news.push(this.news(date, "ad", head, text, [c.team_id]));
+  }
+
+  // ---- money -------------------------------------------------------------------------------------
+  /** Every school's football revenue-share budget, and the contracts its athletic department has signed. */
+  startMoney(): void {
+    const s = this.state;
+    s.pools = {};
+    s.contracts = {};
+    for (const t of this.teams) {
+      const pool = footballPool(t, s.year);
+      if (!pool) continue;
+      s.pools[t.id] = pool;
+      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year));
+    }
+  }
+
+  /** A team's revenue-share payroll this year. */
+  payroll(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (activeContract(s.contracts?.[p.id], s.year)?.amount ?? 0), 0);
+  }
+
+  /**
+   * Sign one of your players to a revenue-share contract (amount 0 ends his deal). Your payroll has to
+   * stay under football's budget, and a deal can't run past his eligibility.
+   */
+  setContract(pid: number, amount: number, years: number): void {
+    const s = this.state, me = s.user_team_id;
+    const p = this.playerById.get(pid);
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only sign your own players");
+    const contracts = { ...s.contracts };
+    if (amount <= 0) { delete contracts[pid]; s.contracts = contracts; return; }
+    if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
+    const room = (s.pools?.[me] ?? 0) - this.payroll(me) + (activeContract(s.contracts?.[pid], s.year)?.amount ?? 0);
+    if (amount > room) throw new Error(`that is over your budget: $${Math.round(room / 1000)}K left`);
+    contracts[pid] = { amount, years, start: s.year };
+    s.contracts = contracts;
+  }
+
+  /** A player's market value this year. */
+  value(pid: number): number {
+    const p = this.playerById.get(pid);
+    return p ? playerValue(p) : 0;
   }
 
   // ---- true vs scouted ratings ------------------------------------------------------------------

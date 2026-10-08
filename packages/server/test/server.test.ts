@@ -329,3 +329,49 @@ describe("hidden ratings and development plans", () => {
     again.close();
   }, 60_000);
 });
+
+describe("money", () => {
+  const postR = (path: string, b: unknown): Promise<any> => post(path, b).catch(() => post(path, b));
+  const getR = (path: string): Promise<any> => get(path).catch(() => get(path));
+  it("signs revenue-share contracts under football's budget through the action log, and replays", async () => {
+    const { id } = await postR("/api/leagues", { name: "Payroll", team_id: 2509, seed: 41 });
+    const lg = manager.get(id);
+    const pr = await getR(`/api/leagues/${id}/payroll`);
+    expect(pr.team_id).toBe(2509);
+    expect(pr.pool).toBeGreaterThan(10_000_000);
+    expect(pr.payroll).toBeLessThanOrEqual(pr.pool);
+    expect(pr.payroll).toBeGreaterThan(pr.pool * 0.9);
+    // Every FBS school's athletic department signed its players, under its budget.
+    for (const t of lg.season.teams.filter((x) => x.level === "fbs")) expect(lg.season.payroll(t.id)).toBeLessThanOrEqual(lg.season.state.pools![t.id]);
+    const act = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "sign_contract", payload });
+    const top = [...pr.players].sort((a: any, b: any) => b.value - a.value)[0];
+    const room = pr.pool - pr.payroll + (top.contract?.amount ?? 0);
+    expect((await act({ pid: top.pid, amount: room + 50_000, years: 1 })).error).toMatch(/over your budget/);
+    expect((await act({ pid: top.pid, amount: 100_000, years: 9 })).error).toMatch(/1 to 4 seasons/);
+    expect((await act({ pid: lg.season.roster(135)[0].id, amount: 100_000, years: 1 })).error).toMatch(/own players/);
+    expect((await act({ pid: top.pid, amount: room, years: 1 })).ok).toBe(true);
+    expect(lg.season.payroll(2509)).toBe(pr.pool);
+    const cut = pr.players.find((p: any) => p.contract && p.pid !== top.pid);
+    expect((await act({ pid: cut.pid, amount: 0 })).ok).toBe(true);
+    expect(lg.season.state.contracts![cut.pid]).toBeUndefined();
+    const other = await getR(`/api/leagues/${id}/payroll?team=135`);
+    expect(other.mine).toBe(false);
+
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("money-check", manager.path(id));
+    expect(again.season.state.contracts).toEqual(lg.season.state.contracts);
+    again.close();
+  }, 60_000);
+
+  it("a league saved before money gets its contracts when opened", async () => {
+    const lg = manager.create({ name: "Pre-money save", user_team_id: 2509, seed: 5 });
+    const want = lg.season.state.contracts;
+    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools')");
+    const { League } = await import("../src/league.ts");
+    const again = League.open("pre-money", manager.path(lg.id));
+    expect(again.season.state.contracts).toEqual(want);
+    again.close();
+  }, 60_000);
+});
