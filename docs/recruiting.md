@@ -24,10 +24,34 @@ end, and its real commitments start as verbals that can flip.
 
 ## The national service
 
-The service rates about 50 sophomores, about 500 juniors and every senior, with stars, a composite (0.80
-to 1.00, from the real composite curve by rank: about 35 five-stars and 450 four-stars a class) and a
-national rank. Its read of each prospect is his truth plus an error that shrinks as he gets older. It
-publishes new ratings on May 15, August 1 and December 15, so stars and ranks change on those dates.
+Every class exists in full from the day it appears (about 4,100 prospects). The service rates about 50
+freshmen, about 500 sophomores and every junior and senior, with stars, a composite (0.80 to 1.00, from
+the real composite curve by rank: about 35 five-stars and 450 four-stars a class) and a national rank.
+Its read of each prospect is his truth plus an error that shrinks as he gets older. It publishes new
+ratings on May 15, August 1 and December 15, so stars and ranks change on those dates.
+
+## Finding prospects
+
+The rest of a young class is out there but unknown until someone finds him. Your staff knows everyone
+the service rates or who has committed, plus whoever it has found itself. Each week every unknown
+prospect has a small chance of being found, highest near home and in regions you pay a scout for:
+
+| Where he lives | Chance a week (a top prospect) |
+|---|---|
+| Your home state or within 300 miles | 8% |
+| A region you scout | 6% |
+| Elsewhere, power program (national scouting) | 0.4% |
+| Elsewhere | 0.2% |
+
+Better prospects are found faster (the chance falls off quickly below the top 10% of a class), a staff
+with better scouting finds more, and the share of staff time on scouting scales it (half to double).
+A new league starts with what a staff would already have found. Prospects you put on your board, offer,
+scout or spend hours on stay known. AI schools recruit the prospects in play nationally: the top 50
+freshmen, top 500 sophomores and every junior and senior, so their recruiting is unchanged.
+
+A prospect weighs his top schools; his page and the big board show who he is considering and his
+leader's share. Schools at the very top (whose range reaches 91) consider prospects of any level, so
+the best prospects always have suitors.
 
 ## Scouting
 
@@ -81,18 +105,19 @@ school fills from the portal (its real style).
 `npx tsx packages/core/scripts/recruit-gates.ts [seasons] [seed]` plays a dynasty with no user team and
 checks each signing class against real ones. The 2027 class is real; from 2028 on the AI recruits.
 
-Seed 7, the first three AI-recruited classes (2028-2030):
+Seed 7, the first three AI-recruited classes (2028-2030), with prospect discovery and the NFL draft's
+effect on prestige in place:
 
 | | real | 2028-2030 |
 |---|---|---|
-| Five-stars to top-10 classes | 70-90% | 79-94% |
-| Four-stars to power programs | nearly all (a few to top Group of Six programs is fine) | 99.8-100% |
-| Three-stars to power programs (of FBS signees) | 48% | 54-57% |
-| Signees within 300 miles | 45-60% | 61-64% |
-| Class size, 10th/50th/90th percentile | 12/20/29 | 11-14/20-22/25-27 |
+| Five-stars to top-10 classes | 70-90% | 74-83% |
+| Four-stars to power programs | nearly all (a few to top Group of Six programs is fine) | 99.6-99.8% |
+| Three-stars to power programs (of FBS signees) | 48% | 53-56% |
+| Signees within 300 miles | 45-60% | 61-62% |
+| Class size, 10th/50th/90th percentile | 12/20/29 | 11-14/20-21/25-27 |
 | Position mix | | within 2 points of real |
 | Class points, year-to-year correlation | 0.80-0.92 | 0.79-0.88 |
-| Five-stars and four-stars a class | 25-40 and 380-520 | 31-34 and 452 |
+| Five-stars and four-stars a class | 25-40 and 380-520 | 35 and 452 |
 
 Three-stars lean a little toward power programs and signees stay a little closer to home than real
 ones; both are within a few points.
@@ -118,10 +143,13 @@ the transfer portal (step 5) and the coaching carousel (M4) are the remaining re
 
 Your staff runs your board by default. Turn that off to run it yourself: put contact hours on the
 prospects you want (your recruiting share of staff time sets the total), offer, and send scouts.
-Actions: `recruit_auto`, `recruit_hours`, `recruit_offer`, `scout_prospect`, `scout_region`,
-`staff_time`. API: `GET /api/leagues/:id/recruiting` (a class as your staff sees it, with filters
-`cls`, `pos`, `region`, `view` = all, rated, mine or committed), `GET .../recruiting/prospect?pid=` and
-`GET .../recruiting/rankings?cls=`.
+Actions: `recruit_auto`, `recruit_hours`, `recruit_offer`, `recruit_board` (your ordered big board),
+`scout_prospect`, `scout_region`, `staff_time`. API: `GET /api/leagues/:id/recruiting` (a class as your
+staff sees it, with filters `cls`, `pos`, `region`, `q`, `stars`, `status`, `sort` and `view` = known,
+rated, found, board, mine or committed), `GET .../recruiting/prospect?pid=` (his page: who he's
+considering, your read over time, projected ratings), `GET .../recruiting/board`,
+`GET .../recruiting/map?cls=` and `GET .../recruiting/rankings?cls=`. Prospects your staff doesn't know
+return 404.
 
 ## Determinism
 

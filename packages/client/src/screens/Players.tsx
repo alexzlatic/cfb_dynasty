@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { ATTR_LABELS, ATTRS, fromZ, type Pos } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type Injury, type RatedPlayer } from "../api.ts";
+import { api, type DepthChart, type GameRow, type Injury, type RatedPlayer } from "../api.ts";
+import { Dial, DualBar } from "./ratings.tsx";
 import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
 
@@ -94,94 +95,124 @@ const AWARD_LABEL: Record<string, string> = {
   conf_poy_off: "Offensive player of the year", conf_poy_def: "Defensive player of the year",
 };
 
+/** A player's page, laid out like OOTP's: a header card, then tabs for ratings, stats and his background. */
 export function PlayerPage({ pid }: { pid: number }) {
-  const { id } = useLeague();
+  const { id, state } = useLeague();
   const data = useData(() => api.player(id, pid), [pid]);
+  const [tab, setTab] = useState<"ratings" | "stats" | "bio">("ratings");
   if (!data) return <p className="muted">Loading...</p>;
-  const { player: p, team: t, log, injury } = data;
-  const cols = STAT_COLS.filter(([k]) => log.some((g) => g.line[k]));
-  const snaps = log.reduce((a, g) => a + g.snaps, 0);
-  const tot: Record<string, number> = {};
-  for (const g of log) for (const [k] of cols) tot[k] = (tot[k] ?? 0) + (g.line[k] ?? 0);
+  const { player: p, team: t, log, injury, potential } = data;
+  const mine = t.id === state.user_team_id;
+  // Each rating's potential: he grows about evenly toward his potential overall (as the staff reads it).
+  const room = Math.max(0, potential.est - p.ovr);
   return (
     <div>
-      <div className="teamhead" style={{ background: t.color, color: onColor(t.color), borderBottomColor: t.alt_color }}>
-        <Logo team={t} size={64} />
-        <div>
-          <h1>{p.jersey != null ? <span className="muted">#{p.jersey} </span> : null}{p.first} {p.last}</h1>
-          <div>{p.pos} · {p.class}{data.redshirt ? <span className="rs">RS</span> : null} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school}</a>{data.slots.length ? ` · ${data.slots.join(", ")} on the depth chart` : ""}</div>
-          {injury && <div className="injline">Injured: {injury.type}, {outUntil(injury)}</div>}
-          <div className="small">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
+      <div className="hero" style={{ ["--c1" as string]: t.color, ["--c2" as string]: t.alt_color, color: onColor(t.color) }}>
+        <div className="jersey">{p.jersey ?? p.pos}</div>
+        <Logo team={t} size={84} />
+        <div className="who">
+          <div className="kicker">{p.pos} · {p.class}{data.redshirt ? " (redshirt)" : ""} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school} {t.mascot}</a></div>
+          <h1>{p.first} {p.last}</h1>
+          <div className="bio">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
+          <div className="chips">
+            {data.slots.length > 0 && <span className="chip">{data.slots.join(", ")}</span>}
+            {p.stars ? <span className="chip">{"★".repeat(p.stars)} recruit{p.natl_rank ? `, No. ${p.natl_rank}` : ""}</span> : null}
+            {injury && <span className="chip bad">Injured: {injury.type}, {outUntil(injury)}</span>}
+            {data.awards.some((a) => a.type === "heisman") && <span className="chip gold">Heisman winner</span>}
+          </div>
         </div>
-        <div className="power">Overall <Rating v={p.ovr} big /></div>
+        <div className="dials">
+          <Dial v={p.ovr} label="Overall" />
+          <Dial v={potential.est} label="Potential" range={[potential.lo, potential.hi]} faded />
+        </div>
       </div>
-      <div className="cols">
-        <div>
-          <Panel title="Ratings">
-            {ATTRS[p.pos].map((a) => <Bar key={a} label={ATTR_LABELS[a]} v={p.attrs[a]} />)}
-            <p className="muted small">{p.basis === "stats" ? `Rated from ${p.sample} ${p.pos === "QB" ? "attempts" : "plays"} of 2024-25 stats plus recruiting.` : "Rated mostly from recruiting and experience (little college playing time)."}</p>
+      <div className="pagetabs">
+        <button className={tab === "ratings" ? "on" : ""} onClick={() => setTab("ratings")}>Ratings</button>
+        <button className={tab === "stats" ? "on" : ""} onClick={() => setTab("stats")}>Stats ({log.length} games)</button>
+        <button className={tab === "bio" ? "on" : ""} onClick={() => setTab("bio")}>Background</button>
+      </div>
+      {tab === "ratings" && (
+        <div className="cols">
+          <Panel title="Ratings" right={<span className="small muted">now / potential</span>}>
+            {ATTRS[p.pos].map((a) => <DualBar key={a} label={ATTR_LABELS[a]} now={p.attrs[a]} pot={Math.min(99, p.attrs[a] + room)} />)}
+            <p className="muted small">{p.basis === "stats" ? `Rated from ${p.sample} ${p.pos === "QB" ? "attempts" : "plays"} of college stats plus recruiting.` : "Rated mostly from recruiting and experience (little college playing time)."}
+              {" "}Potential is {mine ? "your staff's read (it knows its own players well)" : "what scouts see from outside the program, a wider guess"}.</p>
           </Panel>
-          <Panel title={`2026 game log (${log.length})`}>
-            {!log.length ? <p className="muted">No stats yet.</p> : (
-              <table className="grid tight">
-                <thead><tr><th>Game</th>{snaps > 0 && <th className="num" title="Snaps played">Snaps</th>}{cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
-                <tbody>
-                  {log.map(({ game, line, snaps: n }) => (
-                    <tr key={game.id}><td><GameLine g={game} showDate /></td>{snaps > 0 && <td className="num">{n || ""}</td>}{cols.map(([k]) => <td key={k} className="num">{line[k] ?? ""}</td>)}</tr>
-                  ))}
-                  <tr className="total"><td>Season</td>{snaps > 0 && <td className="num">{snaps}</td>}{cols.map(([k]) => <td key={k} className="num">{tot[k]}</td>)}</tr>
-                </tbody>
-              </table>
+          <div>
+            <Panel title="Traits">
+              <DualBar label="Stamina" now={p.traits.stamina} />
+              <DualBar label="Toughness" now={p.traits.toughness} />
+              <DualBar label="Discipline" now={p.traits.discipline} />
+              {/* Injury proneness is stored 0-99 around 50; shown the other way up, on the ratings scale. */}
+              <DualBar label="Durability" now={fromZ(-(p.traits.injury - 50) / 15)} />
+              {p.tend.scramble != null && <p className="small">Scrambles on {(p.tend.scramble * 100).toFixed(0)}% of dropbacks.</p>}
+            </Panel>
+            {data.staff && data.staff.growth != null && (
+              <Panel title="Your staff's read" right={<a href={`#/l/${id}/development`}>Development</a>}>
+                <table className="grid tight"><tbody>
+                  <tr><td>Expected progress so far</td><td className="num">{data.staff.expected! > 0 ? "+" : ""}{data.staff.expected!.toFixed(1)}</td></tr>
+                  <tr><td>Beyond what was expected</td><td className={"num " + (data.staff.growth >= 1 ? "win" : data.staff.growth <= -1 ? "loss" : "")}>{data.staff.growth > 0 ? "+" : ""}{data.staff.growth.toFixed(1)}</td></tr>
+                  <tr><td>Leadership</td><td className="num">{data.staff.leadership}</td></tr>
+                  <tr><td>Adaptability</td><td className="num">{data.staff.adaptability}</td></tr>
+                  <tr><td>Development plan</td><td className="num">{data.staff.plan ? data.staff.plan.area[0].toUpperCase() + data.staff.plan.area.slice(1) : "None"}</td></tr>
+                </tbody></table>
+                <p className="muted small">Overall points. Only your staff sees this; his listed rating is what scouts see.</p>
+              </Panel>
             )}
-          </Panel>
+            {data.redshirt && <p className="small">Redshirting: {data.season?.gp ?? 0} of {data.redshirt_games} games played.</p>}
+          </div>
         </div>
-        <div>
-          {data.awards.length > 0 && (
-            <Panel title="Honors">
-              <table className="grid tight"><tbody>{data.awards.map((a, i) => (
-                <tr key={i}><td className="nowrap">{shortDate(a.date)}</td><td>{AWARD_LABEL[a.type]}{a.conference && a.type.startsWith("conf") ? ` (${a.conference})` : ""}{a.team ? `, ${a.team === 1 ? "first" : "second"} team` : ""}
-                  <div className="small muted">{a.line}</div></td></tr>
-              ))}</tbody></table>
-            </Panel>
-          )}
-          {data.redshirt && <p className="small">Redshirting: {data.season?.gp ?? 0} of {data.redshirt_games} games played.</p>}
-          <Panel title="Traits">
-            <Bar label="Stamina" v={p.traits.stamina} />
-            <Bar label="Toughness" v={p.traits.toughness} />
-            <Bar label="Discipline" v={p.traits.discipline} />
-            {/* Injury proneness is stored 0-99 around 50; shown the other way up, on the ratings scale. */}
-            <Bar label="Durability" v={fromZ(-(p.traits.injury - 50) / 15)} />
-            {p.tend.scramble != null && <p className="small">Scrambles on {(p.tend.scramble * 100).toFixed(0)}% of dropbacks.</p>}
-            <p className="muted small">Potential and work ethic are hidden until scouting arrives.</p>
-          </Panel>
-          {data.staff && data.staff.growth != null && (
-            <Panel title="Your staff's read" right={<a href={`#/l/${id}/development`}>Development</a>}>
-              <table className="grid tight"><tbody>
-                <tr><td>Expected progress so far</td><td className="num">{data.staff.expected! > 0 ? "+" : ""}{data.staff.expected!.toFixed(1)}</td></tr>
-                <tr><td>Beyond what was expected</td><td className={"num " + (data.staff.growth >= 1 ? "win" : data.staff.growth <= -1 ? "loss" : "")}>{data.staff.growth > 0 ? "+" : ""}{data.staff.growth.toFixed(1)}</td></tr>
-                <tr><td>Leadership</td><td className="num">{data.staff.leadership}</td></tr>
-                <tr><td>Adaptability</td><td className="num">{data.staff.adaptability}</td></tr>
-                <tr><td>Development plan</td><td className="num">{data.staff.plan ? data.staff.plan.area[0].toUpperCase() + data.staff.plan.area.slice(1) : "None"}</td></tr>
-              </tbody></table>
-              <p className="muted small">Overall points. Only your staff sees this; his listed rating is what scouts see.</p>
-            </Panel>
-          )}
-          {data.injuries.length > 0 && (
-            <Panel title="Injuries">
-              <table className="grid tight"><tbody>{data.injuries.map((i) => (
-                <tr key={`${i.game_id}`}><td>{shortDate(i.date)}</td><td>{i.type}</td><td className="muted">{i.days ? `${i.days >= 90 ? "season" : `${Math.round(i.days / 7) || 1} wk`}` : "rest of game"}</td></tr>
-              ))}</tbody></table>
-            </Panel>
-          )}
+      )}
+      {tab === "stats" && <GameLog log={log} />}
+      {tab === "bio" && (
+        <div className="cols even">
           <Panel title="Background">
             <table className="grid tight"><tbody>
               <tr><td>Recruiting</td><td>{p.stars ? `${"★".repeat(p.stars)} (${p.composite?.toFixed(4)})` : "Unranked"}{p.natl_rank ? `, #${p.natl_rank} nationally` : ""}</td></tr>
               <tr><td>Seasons in college</td><td>{Math.floor(p.years)}</td></tr>
               <tr><td>Listed position</td><td>{p.listed}</td></tr>
+              <tr><td>Hometown</td><td>{[p.home.city, p.home.state].filter(Boolean).join(", ") || "Unknown"}</td></tr>
             </tbody></table>
           </Panel>
+          <div>
+            {data.awards.length > 0 && (
+              <Panel title="Honors">
+                <table className="grid tight"><tbody>{data.awards.map((a, i) => (
+                  <tr key={i}><td className="nowrap">{shortDate(a.date)}</td><td>{AWARD_LABEL[a.type]}{a.conference && a.type.startsWith("conf") ? ` (${a.conference})` : ""}{a.team ? `, ${a.team === 1 ? "first" : "second"} team` : ""}
+                    <div className="small muted">{a.line}</div></td></tr>
+                ))}</tbody></table>
+              </Panel>
+            )}
+            <Panel title="Injuries">
+              {data.injuries.length ? <table className="grid tight"><tbody>{data.injuries.map((i) => (
+                <tr key={`${i.game_id}`}><td>{shortDate(i.date)}</td><td>{i.type}</td><td className="muted">{i.days ? `${i.days >= 90 ? "season" : `${Math.round(i.days / 7) || 1} wk`}` : "rest of game"}</td></tr>
+              ))}</tbody></table> : <p className="muted">None this season.</p>}
+            </Panel>
+          </div>
         </div>
-      </div>
+      )}
     </div>
+  );
+}
+
+function GameLog({ log }: { log: { game: GameRow; line: Record<string, number>; snaps: number }[] }) {
+  const cols = STAT_COLS.filter(([k]) => log.some((g) => g.line[k]));
+  const snaps = log.reduce((a, g) => a + g.snaps, 0);
+  const tot: Record<string, number> = {};
+  for (const g of log) for (const [k] of cols) tot[k] = (tot[k] ?? 0) + (g.line[k] ?? 0);
+  return (
+    <Panel title={`Game log (${log.length})`}>
+      {!log.length ? <p className="muted">No stats yet.</p> : (
+        <div className="scrollx"><table className="grid tight">
+          <thead><tr><th>Game</th>{snaps > 0 && <th className="num" title="Snaps played">Snaps</th>}{cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
+          <tbody>
+            {log.map(({ game, line, snaps: n }) => (
+              <tr key={game.id}><td><GameLine g={game} showDate /></td>{snaps > 0 && <td className="num">{n || ""}</td>}{cols.map(([k]) => <td key={k} className="num">{line[k] ?? ""}</td>)}</tr>
+            ))}
+            <tr className="total"><td>Season</td>{snaps > 0 && <td className="num">{snaps}</td>}{cols.map(([k]) => <td key={k} className="num">{tot[k]}</td>)}</tr>
+          </tbody>
+        </table></div>
+      )}
+    </Panel>
   );
 }

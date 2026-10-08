@@ -4,7 +4,7 @@ import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday
 import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { POSITIONS, playerName, type Pos, type RatedPlayer } from "./players.ts";
+import { ATTRS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
@@ -12,11 +12,12 @@ import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
-  rateClasses, readSd, realClass, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
+  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
 import { STARTERS, miles } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
 import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
@@ -118,6 +119,13 @@ export interface SeasonState {
   past?: SeasonSummary[];
   /** High school recruiting: four classes of prospects, each school's recent classes, and your board and scouts. */
   recruiting?: RecruitingState;
+  /** Players who declared early for the NFL draft in January (they leave at the rollover). */
+  declared?: number[];
+  /** Everyone who left college for the draft at the rollover, and the draft once it's held in April. */
+  draft_pool?: DraftEntrant[];
+  draft?: { year: number; picks: DraftPick[] } | null;
+  /** Each school's picks in its last three drafts, oldest first (recruits notice). */
+  draft_history?: Record<string, number[]>;
 }
 
 /** What a finished season leaves in the record book. */
@@ -331,7 +339,8 @@ export class Season {
         (incoming[p.commit.team] ??= []).push(enrollPlayer(p, nextId++, p.commit.team, s.seed));
       }
     }
-    const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming,
+    const declared = s.declared ? new Set(s.declared) : undefined;
+    const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
       rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     const { start, schedule } = nextSchedule(s.games, this.teams, opening, s.next_game_id);
@@ -365,6 +374,12 @@ export class Season {
       next_game_id: s.next_game_id + schedule.length, writers: s.writers, stars: {},
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
       requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
+      // Everyone leaving for the pros or out of eligibility goes into April's draft.
+      draft_pool: turn.left.filter((d) => d.reason !== "released").map((d) => ({ pid: d.pid, team_id: d.team_id, name: d.name, pos: d.pos, ovr: d.ovr,
+        potential: d.potential ?? d.ovr, years: (d.years ?? 3) + 1, early: !!declared?.has(d.pid), tier: this.tierOf(d.team_id) }))
+        // Only players the NFL could take (the last pick rates about 74).
+        .filter((e) => e.ovr >= 66),
+      draft: null, draft_history: s.draft_history,
     };
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
@@ -413,8 +428,9 @@ export class Season {
     const keep = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => live.has(Number(k))));
     const u = rst.user;
     const next: RecruitingState = {
-      prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0,
-      user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0 },
+      prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0, svc_v: 2,
+      user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0,
+        found: (u.found ?? []).filter((x) => live.has(x)), board: (u.board ?? []).filter((x) => live.has(x)) },
     };
     rateClasses(next.prospects, ny, s.date, 0, s.seed, rs.curve);
     return next;
@@ -935,7 +951,69 @@ export class Season {
     for (const t of this.teams) classes[t.id] = [s.year - 2, s.year - 1, s.year].map((y) => rs.history.filter((h) => h.year === y && h.school === t.school).map((h) => h.rating ?? 0.75));
     const rerate = Math.min(3, this.rerateIndex(s.date));
     rateClasses(prospects, s.year, s.date, rerate, s.seed, rs.curve);
-    s.recruiting = { prospects, next_id: next, classes, rerate, user: { auto: true, hours: {}, scout: [], regions: [], evals: {}, spend: 0, time: { ...SEASON_TIME } } };
+    s.recruiting = { prospects, next_id: next, classes, rerate, svc_v: 2, user: { auto: true, hours: {}, scout: [], regions: [], evals: {}, spend: 0, time: { ...SEASON_TIME }, board: [] } };
+    this.seedFound();
+  }
+
+  /**
+   * Leagues saved before the service rated freshmen, sophomores and every junior are re-rated, and a staff
+   * that hasn't looked yet (or whose coach changed schools) knows what a new league's would.
+   */
+  upgradeRecruiting(): void {
+    const s = this.state, st = s.recruiting;
+    if (!st) return;
+    if (st.svc_v !== 2) {
+      this.recruitRev++;
+      rateClasses(st.prospects, s.year, s.date, st.rerate, s.seed, this.seed.recruiting!.curve);
+      st.svc_v = 2;
+    }
+    if (s.user_team_id != null && st.user.found_team !== s.user_team_id) this.seedFound();
+  }
+
+  /** Each prospect's true potential against his class (class standard deviations above its average). */
+  private classZ(date: ISODate): Map<number, number> {
+    const st = this.state.recruiting!, by = new Map<number, number[]>(), out = new Map<number, number>();
+    const tr = new Map(st.prospects.map((p) => [p.id, truthAt(p, date)]));
+    for (const p of st.prospects) (by.get(p.cls) ?? by.set(p.cls, []).get(p.cls)!).push(tr.get(p.id)!);
+    const stat = new Map([...by].map(([c, xs]) => { const m = xs.reduce((a, x) => a + x, 0) / xs.length; return [c, [m, Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length) || 1]]; }));
+    for (const p of st.prospects) { const [m, sd] = stat.get(p.cls)!; out.set(p.id, (tr.get(p.id)! - m) / sd); }
+    return out;
+  }
+
+  /** Your school as its scouts see the country. */
+  private myEye(): SchoolEye | null {
+    const s = this.state, me = s.user_team_id, st = s.recruiting;
+    if (me == null || !st) return null;
+    const t = this.team(me);
+    return { id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null, regions: st.user.regions,
+      national: P4.has(t.conference) || t.school === "Notre Dame", width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
+  }
+
+  /** What your staff already knows when it starts looking: the weeks of looking behind it (KNOWN_WEEKS) at once. */
+  private seedFound(): void {
+    const s = this.state, st = s.recruiting!, eye = this.myEye();
+    if (!eye) return;
+    this.recruitRev++;
+    const zs = this.classZ(s.date), rng = new Rng(mixSeed(s.seed, s.year, eye.id, "found"));
+    const effort = Math.sqrt(timeSplit(st.user.time, this.inSeason(s.date)).scouting / 0.1);
+    const found: number[] = [];
+    for (const p of st.prospects) {
+      const u = rng.random();
+      if (isPublic(p)) continue;
+      const h = discoverRate(eye, p, zs.get(p.id)!, effort) * KNOWN_WEEKS[gradeOf(p, s.year)];
+      if (u < 1 - Math.exp(-h)) found.push(p.id);
+    }
+    st.user.found = found;
+    st.user.found_team = eye.id;
+  }
+
+  /** The prospects your staff knows about: the public ones, the ones it has found and the ones on your board. */
+  knownProspects(): Set<number> {
+    const st = this.state.recruiting, me = this.state.user_team_id;
+    if (!st) return new Set();
+    const u = st.user, out = new Set<number>([...(u.found ?? []), ...(u.board ?? []), ...u.scout, ...Object.keys(u.hours).map(Number)]);
+    for (const p of st.prospects) if (isPublic(p) || (me != null && (p.offers.includes(me) || p.interest[me]))) out.add(p.id);
+    return out;
   }
 
   inSeason(date: ISODate): boolean {
@@ -984,7 +1062,7 @@ export class Season {
         starter[pos] = o[Math.min(o.length, STARTERS[pos]) - 1] ?? 60;
       }
       const f: FrozenSchool = {
-        prestige: t.prestige ?? 30,
+        prestige: (t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]),
         win_pct: rec && rec[0] + rec[1] > 0 ? rec[0] / (rec[0] + rec[1]) : Math.max(0.1, Math.min(0.9, 0.5 + (s.preseason_power[t.id] ?? 0) / 30)),
         development: (devRate(s.facilities?.[t.id]) - 1) * 5 + (staffSkill(staff, "development") - 50) / 100,
         fit: (staffSkill(staff, "scheme") - 50) / 100,
@@ -1048,6 +1126,16 @@ export class Season {
       u.evals[pid] = (u.evals[pid] ?? 0) + 1;
       u.spend += near ? SCOUT_COST.trip_near : SCOUT_COST.trip_far;
     }
+    // Your coaches come across prospects they didn't know: most near home, more where you pay a scout.
+    const eye = this.myEye()!, zs = this.classZ(today), rng = new Rng(mixSeed(s.seed, today, "found"));
+    const effort = Math.sqrt(timeSplit(u.time, this.inSeason(today)).scouting / 0.1);
+    const have = new Set(u.found ?? []), found = [...have];
+    for (const p of st.prospects) {
+      const r = rng.random();
+      if (have.has(p.id) || isPublic(p)) continue;
+      if (r < discoverRate(eye, p, zs.get(p.id)!, effort)) found.push(p.id);
+    }
+    u.found = found;
   }
 
   private recruitNews(ev: RecruitEvent[], date: ISODate, rep: DayReport): void {
@@ -1081,11 +1169,8 @@ export class Season {
     const s = this.state, st = s.recruiting!, me = s.user_team_id;
     const t = me != null ? this.team(me) : null;
     let read: { est: number; sd: number } | null = null;
-    if (t) {
-      const eye: SchoolEye = { id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null, regions: st.user.regions,
-        national: P4.has(t.conference) || t.school === "Notre Dame", width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
-      read = schoolRead(eye, p, s.date, s.seed, st.user.evals[p.id] ?? 0);
-    }
+    const eye = this.myEye();
+    if (t && eye) read = schoolRead(eye, p, s.date, s.seed, st.user.evals[p.id] ?? 0);
     const ovr = currentOvr(p, s.date);
     const cap = (x: number) => Math.max(40, Math.min(99, x));
     return {
@@ -1095,11 +1180,149 @@ export class Season {
       // Ninety percent ranges: what your staff would bet he is today and where he tops out.
       potential: read ? { est: Math.round(cap(read.est)), lo: Math.round(cap(read.est - 1.65 * read.sd)), hi: Math.round(cap(read.est + 1.65 * read.sd)) } : null,
       ovr: read ? { lo: Math.round(ovr - 0.8 * read.sd), hi: Math.round(ovr + 0.8 * read.sd) } : null,
-      evals: st.user.evals[p.id] ?? 0, hours: st.user.hours[p.id] ?? 0,
+      evals: st.user.evals[p.id] ?? 0, hours: st.user.hours[p.id] ?? 0, board: (st.user.board ?? []).indexOf(p.id),
+      scouting: st.user.scout.includes(p.id), lat: p.home.lat, lon: p.home.lon,
       commit: p.commit ? { team_id: p.commit.team, signed: p.commit.signed, date: p.commit.date } : null,
       offers: p.offers, interest: me != null ? p.interest[me] ?? 0 : 0,
       top_schools: Object.entries(p.interest).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 6).map(([id, h]) => ({ team_id: Number(id), hours: Math.round(h), offered: p.offers.includes(Number(id)) })),
     };
+  }
+
+  /**
+   * A prospect's page: how your staff sees him, the schools he's considering (his chance with each if he chose
+   * today), how your read of him has moved week by week, and his ratings now and on arrival as your staff
+   * projects them.
+   */
+  prospectPage(p: Prospect) {
+    const s = this.state, st = s.recruiting!, me = s.user_team_id, eye = this.myEye();
+    const view = this.prospectView(p);
+    const considering = this.considering(p).slice(0, 10);
+    // Your read each week back to his freshman August (at most a year), with today's evaluations.
+    const history: { date: ISODate; est: number; lo: number; hi: number }[] = [];
+    if (eye) {
+      const start = `${p.cls - 4}-08-01`;
+      for (let d = s.date, i = 0; d >= start && i < 53; d = addDays(d, -7), i++) {
+        const r = schoolRead(eye, p, d, s.seed, st.user.evals[p.id] ?? 0);
+        const c = (v: number) => Math.round(Math.max(40, Math.min(99, v)) * 10) / 10;
+        history.unshift({ date: d, est: c(r.est), lo: c(r.est - 1.65 * r.sd), hi: c(r.est + 1.65 * r.sd) });
+      }
+    }
+    // Ratings as your staff projects them: his strengths and weaknesses (they see those), at his estimated level.
+    let ratings: { attr: string; now: number; arrival: number }[] = [];
+    if (view.potential) {
+      const rng = new Rng(mixSeed(s.seed, p.id, "enroll"));
+      const zz = zOf(arrivalOvr(view.potential.est) + 0.5 * p.form);
+      const nowGap = arrivalOvr(view.potential.est) - (view.ovr ? (view.ovr.lo + view.ovr.hi) / 2 : arrivalOvr(view.potential.est));
+      ratings = ATTRS[p.pos].map((a) => { const arrival = fromZ(zz + 0.47 * rng.gauss(0, 1)); return { attr: a, now: Math.max(15, Math.round(arrival - nowGap)), arrival }; });
+    }
+    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10 };
+  }
+
+  /** The schools a prospect is considering, best first (see RecruitWeek.considering). */
+  considering(p: Prospect, schools = this.schools()) {
+    return this.week.considering(this.state.recruiting!, this.state.year, schools, this.state.user_team_id, p);
+  }
+
+  /**
+   * A college player's potential as a staff reads it: your own players closely (about ±3 points), everyone
+   * else's from film and word of mouth (about ±7); never below what he is now.
+   */
+  scoutedPotential(pl: RatedPlayer): { est: number; lo: number; hi: number } {
+    const s = this.state, mine = pl.team_id === s.user_team_id;
+    const sd = mine ? 2 : 4.5;
+    const est = Math.max(pl.ovr, Math.min(99, pl.hidden.potential + sd * hashGauss(s.seed, pl.id, mine ? 1 : 0, s.year)));
+    return { est: Math.round(est), lo: Math.round(Math.max(pl.ovr, est - 1.65 * sd)), hi: Math.round(Math.min(99, est + 1.65 * sd)) };
+  }
+
+  // ---- the NFL draft --------------------------------------------------------------------------------
+  /** Everyone who could be drafted this year as the NFL grades them, best first (their place is the slot they'd go). */
+  private draftBoard(date: ISODate, seed = this.state.seed): { p: RatedPlayer; grade: number }[] {
+    const s = this.state, out: { p: RatedPlayer; grade: number }[] = [];
+    for (const t of this.teams) {
+      const tier = this.tierOf(t.id);
+      for (const p of this.roster(t.id)) {
+        if (p.years < 2) continue;
+        out.push({ p, grade: draftGrade({ pid: p.id, pos: p.pos, ovr: p.ovr, potential: p.hidden.potential, years: p.years + 1, tier }, seed, Number(date.slice(0, 4))) });
+      }
+    }
+    return out.sort((a, b) => b.grade - a.grade || a.p.id - b.p.id);
+  }
+
+  /** Power program, Group of Five or FCS. */
+  private tierOf(tid: number): 0 | 1 | 2 {
+    const t = this.team(tid);
+    return t.level !== "fbs" ? 2 : P4.has(t.conference) || t.school === "Notre Dame" ? 0 : 1;
+  }
+
+  /** January's deadline: players with eligibility left decide whether to enter the draft. */
+  private declarations(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    const board = this.draftBoard(date), rng = new Rng(mixSeed(s.seed, s.year, "declare"));
+    const declared: { p: RatedPlayer; slot: number }[] = [];
+    board.forEach(({ p }, i) => {
+      const u = rng.random();
+      // Juniors and fourth-year players with a year left choose; anyone out of eligibility is in the draft anyway.
+      if (p.years !== 2 && p.years !== 3) return;
+      const pay = (s.contracts?.[p.id]?.amount ?? 0) + (s.nil?.[p.id]?.amount ?? 0);
+      if (u < declareChance(i + 1, pay)) declared.push({ p, slot: i + 1 });
+    });
+    s.declared = declared.map((d) => d.p.id).sort((a, b) => a - b);
+    const round = (slot: number) => (slot <= 32 ? "a first-round pick" : slot <= 100 ? "a day-two pick" : slot <= PICKS ? "a late-round pick" : "a long shot");
+    rep.news.push(this.news(date, "draft", `${declared.filter((d) => d.p.years === 2).length} underclassmen declare for the NFL draft`,
+      `Leading the way: ${declared.slice(0, 5).map((d) => `${d.p.pos} ${d.p.first} ${d.p.last} (${this.team(d.p.team_id).school})`).join(", ")}.`, []));
+    for (const d of declared) {
+      if (d.p.team_id !== me && d.slot > 10) continue;
+      rep.news.push(this.news(date, "draft", `${this.team(d.p.team_id).school} ${d.p.pos} ${d.p.first} ${d.p.last} declares for the NFL draft`,
+        `Projected as ${round(d.slot)}.`, [d.p.team_id]));
+    }
+  }
+
+  /** April: the draft. Picks feed each school's standing with recruits for three years. */
+  private draftDay(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id, pool = s.draft_pool;
+    if (!pool?.length) return;
+    const year = Number(date.slice(0, 4));
+    const picks = runDraft(pool, s.seed, year);
+    s.draft = { year, picks };
+    const by = new Map<number, number>();
+    for (const p of picks) by.set(p.team_id, (by.get(p.team_id) ?? 0) + 1);
+    const hist: Record<string, number[]> = {};
+    for (const t of this.teams) hist[t.id] = [...(s.draft_history?.[t.id] ?? []).slice(-2), by.get(t.id) ?? 0];
+    s.draft_history = hist;
+    const first = picks[0], lead = [...by].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+    rep.news.push(this.news(date, "draft", `${first.nfl} takes ${this.team(first.team_id).school} ${first.pos} ${first.name} first overall`,
+      `${picks.filter((p) => p.round === 1).length} first-rounders; ${this.team(lead[0]).school} leads all schools with ${lead[1]} picks.`, [first.team_id, lead[0]]));
+    if (me != null) {
+      const mine = picks.filter((p) => p.team_id === me);
+      rep.news.push(this.news(date, "draft", mine.length ? `${mine.length} ${this.team(me).school} player${mine.length === 1 ? "" : "s"} drafted` : `No ${this.team(me).school} players drafted`,
+        mine.map((p) => `${p.name} (${p.pos}), round ${p.round}, No. ${p.pick} to ${p.nfl}`).join("; ") || "Recruits notice where programs send players.", [me]));
+    }
+  }
+
+  /** The draft page: this year's draft once held (or last year's), and before it the early entrants and the projected board. */
+  draftView() {
+    const s = this.state, date = s.date;
+    const last = s.draft ?? null;
+    const pool = s.draft_pool ?? [];
+    // The mock draft: the NFL's consensus (its own disagreement about each player isn't known until April).
+    const projected = !s.draft && pool.length ? [...pool].map((e) => ({ ...e, grade: draftGrade(e, mixSeed(s.seed, "mock"), Number(this.eventDate("nfl_draft").slice(0, 4))) }))
+      .sort((a, b) => b.grade - a.grade || a.pid - b.pid).slice(0, PICKS).map(({ grade: _, ...e }) => e) : [];
+    // Before the January deadline, who might go: the board's top players with eligibility left.
+    const declared = new Set(s.declared ?? []);
+    const early = s.declared ? this.draftBoard(date).filter((x) => declared.has(x.p.id)).map((x, i) => ({ pid: x.p.id, team_id: x.p.team_id, name: `${x.p.first} ${x.p.last}`.trim(), pos: x.p.pos, ovr: x.p.ovr, rank: i + 1 })) : [];
+    // During the season, the NFL's board of everyone draft-eligible (whether or not he'll leave).
+    const prospects = !s.draft && !pool.length ? this.draftBoard(date, mixSeed(s.seed, "mock")).slice(0, 100)
+      .map(({ p }) => ({ pid: p.id, team_id: p.team_id, name: `${p.first} ${p.last}`.trim(), pos: p.pos, ovr: p.ovr, cls: p.class, declared: declared.has(p.id) })) : [];
+    return {
+      draft: last, projected, early, prospects, history: s.draft_history ?? {},
+      dates: { deadline: s.events.find((e) => e.type === "draft_deadline" && e.date >= date)?.date ?? null, draft: s.events.find((e) => e.type === "nfl_draft" && e.date >= date)?.date ?? null },
+      prestige: Object.fromEntries(this.teams.map((t) => [t.id, draftPrestige(s.draft_history?.[t.id])])),
+    };
+  }
+
+  /** Leagues saved before the draft: its January deadline and April draft go on the calendar. */
+  upgradeDraft(): void {
+    for (const e of this.state.events) if ((e.type === "draft_deadline" || e.type === "nfl_draft") && e.status !== "done") e.active = true;
   }
 
   // Your recruiting and scouting choices (actions).
@@ -1132,6 +1355,14 @@ export class Season {
     u.regions = on ? [...new Set([...u.regions, region])].sort() : u.regions.filter((r) => r !== region);
   }
   setStaffTime(t: StaffTime): void { this.userRecruiting().time = timeSplit(t, true); }
+  /** Put a prospect on your big board (at `at`, or the end) or take him off. */
+  setBoard(pid: number, on: boolean, at?: number): void {
+    const u = this.userRecruiting();
+    this.prospect(pid);
+    const b = (u.board ?? []).filter((x) => x !== pid);
+    if (on) b.splice(at != null ? Math.max(0, Math.min(b.length, at)) : b.length, 0, pid);
+    u.board = b;
+  }
   private userRecruiting() {
     const st = this.state.recruiting;
     if (!st) throw new Error("recruiting isn't available in this league");
@@ -1564,6 +1795,8 @@ export class Season {
         this.signingNews(e.date, "National signing day", rep);
         break;
       }
+      case "draft_deadline": this.declarations(e.date, rep); break;
+      case "nfl_draft": this.draftDay(e.date, rep); break;
       case "season_end": {
         const poll = this.poll("ap", e.date, AP_PANEL, s.champion, rep);
         if (s.champion == null) {

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, regionOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
+import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
@@ -163,37 +163,83 @@ export function startServer(opts: ServerOptions, port: number): Server {
           requests: mine ? (s.requests ?? []).slice(-5).reverse() : [] };
       }
       case route === "recruiting": {
-        // Your recruiting board: a class's prospects as your staff sees them, filtered, and your settings.
+        // A class as your staff sees it (only the prospects it knows about), filtered and sorted, and your settings.
         const st = s.recruiting;
         if (!st) return { available: false };
         const me = s.user_team_id, u = st.user;
         const cls = Number(url.searchParams.get("cls") ?? s.year + 1);
-        const pos = url.searchParams.get("pos"), region = url.searchParams.get("region"), view = url.searchParams.get("view") ?? "all";
+        const pos = url.searchParams.get("pos"), region = url.searchParams.get("region"), view = url.searchParams.get("view") ?? "known";
+        const q = (url.searchParams.get("q") ?? "").trim().toLowerCase(), sort = url.searchParams.get("sort") ?? "rank";
+        const stars = url.searchParams.get("stars"), status = url.searchParams.get("status");
         const limit = Math.min(500, Number(url.searchParams.get("limit") ?? 100)), offset = Number(url.searchParams.get("offset") ?? 0);
-        const mine = (p: Prospect) => me != null && (p.offers.includes(me) || p.commit?.team === me || u.hours[p.id] != null || u.scout.includes(p.id) || u.evals[p.id] != null);
-        const ps = st.prospects.filter((p) => p.cls === cls && (!pos || p.pos === pos) && (!region || regionOf(p.home) === region)
-          && (view === "all" || (view === "rated" && p.svc) || (view === "mine" && mine(p)) || (view === "committed" && me != null && p.commit?.team === me)));
+        const known = S.knownProspects(), board = new Set(u.board ?? []);
+        const mine = (p: Prospect) => me != null && (p.offers.includes(me) || p.commit?.team === me || u.hours[p.id] != null || u.scout.includes(p.id) || u.evals[p.id] != null || board.has(p.id));
+        const ps = st.prospects.filter((p) => p.cls === cls && known.has(p.id) && (!pos || p.pos === pos) && (!region || regionOf(p.home) === region)
+          && (!q || `${p.first} ${p.last} ${p.home.city ?? ""}`.toLowerCase().includes(q))
+          && (!stars || (p.svc ? starsOf(p.svc.r) : 0) === Number(stars))
+          && (!status || (status === "open" ? !p.commit : status === "committed" ? !!p.commit && !p.commit.signed : !!p.commit?.signed))
+          && (view === "known" || view === "all" || (view === "rated" && p.svc) || (view === "found" && !isPublic(p)) || (view === "board" && board.has(p.id))
+            || (view === "mine" && mine(p)) || (view === "committed" && me != null && p.commit?.team === me)));
         const rows = ps.map((p) => S.prospectView(p));
-        // Rated prospects by the service's rank, then the rest by your staff's estimate.
-        rows.sort((a, b) => (a.service?.rank ?? Infinity) - (b.service?.rank ?? Infinity) || (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || a.id - b.id);
+        const byRank = (a: typeof rows[number], b: typeof rows[number]) => (a.service?.rank ?? Infinity) - (b.service?.rank ?? Infinity) || (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || a.id - b.id;
+        if (sort === "est") rows.sort((a, b) => (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || byRank(a, b));
+        else if (sort === "hi") rows.sort((a, b) => (b.potential?.hi ?? 0) - (a.potential?.hi ?? 0) || byRank(a, b));
+        else if (sort === "board") rows.sort((a, b) => (a.board < 0 ? Infinity : a.board) - (b.board < 0 ? Infinity : b.board) || byRank(a, b));
+        else rows.sort(byRank);
         const staff = me != null ? S.staff(me) : [];
         const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
         const time = timeSplit(u.time, S.inSeason(s.date));
+        const classes = [s.year + 1, s.year + 2, s.year + 3, s.year + 4].map((c) => {
+          const all = st.prospects.filter((p) => p.cls === c);
+          return { cls: c, grade: gradeOf({ cls: c }, s.year), total: all.length, known: all.filter((p) => known.has(p.id)).length, rated: all.filter((p) => p.svc).length,
+            found: all.filter((p) => known.has(p.id) && !isPublic(p)).length };
+        });
         return {
-          available: true, team_id: me, year: s.year, date: s.date, cls, classes: [s.year + 1, s.year + 2, s.year + 3, s.year + 4].map((c) => ({ cls: c, grade: gradeOf({ cls: c }, s.year) })),
+          available: true, team_id: me, year: s.year, date: s.date, cls, classes,
           total: rows.length, prospects: rows.slice(offset, offset + limit),
-          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: u.time, split: time },
+          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: u.time, split: time, board: u.board ?? [] },
           staff, skills, skill_names: SKILLS, hours: STAFF_HOURS, regions: REGIONS, costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS },
+          home: me != null ? { lat: S.team(me).venue?.lat ?? null, lon: S.team(me).venue?.lon ?? null, state: S.team(me).venue?.state ?? null } : null,
         };
       }
       case route === "recruiting/prospect": {
         if (!s.recruiting) return null;
-        return S.prospectView(S.prospect(Number(url.searchParams.get("pid"))));
+        const p = S.prospect(Number(url.searchParams.get("pid")));
+        if (!S.knownProspects().has(p.id)) throw new HttpError(404, "your staff doesn't know about this prospect yet");
+        return S.prospectPage(p);
+      }
+      case route === "recruiting/map": {
+        // Every prospect your staff knows in a class, as points: [id, lat, lon, stars, est, committed to, on your board].
+        const st = s.recruiting;
+        if (!st) return { points: [] };
+        const cls = Number(url.searchParams.get("cls") ?? s.year + 1), known = S.knownProspects(), board = new Set(st.user.board ?? []);
+        const pos = url.searchParams.get("pos");
+        return {
+          cls, points: st.prospects.filter((p) => p.cls === cls && known.has(p.id) && (!pos || p.pos === pos)).map((p) => {
+            const v = S.prospectView(p);
+            return [p.id, Math.round(p.home.lat * 100) / 100, Math.round(p.home.lon * 100) / 100, v.service?.stars ?? 0, v.potential?.est ?? 0, p.commit?.team ?? null, board.has(p.id) ? 1 : 0, p.pos, `${p.first} ${p.last}`];
+          }),
+        };
+      }
+      case route === "recruiting/board": {
+        // Your big board: each prospect with the schools he's considering and where you stand.
+        const st = s.recruiting, me = s.user_team_id;
+        if (!st || me == null) return { rows: [] };
+        const byId = new Map(st.prospects.map((p) => [p.id, p]));
+        const schools = S.schools();
+        return {
+          rows: (st.user.board ?? []).map((id) => byId.get(id)).filter((p): p is Prospect => !!p).map((p) => {
+            const c = S.considering(p, schools);
+            const i = c.findIndex((x) => x.team === me);
+            return { ...S.prospectView(p), considering: c.slice(0, 5), you: i >= 0 ? { place: i + 1, share: c[i].share } : null };
+          }),
+        };
       }
       case route === "recruiting/rankings": {
         if (!s.recruiting) return [];
         return S.classRankings(Number(url.searchParams.get("cls") ?? s.year + 1)).slice(0, Number(url.searchParams.get("limit") ?? 50));
       }
+      case route === "draft": return S.draftView();
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {
         const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));
@@ -273,7 +319,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           const snaps = d.snaps?.[pl.id];
           return Object.keys(line).length || snaps ? [{ game: gameRow(g), line, snaps: snaps ?? 0 }] : [];
         });
-        return { player: pl, team: S.team(pl.team_id), slots, log, injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
+        return { player: pl, team: S.team(pl.team_id), slots, log, potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).

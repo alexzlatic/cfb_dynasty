@@ -39,6 +39,8 @@ export type Action =
   | { type: "recruit_offer"; payload: { pid: number; on: boolean } }
   /** Send your scouts to evaluate a prospect (each week until taken off the list). */
   | { type: "scout_prospect"; payload: { pid: number; on: boolean } }
+  /** Put a prospect on your big board (at a place in it, or the end), or take him off. */
+  | { type: "recruit_board"; payload: { pid: number; on: boolean; at?: number } }
   /** Hire a regional scout (or let one go). */
   | { type: "scout_region"; payload: { region: Region; on: boolean } }
   /** How your staff splits its week between recruiting, scouting and game preparation. */
@@ -54,7 +56,8 @@ const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
-  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting"] as const;
+  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
+  "declared", "draft_pool", "draft", "draft_history"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -125,6 +128,7 @@ export class League {
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
+      declared: meta.declared ?? undefined, draft_pool: meta.draft_pool ?? undefined, draft: meta.draft ?? null, draft_history: meta.draft_history ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
       games: all<Game>("SELECT data FROM games WHERE season IS NULL ORDER BY rowid"),
@@ -152,6 +156,9 @@ export class League {
     if (!meta.budgets) lg.season.startFinance(seed?.finances);
     // Leagues saved before recruiting: the four classes start the way a new league's would.
     if (!meta.recruiting) lg.season.startRecruiting();
+    // ...and before the service rated every junior, or before staffs had to find prospects.
+    lg.season.upgradeRecruiting();
+    lg.season.upgradeDraft();
     return lg;
   }
 
@@ -241,6 +248,11 @@ export class League {
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), hours } };
     }
     if (a.type === "recruit_offer" || a.type === "scout_prospect") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "recruit_board") {
+      const at = a.payload?.at == null ? undefined : Number(a.payload.at);
+      if (at != null && !Number.isInteger(at)) throw new Error("at is a place on the board");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on, ...(at != null ? { at } : {}) } };
+    }
     if (a.type === "scout_region") {
       if (!Object.hasOwn(REGIONS, a.payload?.region)) throw new Error(`unknown region ${a.payload?.region}`);
       a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
@@ -284,6 +296,7 @@ export class League {
       if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
       if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);
       if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on);
+      if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);
       if (a.type === "sim") {

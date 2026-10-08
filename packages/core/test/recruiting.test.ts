@@ -19,12 +19,12 @@ describe("recruit classes", () => {
   const s = fresh();
   const st = s.state.recruiting!;
 
-  it("has four classes and a service that rates about 50 sophomores, 500 juniors and every senior", () => {
+  it("has four full classes and a service that rates about 50 freshmen, 500 sophomores and every junior and senior", () => {
     const by = (g: number) => st.prospects.filter((p) => gradeOf(p, s.state.year) === g);
     for (const g of [0, 1, 2, 3]) expect(by(g).length).toBeGreaterThan(3500);
-    expect(by(0).filter((p) => p.svc).length).toBe(0);
-    expect(by(1).filter((p) => p.svc).length).toBe(50);
-    expect(by(2).filter((p) => p.svc).length).toBe(500);
+    expect(by(0).filter((p) => p.svc).length).toBe(50);
+    expect(by(1).filter((p) => p.svc).length).toBe(500);
+    expect(by(2).filter((p) => p.svc).length).toBe(by(2).length);
     // The real 2027 class keeps its real ratings: about 35 five-stars and 450 four-stars a class.
     const sr = by(3).filter((p) => p.svc);
     expect(sr.length).toBe(by(3).length);
@@ -91,6 +91,28 @@ describe("recruit classes", () => {
     }
     expect(worst).toBeLessThan(0.25);
   });
+});
+
+describe("finding prospects", () => {
+  it("knows the rated prospects, more near home, and finds more over time and where it scouts", () => {
+    const iowa = seed.teams.find((t) => t.school === "Iowa")!;
+    const s = Season.create(seed, { seed: 7, user_team_id: iowa.id, settings: { keep_pbp: "none" } as never });
+    const st = s.state.recruiting!;
+    const fr = (k: Set<number>, f: (p: Prospect) => boolean = () => true) => st.prospects.filter((p) => gradeOf(p, s.state.year) === 0 && !p.svc && f(p) && k.has(p.id)).length;
+    const near = (p: Prospect) => p.home.state === "IA", tx = (p: Prospect) => p.home.state === "TX";
+    const k0 = s.knownProspects();
+    for (const p of st.prospects) if (p.svc) expect(k0.has(p.id)).toBe(true);
+    // Unrated sophomores: a good share near home, few far away.
+    const so = (f: (p: Prospect) => boolean) => { const all = st.prospects.filter((p) => gradeOf(p, s.state.year) === 1 && !p.svc && f(p)); return all.filter((p) => k0.has(p.id)).length / all.length; };
+    expect(so(near)).toBeGreaterThan(0.2);
+    expect(so(tx)).toBeLessThan(0.05);
+    s.setScoutRegion("texas", true);
+    const tx0 = fr(k0, tx), ia0 = fr(k0, near);
+    while (s.state.date < "2026-11-01") s.advanceDay();
+    const k1 = s.knownProspects();
+    expect(fr(k1, near)).toBeGreaterThan(ia0);
+    expect(fr(k1, tx)).toBeGreaterThan(tx0 + 20);
+  }, 120_000);
 });
 
 describe("recruiting in a season", () => {
