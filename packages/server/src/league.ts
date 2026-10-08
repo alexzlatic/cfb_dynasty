@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -44,7 +44,17 @@ export type Action =
   /** Hire a regional scout (or let one go). */
   | { type: "scout_region"; payload: { region: Region; on: boolean } }
   /** How your staff splits its week between recruiting, scouting and game preparation. */
-  | { type: "staff_time"; payload: StaffTime };
+  | { type: "staff_time"; payload: StaffTime }
+  /** Talk with one of your players (five a week): you learn his real reasons. */
+  | { type: "talk_player"; payload: { pid: number } }
+  /** Renewal talks: an offer for next season (he answers in a day or two), your standing rule, a starting-job promise, letting him go or keeping him off the staff's plan. */
+  | { type: "renewal_offer"; payload: { pid: number; amount: number; years: number } }
+  | { type: "renewal_rule"; payload: Partial<RenewalRule> }
+  | { type: "renewal_promise"; payload: { pid: number; on: boolean } }
+  | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean } }
+  /** The transfer portal: bid for a player (0 withdraws), or a pitch call. */
+  | { type: "portal_offer"; payload: { pid: number; amount: number; years: number } }
+  | { type: "portal_pitch"; payload: { pid: number } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -57,7 +67,8 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
-  "declared", "draft_pool", "draft", "draft_history"] as const;
+  "declared", "draft_pool", "draft", "draft_history",
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -129,6 +140,8 @@ export class League {
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
       declared: meta.declared ?? undefined, draft_pool: meta.draft_pool ?? undefined, draft: meta.draft ?? null, draft_history: meta.draft_history ?? undefined,
+      talks: meta.talks ?? undefined, renewal_rule: meta.renewal_rule ?? undefined, next_deals: meta.next_deals ?? undefined, promises: meta.promises ?? undefined,
+      talked: meta.talked ?? undefined, watch: meta.watch ?? undefined, portal: meta.portal ?? undefined, moves: meta.moves ?? undefined, arrived: meta.arrived ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
       games: all<Game>("SELECT data FROM games WHERE season IS NULL ORDER BY rowid"),
@@ -136,6 +149,8 @@ export class League {
       polls: all("SELECT data FROM polls WHERE season IS NULL ORDER BY id"),
       news: all("SELECT data FROM news WHERE season IS NULL ORDER BY rowid"),
     };
+    // Anything saved that the list above doesn't name comes back as it was.
+    for (const k of META_KEYS) if (meta[k] != null && (state as unknown as Record<string, unknown>)[k] === undefined) (state as unknown as Record<string, unknown>)[k] = meta[k];
     if (seed?.players && !db.prepare("SELECT 1 FROM rated_teams LIMIT 1").get()) tx(db, () => writeRated(db, seed));
     const rosters: Record<string, Player[]> = {};
     for (const r of db.prepare("SELECT team_id, data FROM players WHERE status = 'active'").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
@@ -159,6 +174,7 @@ export class League {
     // ...and before the service rated every junior, or before staffs had to find prospects.
     lg.season.upgradeRecruiting();
     lg.season.upgradeDraft();
+    lg.season.upgradePortal();
     return lg;
   }
 
@@ -262,6 +278,24 @@ export class League {
       if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep <= 0) throw new Error("staff time is three shares that add up to more than 0");
       a = { type: a.type, payload: t };
     }
+    if (a.type === "talk_player" || a.type === "portal_pitch") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
+    if (a.type === "renewal_offer" || a.type === "portal_offer") {
+      const x = { pid: Number(a.payload?.pid), amount: Number(a.payload?.amount), years: Math.round(Number(a.payload?.years ?? 1)) };
+      if (!Number.isFinite(x.amount) || x.amount < 0 || x.amount > 20_000_000) throw new Error("amount must be between $0 and $20M");
+      a = { type: a.type, payload: x };
+    }
+    if (a.type === "renewal_rule") {
+      const r: Partial<RenewalRule> = {};
+      for (const k of ["auto_up_to", "offer_up_to", "release_over", "budget_share"] as const) {
+        if (a.payload?.[k] == null) continue;
+        const v = Number(a.payload[k]);
+        if (!Number.isFinite(v) || v < 0 || (k === "budget_share" && v > 1) || (k !== "budget_share" && k !== "release_over" && v > 3)) throw new Error(`bad ${k}`);
+        r[k] = v;
+      }
+      a = { type: a.type, payload: r };
+    }
+    if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -299,6 +333,13 @@ export class League {
       if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);
+      if (a.type === "talk_player") this.season.talkTo(a.payload.pid);
+      if (a.type === "renewal_offer") this.season.renewalOffer(a.payload.pid, a.payload.amount, a.payload.years);
+      if (a.type === "renewal_rule") this.season.setRenewalRule(a.payload);
+      if (a.type === "renewal_promise") this.season.setPromise(a.payload.pid, a.payload.on);
+      if (a.type === "renewal_talk") this.season.setTalk(a.payload.pid, a.payload);
+      if (a.type === "portal_offer") this.season.portalOffer(a.payload.pid, a.payload.amount, a.payload.years);
+      if (a.type === "portal_pitch") this.season.portalPitch(a.payload.pid);
       if (a.type === "sim") {
         // A sim after the season has ended starts the next one.
         if (this.season.done) this.nextSeason();
@@ -347,7 +388,8 @@ export class League {
       }
     }
     const gone = db.prepare("UPDATE players SET status = ? WHERE id = ?");
-    for (const d of left) gone.run(d.reason, String(d.pid));
+    // (A transfer is still playing: his row moved to his new school above.)
+    for (const d of left) if (d.reason !== "transfer") gone.run(d.reason, String(d.pid));
     writeRated(db, { players: Object.fromEntries(next.teams.flatMap((t) => { const tp = next.teamPlayers(t.id); return tp ? [[t.id, tp]] : []; })) } as SeedBundle);
     this.season = next;
   }

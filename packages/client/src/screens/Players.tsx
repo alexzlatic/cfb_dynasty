@@ -5,6 +5,8 @@ import { api, type DepthChart, type GameRow, type Injury, type RatedPlayer } fro
 import { Dial, DualBar } from "./ratings.tsx";
 import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
+import { FutureTab, WatchChip } from "./Retention.tsx";
+import { PortalCard } from "./Portal.tsx";
 
 export const POS_ORDER: Pos[] = ["QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB", "CB", "S", "K", "P", "LS"];
 const CLASS_ORDER = ["FR", "SO", "JR", "SR"];
@@ -96,10 +98,10 @@ const AWARD_LABEL: Record<string, string> = {
 };
 
 /** A player's page, laid out like OOTP's: a header card, then tabs for ratings, stats and his background. */
-export function PlayerPage({ pid }: { pid: number }) {
+export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string }) {
   const { id, state } = useLeague();
   const data = useData(() => api.player(id, pid), [pid]);
-  const [tab, setTab] = useState<"ratings" | "stats" | "bio">("ratings");
+  const [tab, setTab] = useState<"ratings" | "stats" | "bio" | "future">(initial === "future" ? "future" : "ratings");
   if (!data) return <p className="muted">Loading...</p>;
   const { player: p, team: t, log, injury, potential } = data;
   const mine = t.id === state.user_team_id;
@@ -119,6 +121,8 @@ export function PlayerPage({ pid }: { pid: number }) {
             {p.stars ? <span className="chip">{"★".repeat(p.stars)} recruit{p.natl_rank ? `, No. ${p.natl_rank}` : ""}</span> : null}
             {injury && <span className="chip bad">Injured: {injury.type}, {outUntil(injury)}</span>}
             {data.awards.some((a) => a.type === "heisman") && <span className="chip gold">Heisman winner</span>}
+            {data.future && !data.portal && !data.future.watch.leaving && <a href={`#/l/${id}/player/${p.id}/future`} onClick={() => setTab("future")}><WatchChip w={data.future.watch} hero /></a>}
+            {data.portal && <span className="chip bad">{data.portal.status === "open" ? "In the transfer portal" : data.portal.status === "committed" ? "Transferring" : "Left the portal unsigned"}</span>}
           </div>
         </div>
         <div className="dials">
@@ -130,6 +134,8 @@ export function PlayerPage({ pid }: { pid: number }) {
         <button className={tab === "ratings" ? "on" : ""} onClick={() => setTab("ratings")}>Ratings</button>
         <button className={tab === "stats" ? "on" : ""} onClick={() => setTab("stats")}>Stats ({log.length} games)</button>
         <button className={tab === "bio" ? "on" : ""} onClick={() => setTab("bio")}>Background</button>
+        {data.future && !data.portal && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Future {data.future.watch.watch !== "settled" && !data.future.watch.leaving ? <span className={`dot w-${data.future.watch.watch}`} /> : null}</button>}
+        {data.portal && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Portal</button>}
       </div>
       {tab === "ratings" && (
         <div className="cols">
@@ -164,6 +170,7 @@ export function PlayerPage({ pid }: { pid: number }) {
         </div>
       )}
       {tab === "stats" && <GameLog log={log} />}
+      {tab === "future" && (data.portal ? <PortalCard row={data.portal} /> : data.future && <FutureTab f={data.future} />)}
       {tab === "bio" && (
         <div className="cols even">
           <Panel title="Background">

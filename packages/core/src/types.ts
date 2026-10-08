@@ -74,7 +74,7 @@ export interface Injury {
 export type EventType =
   | "dynasty_start" | "game_day" | "ap_poll" | "cfp_rankings" | "bcs_standings" | "early_signing" | "conf_championships"
   | "selection" | "playoff_round" | "title_game" | "bowls"
-  | "signing_day" | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
+  | "signing_day" | "renewal_talks" | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
 
 export interface CalEvent {
   id: string; date: ISODate; end_date: ISODate | null; type: EventType; scope: "league" | "conference" | "team";
@@ -129,7 +129,8 @@ export interface Settings {
    * Play under the Protect College Sports Act (passed by the Senate in September 2026, awaiting the House):
    * a retention fund above the revenue-share cap for players who have completed a season at the school,
    * paid from booster money that used to go through collectives, and a tighter fair-market-value test for
-   * NIL deals. Its transfer, eligibility and coaching rules arrive with the portal and career moves.
+   * NIL deals, one free transfer (a second costs a season) and five seasons in five years. Its coaching
+   * rule arrives with career moves.
    */
   pcsa: boolean;
 }

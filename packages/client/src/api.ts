@@ -18,6 +18,36 @@ export interface DevelopmentView {
   players: { pid: number; name: string; pos: string; class: string; years: number; ovr: number }[]; depth: DepthChart;
 }
 
+// ---- keeping players and the portal ----
+export type WatchLevel = "settled" | "restless" | "shopping" | "gone";
+export interface WatchView {
+  p: number; watch: WatchLevel; label: string; known: boolean; persona: string | null;
+  reasons: { reason: string; weight: number; label: string }[]; leaving: boolean; value: number; pay: number;
+  /** Pay that settles him (null: money won't fix it), and your staff's range for the least he'd stay for. */
+  keep: number | null; walk_range: [number, number] | null; fix: string; promise: { year: number; broken?: boolean } | null;
+}
+export interface TalkView {
+  status: string; label: string; ask: number | null; patience: number; offer: { amount: number; years: number; made: string; answer: string } | null; counter: number | null;
+  deal: { amount: number; years: number; via: string } | null; outcome: "signed" | "let_go" | "portal" | "stayed" | null; mine: boolean;
+  plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
+}
+export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
+export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
+export interface NextBudget { total: number; committed: number; deals: number; contracts: number }
+export interface RetentionData { talks_open: boolean; portal_open: boolean; rule: RenewalRule; budget: NextBudget; rows: RetentionRow[]; talks_left: number; dates: { talks: string | null; portal: string | null } }
+export interface FutureData extends RetentionRow {
+  comparables: { players: { pid: number; team_id: number; name: string; ovr: number; pay: number }[]; median: number | null };
+  budget: NextBudget; rule: RenewalRule; talks_open: boolean; talked: string | null; eligibility: number; talks_left: number; dates: { talks: string | null; portal: string | null };
+}
+export interface PortalRow {
+  pid: number; name: string; pos: string; ovr: number; next: number; potential: { est: number; lo: number; hi: number }; years: number; cls: string; stars: number;
+  from: number; entered: string; reasons: string[]; ask: number; offers: number; status: "open" | "committed" | "none"; to: number | null;
+  top: { team_id: number; share: number }[]; mine: { amount: number; years: number } | null; pitches: number; costs_season: boolean;
+  offers_list: { team_id: number; amount: number | null; years: number; date: string }[]; pitched_today: boolean;
+}
+export interface PortalNeed { spots: number; starter: boolean; floor: number }
+export interface PortalData { year: number | null; open: boolean; window: string | null; entries: PortalRow[]; needs: Record<string, PortalNeed>; budget: NextBudget | null; offered: number; pitches_left: number }
+
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
   contract: { amount: number; years: number; start: number; retention?: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
@@ -144,7 +174,9 @@ export const api = {
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
     season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
-    potential: { est: number; lo: number; hi: number } }>(`/api/leagues/${id}/players/${pid}`),
+    potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null }>(`/api/leagues/${id}/players/${pid}`),
+  retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
+  portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; defenders: Record<string, { name: string; pos: string; team_id: number } | null> }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),

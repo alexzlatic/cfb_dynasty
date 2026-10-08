@@ -27,6 +27,8 @@ import { BudgetScreen } from "./screens/Budget.tsx";
 import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
+import { RetentionScreen } from "./screens/Retention.tsx";
+import { PortalScreen } from "./screens/Portal.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -57,7 +59,7 @@ export function useData<T>(load: () => Promise<T>, deps: unknown[]): T | null {
 export function App() {
   const route = useRoute();
   if (route[0] === "new") return <NewLeague />;
-  if (route[0] === "l" && route[1]) return <LeagueShell id={route[1]} screen={route[2] || "home"} arg={route[3]} />;
+  if (route[0] === "l" && route[1]) return <LeagueShell id={route[1]} screen={route[2] || "home"} arg={route[3]} sub={route[4]} />;
   return <Start />;
 }
 
@@ -74,8 +76,8 @@ const myPage = (label: string, screen: string): NavPage => ({
 const NAV: NavSection[] = [
   { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("News", "news"), page("Calendar", "calendar")] },
   { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
-    page("Development", "development", ["development"], true), page("Game day", "live", ["live"], true)] },
-  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Prospects", "recruiting/list", ["recruiting"]),
+    page("Development", "development", ["development"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
+  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Polls", "polls"), page("Postseason", "postseason"),
@@ -90,7 +92,7 @@ function sectionOf(screen: string, arg: string | undefined, my: number | null): 
   return "home";
 }
 
-function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: string }) {
+function LeagueShell({ id, screen, arg, sub }: { id: string; screen: string; arg?: string; sub?: string }) {
   const [state, setState] = useState<LeagueState | null>(null);
   const [teams, setTeams] = useState<Map<number, Team>>(new Map());
   const [version, setVersion] = useState(0);
@@ -113,12 +115,12 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
 
   if (err) return <div className="page"><p className="error">{err}</p><a href="#/">Back to leagues</a></div>;
   if (!ctx || !state) return <div className="page muted">Loading league...</div>;
-  return <Shell id={id} screen={screen} arg={arg} ctx={ctx} state={state} teams={teams} busy={busy} setBusy={setBusy} toast={toast} setToast={setToast} />;
+  return <Shell id={id} screen={screen} arg={arg} sub={sub} ctx={ctx} state={state} teams={teams} busy={busy} setBusy={setBusy} toast={toast} setToast={setToast} />;
 }
 
 /** The league's frame: the top bar in your school's colors, the menu and the page. */
-function Shell({ id, screen, arg, ctx, state, teams, busy, setBusy, toast, setToast }: {
-  id: string; screen: string; arg?: string; ctx: LeagueCtx; state: LeagueState; teams: Map<number, Team>; busy: boolean;
+function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, setToast }: {
+  id: string; screen: string; arg?: string; sub?: string; ctx: LeagueCtx; state: LeagueState; teams: Map<number, Team>; busy: boolean;
   setBusy: (b: boolean) => void; toast: string | null; setToast: (t: string | null) => void;
 }) {
   const my = state.user_team_id != null ? teams.get(state.user_team_id) : undefined;
@@ -161,7 +163,7 @@ function Shell({ id, screen, arg, ctx, state, teams, busy, setBusy, toast, setTo
         {screen === "team" && arg && <TeamPage tid={Number(arg)} />}
         {screen === "game" && arg && <GamePage gid={Number(arg)} />}
         {screen === "settings" && <SettingsScreen />}
-        {screen === "player" && arg && <PlayerPage pid={Number(arg)} />}
+        {screen === "player" && arg && <PlayerPage key={arg} pid={Number(arg)} tab={sub} />}
         {screen === "depth" && arg && <DepthScreen tid={Number(arg)} />}
         {screen === "live" && <LiveScreen />}
         {screen === "plan" && <PlanScreen />}
@@ -174,6 +176,8 @@ function Shell({ id, screen, arg, ctx, state, teams, busy, setBusy, toast, setTo
         {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
         {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
         {screen === "draft" && <DraftScreen />}
+        {screen === "retention" && <RetentionScreen />}
+        {screen === "portal" && <PortalScreen />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>

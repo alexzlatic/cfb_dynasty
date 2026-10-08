@@ -1,6 +1,6 @@
 import { useLeague, useData } from "../App.tsx";
-import { api } from "../api.ts";
-import { Logo, TeamName, fmtDate, shortDate } from "../util.tsx";
+import { api, type RetentionData } from "../api.ts";
+import { Logo, TeamName, addDays, fmtDate, shortDate } from "../util.tsx";
 import { GameTable, NewsList, Panel } from "./common.tsx";
 import { CareerCard } from "./Career.tsx";
 
@@ -10,6 +10,7 @@ export function Home() {
   const myGames = useData(() => (my != null ? api.schedule(id, { team: String(my) }) : Promise.resolve([])), [my]);
   const today = useData(() => api.schedule(id, { date: state.date }), [state.date]);
   const headlines = useData(() => api.news(id, { stories: "0", limit: "12" }), []);
+  const keep = useData(() => (my != null ? api.retention(id) : Promise.resolve(null)), [my, state.date]);
   const myStories = useData(() => (my != null ? api.news(id, { team: String(my), kind: "story", limit: "3" }) : Promise.resolve([])), [my]);
   const recent = (myGames ?? []).filter((g) => g.status === "final").slice(-3);
   const next = (myGames ?? []).filter((g) => g.status !== "final").slice(0, 3);
@@ -28,6 +29,7 @@ export function Home() {
             <span className="small muted">or sim the day and your coordinators play it</span>
           </div>
         )}
+        {keep && <NeedsYou keep={keep} />}
         {my != null && (
           <Panel title={`${team(my)?.school} (${rec.w}-${rec.l})`} right={<a href={`#/l/${id}/team/${my}`}>Team page</a>}>
             <h4>Up next</h4>
@@ -68,6 +70,32 @@ export function Home() {
         {myStories && myStories.length > 0 && <Panel title="From your beat writer"><NewsList items={myStories} /></Panel>}
         <Panel title="Headlines" right={<a href={`#/l/${id}/news`}>All news</a>}>{headlines && <NewsList items={headlines} compact />}</Panel>
       </div>
+    </div>
+  );
+}
+
+/** What needs you this week: renewal talks, the portal, and players thinking about leaving. */
+function NeedsYou({ keep }: { keep: RetentionData }) {
+  const { id, state } = useLeague();
+  const rows = keep.rows.filter((r) => !r.watch.leaving);
+  const shopping = rows.filter((r) => (r.watch.watch === "shopping" || r.watch.watch === "gone") && r.importance <= 40);
+  const open = keep.rows.filter((r) => r.talk && !r.talk.outcome && r.talk.plan?.kind === "needs_you" && !r.talk.offer);
+  const answers = keep.rows.filter((r) => r.talk?.offer && r.talk.offer.answer <= addDays(state.date, 1));
+  const portal = state.upcoming.find((e) => e.type === "portal_window");
+  const items: { text: string; href: string }[] = [];
+  if (keep.talks_open) {
+    if (open.length) items.push({ text: `${open.length} player${open.length === 1 ? "" : "s"} in renewal talks need${open.length === 1 ? "s" : ""} your decision`, href: `#/l/${id}/retention` });
+    if (answers.length) items.push({ text: `${answers.length} answer${answers.length === 1 ? "" : "s"} to your offers due by tomorrow`, href: `#/l/${id}/retention` });
+    items.push({ text: `Talks close December 31; the portal opens ${portal ? shortDate(portal.date) : "January 2"}`, href: `#/l/${id}/retention` });
+  } else if (keep.portal_open) {
+    items.push({ text: "The transfer portal is open: bid for players to fill your needs", href: `#/l/${id}/portal` });
+  }
+  if (shopping.length) items.push({ text: `${shopping.length} of your key player${shopping.length === 1 ? " is" : "s are"} shopping: ${shopping.slice(0, 3).map((r) => `${r.pos} ${r.name}`).join(", ")}`, href: `#/l/${id}/retention` });
+  if (!items.length) return null;
+  return (
+    <div className="needsyou">
+      <h3>Needs you</h3>
+      <ul>{items.map((x, i) => <li key={i}><a href={x.href}>{x.text}</a></li>)}</ul>
     </div>
   );
 }
