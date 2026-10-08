@@ -4,11 +4,14 @@
  * lets the home offense see the defense's call first and pick the best counter (the plan allows about 7).
  * "learn" is "ai" with coordinators adjusting to what works in the game (both sides; should also match);
  * "prep" gives the home team a full unit of practice edge on offense and defense (about a point each way).
+ * "schemes" is "ai" with each side's coordinators running a random offense and front (should also match).
+ * "scout" is "schemes" with the home staff knowing its opponent fully and the away staff not at all
+ * (scouting.ts; the home edge over "schemes" is what scouting is worth, about a point).
  *
  *   npx tsx packages/core/scripts/calls-check.ts [games] [ai|cheat]
  */
 import { GameSim, Rng } from "@cfb/engine";
-import { Caller, loadSeed, mixSeed, snapMod, OFF_CALLS, type UserCall } from "../src/index.ts";
+import { Caller, DEF_SCHEMES, OFF_SCHEMES, loadSeed, mixSeed, snapMod, OFF_CALLS, type UserCall } from "../src/index.ts";
 const seed = loadSeed();
 const fbs = seed.teams.filter((t) => t.level === "fbs").map((t) => t.id);
 const N = Number(process.argv[2] ?? 3000);
@@ -23,7 +26,10 @@ for (let i = 0; i < N; i++) {
     const sim = new GameSim(H, A, { seed: i, record: mode === "learn" });
     if (k === "calls") {
       const prep = mode === "prep" ? { home: { offense: 1, defense: 1, situations: 0 } } : undefined;
-      const c = new Caller("home", new Rng(mixSeed(5, i, "calls")), { prep });
+      const sr = new Rng(mixSeed(7, i, "schemes")), draw = () => ({ off: OFF_SCHEMES[Math.floor(sr.random() * OFF_SCHEMES.length)], def: DEF_SCHEMES[Math.floor(sr.random() * DEF_SCHEMES.length)] });
+      const fixed = process.env.HOME_OFF as never, fixedD = process.env.AWAY_DEF as never;
+      const schemes = mode === "schemes" || mode === "scout" ? { home: { ...draw(), ...(fixed ? { off: fixed } : {}) }, away: { ...draw(), ...(fixedD ? { def: fixedD } : {}) } } : undefined;
+      const c = new Caller("home", new Rng(mixSeed(5, i, "calls")), { prep, schemes, scout: mode === "scout" ? { home: 1, away: 0 } : undefined, ratings: { home: H, away: A } });
       if (mode !== "cheat") sim.play(c.replay([]));
       else {
         // "Cheater": sees the defense's call and picks the offensive call with the best expected yards of its kind.

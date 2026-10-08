@@ -1,7 +1,7 @@
 import { Rng, type TeamRatings, type UnitRates } from "@cfb/engine";
 import { mixSeed } from "./hash.ts";
-import { daysBetween, type ISODate } from "./dates.ts";
-import type { RatedPlayer } from "./players.ts";
+import { daysBetween, nthWeekday, type ISODate } from "./dates.ts";
+import { ATTR_LABELS, OVR_WEIGHTS, type Pos, type RatedPlayer } from "./players.ts";
 
 /**
  * What nobody knows in August (M1 "true vs scouted ratings"). Every season some teams are much better or
@@ -15,7 +15,8 @@ import type { RatedPlayer } from "./players.ts";
  *   - scheme fit: how the starters fit the coaches' system. New head coaches swing it most; adaptable
  *     players and good coaches raise it through camp.
  *   - chemistry: built from leaders (a leader at QB matters most), helped by scheme fit; continuity makes
- *     a good locker room better and a bad one worse, and it moves a little with how the season is going.
+ *     a good locker room better and a bad one worse. For one game after an upset it also carries momentum
+ *     (Season.updateMorale), which never touches development.
  *
  * Sizes are calibrated to real seasons (reports/surprise-sizes.md: 658 FBS team-seasons): a team's true
  * strength lands about 6.6 points from its preseason rating on average, 4.7 for a continuity team and 7.8
@@ -81,11 +82,17 @@ const DEV_W: Partial<Record<string, number>> = { QB: 3 };
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
-export function hiddenPlayer(seed: number, year: number, p: RatedPlayer): HiddenPlayer {
+/** How much of a player's fit his ratings explain (schemes.ts: his scheme rating against his overall); the rest is unseen. */
+export const FIT_FROM_RATINGS = 0.5;
+
+/** `schemeFit`: his fit from his ratings in his coaches' schemes, in SDs (absent: all of his fit is unseen). */
+export function hiddenPlayer(seed: number, year: number, p: RatedPlayer, schemeFit?: number): HiddenPlayer {
   const rng = new Rng(mixSeed(seed, year, p.id, "hidden"));
   const g = () => rng.gauss(0, 1);
   const trait = () => Math.round(clamp(50 + 15 * g(), 1, 99));
-  return { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  const out = { dev: DEV_SD * g(), expected: EXPECTED[Math.min(EXPECTED.length - 1, Math.max(0, Math.floor(p.years)))], leadership: trait(), adaptability: trait(), fit: g() };
+  if (schemeFit != null) out.fit = FIT_FROM_RATINGS * schemeFit + Math.sqrt(1 - FIT_FROM_RATINGS ** 2) * out.fit;
+  return out;
 }
 
 /**
@@ -102,6 +109,50 @@ export function progress(year: number, date: ISODate): number {
   return 1;
 }
 
+/**
+ * The three times of the development year, as the Development screen shows them. The offseason (from the
+ * rollover in February to fall camp: spring practice and summer workouts) is the biggest growth period;
+ * fall camp (the first Monday of August to the opener) settles position battles; in season, practice reps
+ * add the last of the year's growth, which is done by mid-November.
+ */
+export type DevPhaseKind = "offseason" | "camp" | "season";
+export interface DevPhase { kind: DevPhaseKind; label: string; start: ISODate; end: ISODate }
+/** Snapshots of the staff's development read by player id: at the start of the phase `key` (year:kind), and weekly in season. */
+export interface DevTrack { key: string; team: number; date: ISODate; start: Record<number, number>; weeks: { date: ISODate; read: Record<number, number> }[] }
+
+export function devPhase(year: number, date: ISODate, firstGame: ISODate): DevPhase {
+  const camp = nthWeekday(year, 8, 1, 1);
+  if (date < camp) return { kind: "offseason", label: "Offseason: spring practice and summer workouts", start: `${year}-01-01`, end: camp };
+  if (date < firstGame) return { kind: "camp", label: "Fall camp", start: camp, end: firstGame };
+  return { kind: "season", label: "In season", start: firstGame, end: `${year}-11-15` };
+}
+
+/** Overall points a development plan has added by a date (about 2 over 80 days of work, 2.5 at most). */
+export function labGain(l: LabPlan | undefined, date: ISODate): number {
+  if (!l || l.area === "leadership" || date <= l.from) return 0;
+  return 2 * Math.min(100, daysBetween(l.from, date)) / 80;
+}
+
+/** Which kind of work moves each rating; everything else is technique. */
+const FOCUS_OF: Record<string, LabArea> = {
+  speed: "strength", power: "strength", arm: "strength", k_power: "strength", p_power: "strength", run_block: "strength", shed: "strength", contested: "strength", tackle: "strength",
+  decisions: "film", pocket: "film", vision: "film", route: "film", discipline: "film", run_fit: "film", coverage: "film", zone: "film", range: "film", run_sup: "film", run_def: "film", blitz: "film",
+};
+export const focusArea = (attr: string): LabArea => FOCUS_OF[attr] ?? "technique";
+
+/**
+ * What a player is working on: his plan's area, or (without one) what his position coach would pick, the
+ * area of his weakest important rating. The ratings shown are his two weakest important ones in that area.
+ */
+export function devFocus(p: { pos: Pos; attrs: Record<string, number> }, plan?: LabPlan): { area: LabArea; by: "plan" | "staff"; attrs: { key: string; label: string; value: number }[] } {
+  const w = OVR_WEIGHTS[p.pos];
+  const keys = Object.keys(w).filter((k) => p.attrs[k] != null && (w[k] >= 0.1 || Object.keys(w).length <= 2));
+  const weakest = [...keys].sort((a, b) => p.attrs[a] - p.attrs[b] || w[b] - w[a]);
+  const area = plan?.area ?? (weakest.length ? focusArea(weakest[0]) : "technique");
+  const pick = area === "leadership" ? [] : weakest.filter((k) => focusArea(k) === area);
+  return { area, by: plan ? "plan" : "staff", attrs: (pick.length || area === "leadership" ? pick : weakest).slice(0, 2).map((k) => ({ key: k, label: ATTR_LABELS[k] ?? k, value: p.attrs[k] })) };
+}
+
 const OFF_POS = new Set(["QB", "RB", "WR", "TE", "OL"]);
 const DEF_POS = new Set(["DE", "DT", "LB", "CB", "S"]);
 export const unitOf = (pos: string): Unit | null => (OFF_POS.has(pos) ? "off" : DEF_POS.has(pos) ? "def" : null);
@@ -115,10 +166,12 @@ export function hiddenTeam(o: {
   roster: RatedPlayer[]; starters: Record<Unit, RatedPlayer[]>; morale?: number; lab?: Record<number, LabPlan>;
   /** Chemistry from players' morale about pay and playing time, in points by unit (morale.ts). */
   mood?: Record<Unit, number>;
+  /** Each player's fit from his ratings in the coaches' schemes, in SDs (see hiddenPlayer). */
+  schemeFit?: Map<number, number>;
 }): HiddenTeam {
   const { seed, year, ctx } = o;
   const phi = progress(year, o.date);
-  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p)]));
+  const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p, o.schemeFit?.get(p.id))]));
   const rng = new Rng(mixSeed(seed, year, o.team_id, "hidden-team"));
   const fit = { off: 0, def: 0 }, chem = { off: 0, def: 0 };
   const labDays = (pid: number) => {
@@ -143,12 +196,16 @@ export function hiddenTeam(o: {
     // Continuity: a good locker room gets better and a bad one worse.
     if (ctx.continuity) cz *= 1.15;
     const sd = ctx.continuity ? CHEM_SD.continuity : u === "off" && ctx.new_qb ? CHEM_SD.new_qb : CHEM_SD.same_qb;
-    chem[u] = r2(phi * sd * cz + 0.5 * (o.morale ?? 0) + (o.mood?.[u] ?? 0));
+    chem[u] = r2(phi * sd * cz + (o.mood?.[u] ?? 0));
   }
+  // Development follows the locker room, not last week's score.
+  const settled = { ...chem };
+  // Momentum: last week's result against expectations, split across both units (see Season.updateMorale).
+  for (const u of ["off", "def"] as const) chem[u] = r2(chem[u] + 0.5 * (o.morale ?? 0));
   // Development: better chemistry, faster development (young players gain the most from it); a staff
   // development plan adds about 2 overall points over 80 days (2.5 at most).
   const dev = new Map<number, number>(), growth = new Map<number, number>();
-  const rate = (u: Unit) => clamp(1 + 0.25 * chem[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
+  const rate = (u: Unit) => clamp(1 + 0.25 * settled[u] / Math.max(1, phi * 2.5), 0.5, 1.5);
   for (const p of o.roster) {
     const h = hp.get(p.id)!, u = unitOf(p.pos);
     const lab = o.lab?.[p.id] && o.lab[p.id].area !== "leadership" ? 2 * labDays(p.id) / 80 : 0;

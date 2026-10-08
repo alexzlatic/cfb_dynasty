@@ -1,5 +1,6 @@
 import { LEAGUE, type PlayerShare, type TeamRatings, type UnitRates } from "@cfb/engine";
-import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, SPECIAL_SLOTS, overall, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
+import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, SLOT_POS, SPECIAL_SLOTS, overall, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
+import { STAND_IN } from "./schemes.ts";
 
 /**
  * The ratings compiler: the players in a team's depth chart become the engine's unit rates.
@@ -69,6 +70,9 @@ export function lineup(depth: DepthChart, byId: Map<number, RatedPlayer>, out: S
   return { slot };
 }
 
+/** What playing a slot through stand-in attributes costs (SDs): a linebacker at end is not quite an end. */
+const STAND_IN_COST = 0.3;
+
 /** A player's z on an attribute. Out of position (no such attribute) or an empty slot plays far below a starter. */
 const at = (p: RatedPlayer | undefined, a: string) => (!p ? -2.5 : p.attrs[a] != null ? z(p.attrs[a]) : -2);
 
@@ -82,6 +86,14 @@ const recvAttr = (p: RatedPlayer | undefined, a: string) => (p && RECV_STAND_IN[
 /** The unit inputs the terms refer to, as z-scores. */
 export function units(l: Lineup): Record<string, number> {
   const s = l.slot;
+  // Defenders read through stand-ins for their slot (a linebacker rushing from an end slot uses his blitz rating).
+  const d = (k: Slot) => ({ p: s[k], k });
+  const atD = (x: { p: RatedPlayer | undefined; k: Slot }, a: string) => {
+    const p = x.p;
+    if (!p || p.attrs[a] != null) return at(p, a);
+    const alt = STAND_IN[SLOT_POS[x.k][0]]?.[p.pos]?.[a];
+    return alt != null && p.attrs[alt] != null ? z(p.attrs[alt]) - STAND_IN_COST : -2;
+  };
   const qb = s.QB;
   const recv: [Slot, number][] = (Object.entries(TARGET_SHARE) as [Slot, number][]).filter(([k]) => s[k]);
   const tw = recv.reduce((a, [, w]) => a + w, 0) || 1;
@@ -92,11 +104,12 @@ export function units(l: Lineup): Record<string, number> {
   const rw = runners.reduce((a, [, w]) => a + w, 0) || 1;
   const touch = runners.reduce((a, [k, w]) => a + w * at(s[k], s[k]?.pos === "WR" ? "hands" : "security"), 0) / rw;
   const rb = s.RB1;
-  const dl = (["DE1", "DE2", "DT1", "DT2"] as Slot[]).map((k) => s[k]);
-  const lbs = (["LB1", "LB2"] as Slot[]).map((k) => s[k]);
-  const cbs = (["CB1", "CB2", "NB"] as Slot[]).map((k) => s[k]);
+  const dl = (["DE1", "DE2", "DT1", "DT2"] as Slot[]).map(d);
+  // A linebacker in the nickel slot (a 4-3's SAM) plays in the box as well as in coverage.
+  const lbs = (["LB1", "LB2", ...(s.NB?.pos === "LB" ? ["NB"] : [])] as Slot[]).map((k) => s[k]);
+  const cbs = (["CB1", "CB2", "NB"] as Slot[]).map(d);
   const sfs = (["S1", "S2"] as Slot[]).map((k) => s[k]);
-  const cover = (p: RatedPlayer | undefined) => (p?.pos === "S" ? at(p, "zone") : (at(p, "man") + at(p, "zone")) / 2);
+  const cover = (x: { p: RatedPlayer | undefined; k: Slot }) => (x.p?.pos === "S" ? at(x.p, "zone") : (atD(x, "man") + atD(x, "zone")) / 2);
   return {
     qb_short: at(qb, "acc_short"), qb_deep: at(qb, "acc_deep"), qb_arm: at(qb, "arm"), qb_decisions: at(qb, "decisions"), qb_pocket: at(qb, "pocket"),
     recv_route: rv("route"), recv_hands: rv("hands"), recv_speed: rv("speed"), recv_rac: rv("rac"), recv_contested: rv("contested"),
@@ -104,13 +117,13 @@ export function units(l: Lineup): Record<string, number> {
     run_block: 0.8 * soft(ol.map((p) => at(p, "run_block")), 1.5) + 0.2 * at(te, "run_block"),
     rb_vision: at(rb, "vision"), rb_power: at(rb, "power"), rb_speed: at(rb, "speed"), rb_elusive: at(rb, "elusive"),
     ball_security: 0.7 * touch + 0.3 * at(qb, "security"),
-    pass_rush: 0.8 * soft(dl.map((p) => at(p, "pass_rush")), -1.2) + 0.2 * mean(lbs.map((p) => at(p, "blitz"))),
-    run_def: mean(dl.map((p) => 0.65 * at(p, "run_def") + 0.35 * at(p, "shed"))),
+    pass_rush: 0.8 * soft(dl.map((x) => atD(x, "pass_rush")), -1.2) + 0.2 * mean(lbs.map((p) => at(p, "blitz"))),
+    run_def: mean(dl.map((x) => 0.65 * atD(x, "run_def") + 0.35 * atD(x, "shed"))),
     lb_run_fit: mean(lbs.map((p) => at(p, "run_fit"))), lb_speed: mean(lbs.map((p) => at(p, "speed"))),
-    coverage: 0.62 * mean(cbs.map(cover)) + 0.25 * mean(sfs.map(cover)) + 0.13 * mean(lbs.map((p) => at(p, "coverage"))),
-    ball_skills: mean([...cbs, ...sfs].map((p) => at(p, "ball"))),
+    coverage: 0.62 * mean(cbs.map(cover)) + 0.25 * mean(sfs.map((p) => cover({ p, k: "S1" }))) + 0.13 * mean(lbs.map((p) => at(p, "coverage"))),
+    ball_skills: mean([...cbs, ...sfs.map((p) => ({ p, k: "S1" as Slot }))].map((x) => atD(x, "ball"))),
     range: mean(sfs.map((p) => at(p, "range"))),
-    tackling: mean([...lbs, ...sfs, ...cbs].map((p) => at(p, "tackle"))),
+    tackling: mean([...lbs, ...sfs, ...cbs.filter((x) => x.p?.pos !== "LB").map((x) => x.p)].map((p) => at(p, "tackle"))),
   };
 }
 

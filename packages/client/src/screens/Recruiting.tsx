@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SortTable } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
 import { api, type ProspectRow, type RecruitingView, type StaffTimeSplit } from "../api.ts";
 import { Logo, money } from "../util.tsx";
@@ -83,17 +84,24 @@ function ProspectList({ cls, head }: { cls: number; head: RecruitingView }) {
   const [q, setQ] = useState("");
   const [page, setPage] = useState(0);
   const { busy, err, act } = useAct();
+  const [rev, setRev] = useState(false);
   const query: Record<string, string> = { cls: String(cls), view, sort, limit: "50", offset: String(page * 50) };
+  if (rev) query.dir = "rev";
   if (pos) query.pos = pos;
   if (region) query.region = region;
   if (stars) query.stars = stars;
   if (status) query.status = status;
   if (q) query.q = q;
-  const data = useData(() => api.recruiting(id, query), [state.date, cls, pos, region, view, sort, stars, status, q, page]);
+  const data = useData(() => api.recruiting(id, query), [state.date, cls, pos, region, view, sort, rev, stars, status, q, page]);
   const me = head.team_id;
   const k = head.classes.find((x) => x.cls === cls)!;
   const filter = (f: () => void) => { f(); setPage(0); };
   const pages = data ? Math.ceil(data.total / 50) : 0;
+  // Headers sort on the server (the list is paged): a click picks the column, a second click flips it.
+  const sortTh = (key: string, label: string, className = "") => (
+    <th className={`sortable${sort === key ? " sorted" : ""} ${className}`} onClick={() => filter(() => { if (sort === key) setRev(!rev); else { setSort(key); setRev(false); } })}>
+      {label}{sort === key ? <span className="arrow">{(key === "rank" || key === "name" || key === "pos" || key === "home" || key === "board" || key === "status") !== rev ? "▲" : "▼"}</span> : null}</th>
+  );
   return (
     <Panel title={`The ${cls} class`} right={<span className="small muted">{k.rated.toLocaleString()} rated by the service · {k.found.toLocaleString()} more found by your staff</span>}>
       {err && <p className="error">{err}</p>}
@@ -107,12 +115,12 @@ function ProspectList({ cls, head }: { cls: number; head: RecruitingView }) {
           <option value="">Everywhere</option>
           {Object.entries(head.regions).map(([key, r]) => <option key={key} value={key}>{r.name}</option>)}
         </select>
-        <select value={sort} onChange={(e) => filter(() => setSort(e.target.value))}>{SORTS.map(([v, l]) => <option key={v} value={v}>Sort: {l}</option>)}</select>
+        <select value={sort} onChange={(e) => filter(() => { setSort(e.target.value); setRev(false); })}>{SORTS.map(([v, l]) => <option key={v} value={v}>Sort: {l}</option>)}</select>
       </div>
       {!data ? <p className="muted">Loading...</p> : (
         <div className="scrollx">
           <table className="grid prospects">
-            <thead><tr><th className="num">Rk</th><th>Prospect</th><th>Pos</th><th>Stars</th><th>Home</th><th>Potential</th><th>Now</th><th>Status</th><th>In his picture</th>{me != null && <th></th>}</tr></thead>
+            <thead><tr>{sortTh("rank", "Rk", "num")}{sortTh("name", "Prospect")}{sortTh("pos", "Pos")}{sortTh("rank", "Stars")}{sortTh("home", "Home")}{sortTh("est", "Potential")}{sortTh("now", "Now")}{sortTh("status", "Status")}<th>In his picture</th>{me != null && sortTh("board", "")}</tr></thead>
             <tbody>{data.prospects.map((p) => <Row key={p.id} p={p} me={me} busy={busy} act={act} />)}</tbody>
           </table>
           {!data.prospects.length && <p className="muted">Nobody here your staff knows about. Scout a region to find more prospects there.</p>}
@@ -233,11 +241,14 @@ function Rankings({ cls }: { cls: number }) {
   const me = state.user_team_id;
   return (
     <Panel title={`${cls} class rankings`}>
-      <table className="grid"><thead><tr><th className="num">#</th><th>School</th><th className="num">Commits</th><th className="num">5★</th><th className="num">4★</th><th className="num">Points</th></tr></thead><tbody>
-        {(ranks ?? []).map((r, i) => <tr key={r.team_id} className={r.team_id === me ? "mine" : ""}><td className="num">{i + 1}</td>
-          <td><Logo team={team(r.team_id)} size={22} /> <a href={`#/l/${id}/team/${r.team_id}`}>{team(r.team_id)?.school}</a></td><td className="num">{r.commits}</td>
-          <td className="num">{r.five || ""}</td><td className="num">{r.four || ""}</td><td className="num"><b>{r.points.toFixed(1)}</b></td></tr>)}
-      </tbody></table>
+      <SortTable className="grid" rows={ranks ?? []} rowKey={(r) => r.team_id} rowClass={(r) => (r.team_id === me ? "mine" : undefined)} cols={[
+        { key: "rank", label: "#", className: "num", asc: true, by: (r) => -r.points, cell: (_, i) => i + 1 },
+        { key: "school", label: "School", by: (r) => team(r.team_id)?.school, cell: (r) => <><Logo team={team(r.team_id)} size={22} /> <a href={`#/l/${id}/team/${r.team_id}`}>{team(r.team_id)?.school}</a></> },
+        { key: "commits", label: "Commits", className: "num", by: (r) => r.commits, cell: (r) => r.commits },
+        { key: "five", label: "5★", className: "num", by: (r) => r.five, cell: (r) => r.five || "" },
+        { key: "four", label: "4★", className: "num", by: (r) => r.four, cell: (r) => r.four || "" },
+        { key: "points", label: "Points", className: "num", by: (r) => r.points, cell: (r) => <b>{r.points.toFixed(1)}</b> },
+      ]} />
     </Panel>
   );
 }
@@ -247,8 +258,9 @@ function StaffAndScouting({ head }: { head: RecruitingView }) {
   const { busy, err, act } = useAct();
   const u = head.settings;
   if (head.team_id == null) return <p className="muted">You need a team.</p>;
-  const t = time ?? u.time;
-  const tsum = t.recruiting + t.scouting + t.prep || 1;
+  const t0 = time ?? u.time;
+  const t = { ...t0, opponent: t0.opponent ?? 0.15 };
+  const tsum = t.recruiting + t.scouting + t.prep + t.opponent || 1;
   return (
     <div className="cols even">
       <div>
@@ -256,14 +268,15 @@ function StaffAndScouting({ head }: { head: RecruitingView }) {
         <Panel title="Your staff's week">
           <p><label className="check"><input type="checkbox" checked={u.auto} disabled={busy} onChange={(e) => act("recruit_auto", { on: e.target.checked })} /> Let the staff run the board</label></p>
           <table className="grid tight"><tbody>
-            {(["recruiting", "scouting", "prep"] as const).map((k) => <tr key={k}>
-              <td>{k === "prep" ? "Game preparation" : k === "recruiting" ? "Recruiting" : "Scouting"}</td>
+            {(["recruiting", "scouting", "prep", "opponent"] as const).map((k) => <tr key={k}>
+              <td>{k === "prep" ? "Practice and game plan" : k === "opponent" ? "Opponent film" : k === "recruiting" ? "Recruiting" : "Scouting prospects"}</td>
               <td><input type="range" min={0} max={100} value={Math.round(100 * t[k] / tsum)} onChange={(e) => setTime({ ...t, [k]: Number(e.target.value) / 100 })} /></td>
               <td className="num">{pct(t[k] / tsum)}</td><td className="num muted small">{Math.round(head.hours * t[k] / tsum)} h</td></tr>)}
           </tbody></table>
           {time && <p><button className="primary" disabled={busy} onClick={async () => { await act("staff_time", time); setTime(null); }}>Save</button> <button className="link" onClick={() => setTime(null)}>Cancel</button></p>}
-          <p className="small muted">In season the usual week is 30% recruiting, 10% scouting and 60% preparing for Saturday; less preparation costs you on the field.
-            More scouting time finds more prospects and narrows reads. Out of season there is no game to prepare for.</p>
+          <p className="small muted">In season the usual week is 30% recruiting, 10% scouting prospects, 45% practice and the game plan and 15% film of the next opponent.
+            Less practice costs you on the field; more film finds more of the opponent's tendencies (Game plan, Film room). More scouting time finds more prospects and narrows reads.
+            Out of season there is no game to prepare for.</p>
         </Panel>
         <Panel title="Staff skills">
           <div className="skills">{Object.entries(head.skill_names).map(([k, l]) => <div key={k} className="skill"><span>{l}</span><b>{head.skills[k]}</b></div>)}</div>

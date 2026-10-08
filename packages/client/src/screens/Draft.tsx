@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SortTable } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
 import { api } from "../api.ts";
 import { Logo, fmtDate } from "../util.tsx";
@@ -38,48 +39,48 @@ export function DraftScreen() {
           {d ? (
             <Panel title="Picks" right={<label className="check small"><input type="checkbox" checked={mineOnly} onChange={(e) => setMineOnly(e.target.checked)} /> Only your school</label>}>
               {!mineOnly && <div className="seg">{ROUNDS.map((r) => <button key={r} className={round === r ? "on" : ""} onClick={() => setRound(r)}>Round {r}</button>)}</div>}
-              <table className="grid draft">
-                <thead><tr><th className="num">Pick</th><th>NFL team</th><th>Player</th><th>Pos</th><th>School</th><th className="num">Ovr</th><th></th></tr></thead>
-                <tbody>{picks.map((p) => (
-                  <tr key={p.pick} className={p.team_id === me ? "mine" : ""}>
-                    <td className="num"><b>{p.pick}</b>{mineOnly && <span className="muted small"> (rd {p.round})</span>}</td>
-                    <td className="nfl">{p.nfl}</td><td><b>{p.name}</b></td><td><span className="pos">{p.pos}</span></td>
-                    <td><Logo team={team(p.team_id)} size={20} /> <a href={`#/l/${id}/team/${p.team_id}`}>{team(p.team_id)?.school}</a></td>
-                    <td className="num">{p.ovr}</td><td>{p.early && <span className="tag">early entry</span>}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
+              <SortTable className="grid draft" rows={picks} rowKey={(p) => p.pick} rowClass={(p) => (p.team_id === me ? "mine" : undefined)} cols={[
+                { key: "pick", label: "Pick", className: "num", asc: true, by: (p) => p.pick, cell: (p) => <><b>{p.pick}</b>{mineOnly && <span className="muted small"> (rd {p.round})</span>}</> },
+                { key: "nfl", label: "NFL team", td: "nfl", by: (p) => p.nfl, cell: (p) => p.nfl },
+                { key: "name", label: "Player", by: (p) => p.name, cell: (p) => <b>{p.name}</b> },
+                { key: "pos", label: "Pos", by: (p) => p.pos, cell: (p) => <span className="pos">{p.pos}</span> },
+                { key: "school", label: "School", by: (p) => team(p.team_id)?.school, cell: (p) => <><Logo team={team(p.team_id)} size={20} /> <a href={`#/l/${id}/team/${p.team_id}`}>{team(p.team_id)?.school}</a></> },
+                { key: "ovr", label: "Ovr", className: "num", by: (p) => p.ovr, cell: (p) => p.ovr },
+                { key: "early", label: "", by: (p) => (p.early ? 1 : 0), cell: (p) => p.early && <span className="tag">early entry</span> },
+              ]} />
               {!picks.length && <p className="muted">None.</p>}
             </Panel>
           ) : data.projected.length ? (
             <Panel title="Mock draft" right={<span className="small muted">the NFL's consensus before April</span>}>
-              <table className="grid draft">
-                <thead><tr><th className="num">#</th><th>Player</th><th>Pos</th><th>School</th><th className="num">Ovr</th><th></th></tr></thead>
-                <tbody>{data.projected.slice(0, 100).map((p, i) => (
-                  <tr key={p.pid} className={p.team_id === me ? "mine" : ""}><td className="num">{i + 1}</td><td><b>{p.name}</b></td><td><span className="pos">{p.pos}</span></td>
-                    <td><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</td><td className="num">{p.ovr}</td><td>{p.early && <span className="tag">early entry</span>}</td></tr>
-                ))}</tbody>
-              </table>
+              <SortTable className="grid draft" rows={data.projected.slice(0, 100)} rowKey={(p) => p.pid} rowClass={(p) => (p.team_id === me ? "mine" : undefined)} cols={[
+                { key: "rank", label: "#", className: "num", asc: true, by: (p) => data.projected.indexOf(p), cell: (_, i) => i + 1 },
+                { key: "name", label: "Player", by: (p) => p.name, cell: (p) => <b>{p.name}</b> },
+                { key: "pos", label: "Pos", by: (p) => p.pos, cell: (p) => <span className="pos">{p.pos}</span> },
+                { key: "school", label: "School", by: (p) => team(p.team_id)?.school, cell: (p) => <><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</> },
+                { key: "ovr", label: "Ovr", className: "num", by: (p) => p.ovr, cell: (p) => p.ovr },
+                { key: "early", label: "", by: (p) => (p.early ? 1 : 0), cell: (p) => p.early && <span className="tag">early entry</span> },
+              ]} />
             </Panel>
           ) : data.early.length ? (
             <Panel title={`${data.early.length} underclassmen declared`}>
-              <table className="grid draft">
-                <thead><tr><th className="num">Board</th><th>Player</th><th>Pos</th><th>School</th><th className="num">Ovr</th></tr></thead>
-                <tbody>{data.early.map((p) => (
-                  <tr key={p.pid} className={p.team_id === me ? "mine" : ""}><td className="num">{p.rank}</td><td><a href={`#/l/${id}/player/${p.pid}`}>{p.name}</a></td><td><span className="pos">{p.pos}</span></td>
-                    <td><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</td><td className="num">{p.ovr}</td></tr>
-                ))}</tbody>
-              </table>
+              <SortTable className="grid draft" rows={data.early} rowKey={(p) => p.pid} rowClass={(p) => (p.team_id === me ? "mine" : undefined)} cols={[
+                { key: "rank", label: "Board", className: "num", asc: true, by: (p) => p.rank, cell: (p) => p.rank },
+                { key: "name", label: "Player", by: (p) => p.name, cell: (p) => <a href={`#/l/${id}/player/${p.pid}`}>{p.name}</a> },
+                { key: "pos", label: "Pos", by: (p) => p.pos, cell: (p) => <span className="pos">{p.pos}</span> },
+                { key: "school", label: "School", by: (p) => team(p.team_id)?.school, cell: (p) => <><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</> },
+                { key: "ovr", label: "Ovr", className: "num", by: (p) => p.ovr, cell: (p) => p.ovr },
+              ]} />
             </Panel>
           ) : data.prospects.length ? (
             <Panel title="NFL big board" right={<span className="small muted">draft-eligible players the NFL likes most; underclassmen decide by the deadline</span>}>
-              <table className="grid draft">
-                <thead><tr><th className="num">#</th><th>Player</th><th>Pos</th><th>Class</th><th>School</th><th className="num">Ovr</th></tr></thead>
-                <tbody>{data.prospects.map((p, i) => (
-                  <tr key={p.pid} className={p.team_id === me ? "mine" : ""}><td className="num">{i + 1}</td><td><a href={`#/l/${id}/player/${p.pid}`}><b>{p.name}</b></a></td><td><span className="pos">{p.pos}</span></td>
-                    <td className="small">{p.cls}</td><td><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</td><td className="num">{p.ovr}</td></tr>
-                ))}</tbody>
-              </table>
+              <SortTable className="grid draft" rows={data.prospects} rowKey={(p) => p.pid} rowClass={(p) => (p.team_id === me ? "mine" : undefined)} cols={[
+                { key: "rank", label: "#", className: "num", asc: true, by: (p) => data.prospects.indexOf(p), cell: (_, i) => i + 1 },
+                { key: "name", label: "Player", by: (p) => p.name, cell: (p) => <a href={`#/l/${id}/player/${p.pid}`}><b>{p.name}</b></a> },
+                { key: "pos", label: "Pos", by: (p) => p.pos, cell: (p) => <span className="pos">{p.pos}</span> },
+                { key: "cls", label: "Class", td: "small", by: (p) => p.cls, cell: (p) => p.cls },
+                { key: "school", label: "School", by: (p) => team(p.team_id)?.school, cell: (p) => <><Logo team={team(p.team_id)} size={20} /> {team(p.team_id)?.school}</> },
+                { key: "ovr", label: "Ovr", className: "num", by: (p) => p.ovr, cell: (p) => p.ovr },
+              ]} />
             </Panel>
           ) : (
             <Panel title="Nothing yet"><p>Juniors decide by the January deadline whether to enter the draft; seniors and anyone out of eligibility are in it anyway. The draft itself is in late April.</p></Panel>

@@ -5,6 +5,7 @@ import { api, type Considering } from "../api.ts";
 import { Logo, heightStr, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { Dial, DualBar, recruitStars } from "./ratings.tsx";
+import { PersonaPanel } from "./Players.tsx";
 
 const GRADE = ["Freshman", "Sophomore", "Junior", "Senior"];
 
@@ -77,6 +78,7 @@ export function ProspectPage({ pid }: { pid: number }) {
             {p.considering.length ? <ConsideringList rows={p.considering} me={me} />
               : <p className="muted">{p.grade < 1 ? "Too young: schools are only scouting him for now." : signed ? "He has signed." : "No school is in his picture yet."}</p>}
           </Panel>
+          <PersonaPanel v={p.persona} />
           <Panel title="Offers">
             {p.offers.length ? <div className="logos">{p.offers.map((t) => <span key={t} title={team(t)?.school}><Logo team={team(t)} size={26} /></span>)}</div> : <p className="muted">No offers yet.</p>}
           </Panel>

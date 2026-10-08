@@ -1,10 +1,12 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
-import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
+import {
+  LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
+} from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { ATTRS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
+import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
@@ -20,11 +22,13 @@ import {
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
-import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
+import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { INDEPENDENT, conferenceSchedule, isPower, placeTeams, realConferences, tieInsFor, validateSetup, type ConferenceDef, type ConferenceSetup, type TieIns } from "./conferences.ts";
 import { capFor, mediaScore, realign, startDeals, type Move, type RealignState } from "./realign.ts";
 import { CONF_MEDIA, SCHOOL_MEDIA } from "./finance.ts";
+import { BASE_FILM, USUAL_FILM_HOURS, filmEff, insights, knowledge, tendencies, type Insight } from "./scouting.ts";
+import { KNOWN_FRONTS, drawSchemes, fitSD, inferFronts, inferOffense, schemeRating, type TeamSchemes } from "./schemes.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, projectCost, type Charge, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
@@ -98,8 +102,18 @@ export interface SeasonState {
   hidden_ctx?: Record<number, TeamContext>;
   /** How each team's season is going against expectations (moves chemistry a little). */
   morale?: Record<number, number>;
+  /** Each team's coordinators' schemes (absent in a league's first season: read from the seed; see schemes.ts). */
+  schemes?: Record<number, TeamSchemes>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
+  /** Hours of film your staff has put into your next opponent. */
+  film?: { game_id: number; hours: number } | null;
+  /**
+   * Your staff's read of each of your players' development (overall points gained this year) when the
+   * current phase began (`start`), and on each Monday of the season (the last four), for the Development
+   * screen's progress. Taken by the day sim, so a replay gives the same; see Season.trackDevelopment.
+   */
+  dev_track?: DevTrack;
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
   contracts?: Record<number, Contract>;
   pools?: Record<number, number>;
@@ -207,8 +221,11 @@ export interface DayReport {
 
 /** Program cycles: how much of a program's momentum carries into next year, and how far it runs (utility for recruits). */
 const CYCLE_CARRY = 0.8, CYCLE_SD = 0.5;
+/** Momentum after a result against expectations: points of next-game margin per unit of (won - win chance), carry-over per game, cap (reports/momentum.md). */
+export const MOMENTUM = { loss: 1, win: 0.25, carry: 0.3, cap: 1 };
 /** The yearly chance a program changes head coaches (a stand-in for the carousel). */
 const COACH_CHANGE = 0.2;
+const OFF_OR_DEF = { off: new Set<string>(OFFENSE_FIELD as readonly string[]), def: new Set<string>(DEFENSE_FIELD as readonly string[]) };
 const scaleEdge = <T extends object>(e: T, k: number): T => (k === 1 ? e : Object.fromEntries(Object.entries(e).map(([x, v]) => [x, (v as number) * k])) as T);
 const gameOrder = (a: Game, b: Game) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id);
 
@@ -242,8 +259,6 @@ const winTerm = (prestige: number, winPct: number, power: boolean, q: number) =>
 const homeTerm = (mi: number, sameState: boolean) => RECRUIT_FIT.log_distance * Math.log1p(mi / 50) + RECRUIT_FIT.home_state * (sameState ? 1 : 0);
 const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
 const STAY = { playing: 1.6, winning: 0.6 };
-/** The personality your staff assumes for a player it hasn't talked with. */
-const AVERAGE_PERSONA: Persona = { kind: "steady", money: 1, playing: 1, development: 1, fit: 1, winning: 1, home: 1, loyalty: 1 };
 const money = (x: number) => (x >= 1_000_000 ? `$${(x / 1_000_000).toFixed(2)}M` : `$${Math.round(x / 1000)}K`);
 const softmax = (xs: number[]) => { const m = Math.max(...xs), e = xs.map((x) => Math.exp(x - m)), t = e.reduce((a, b) => a + b, 0); return e.map((x) => x / t); };
 const chooseIdx = (xs: number[], u: number) => { const c = softmax(xs); for (let i = 0; i < c.length; i++) { if (u < c[i]) return i; u -= c[i]; } return c.length - 1; };
@@ -483,6 +498,7 @@ export class Season {
     const next = new Season(state, seed);
     for (const [h, b, ids] of rl.news) next.state.news.push(next.news(s.date, "conference", h, b, ids));
     next.startHidden(coaches);
+    next.state.schemes = this.nextSchemes(next);
     for (const t of next.teams) {
       if (t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
     }
@@ -843,6 +859,8 @@ export class Season {
     // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
+    this.filmDay(today);
+    this.trackDevelopment(today);
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
@@ -1681,7 +1699,7 @@ export class Season {
       const nowGap = arrivalOvr(view.potential.est) - (view.ovr ? (view.ovr.lo + view.ovr.hi) / 2 : arrivalOvr(view.potential.est));
       ratings = ATTRS[p.pos].map((a) => { const arrival = fromZ(zz + 0.47 * rng.gauss(0, 1)); return { attr: a, now: Math.max(15, Math.round(arrival - nowGap)), arrival }; });
     }
-    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10 };
+    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id) };
   }
 
   /** The schools a prospect is considering, best first (see RecruitWeek.considering). */
@@ -1883,6 +1901,76 @@ export class Season {
     s.hidden_ctx = ctx;
   }
 
+  private schemeCache?: Record<number, TeamSchemes>;
+  /** Every team's offensive and defensive schemes. */
+  allSchemes(): Record<number, TeamSchemes> {
+    if (this.state.schemes) return this.state.schemes;
+    if (!this.schemeCache) {
+      const rosters: Record<number, RatedPlayer[]> = {};
+      for (const t of this.teams) rosters[t.id] = this.roster(t.id);
+      const fronts = inferFronts(this.state.seed, rosters), out: Record<number, TeamSchemes> = {};
+      for (const t of this.teams) {
+        // FCS ratings are generic, so their staffs draw from the real mix.
+        const r = t.level === "fbs" ? this.seed.ratings[t.id]?.ratings : undefined;
+        out[t.id] = { off: r ? inferOffense(r) : drawSchemes(this.state.seed, this.state.year, t.id).off, def: KNOWN_FRONTS[t.school] ?? fronts[t.id] ?? "4-2-5" };
+      }
+      this.schemeCache = out;
+    }
+    return this.schemeCache;
+  }
+
+  /** A team's schemes and the coaches who run them (the head coach stands in for a missing coordinator). */
+  schemes(teamId: number): TeamSchemes & { off_coach: string | null; def_coach: string | null } {
+    const sc = this.allSchemes()[teamId] ?? { off: "pro_style", def: "4-2-5" };
+    const st = this.staff(teamId), name = (role: string) => {
+      const c = st.find((m) => m.role === role) ?? st.find((m) => m.role === "HC");
+      return c ? `${c.first} ${c.last}`.trim() : null;
+    };
+    return { ...sc, off_coach: name("OC"), def_coach: name("DC") };
+  }
+
+  /** Next season's schemes: the same coordinators keep theirs; a new head coach brings new ones. */
+  private nextSchemes(next: Season): Record<number, TeamSchemes> {
+    const now = this.allSchemes(), out: Record<number, TeamSchemes> = {};
+    for (const t of next.teams) {
+      const cur = now[t.id] ?? { off: "pro_style", def: "4-2-5" };
+      if (!next.state.hidden_ctx?.[t.id]?.new_coach) { out[t.id] = cur; continue; }
+      const d = drawSchemes(next.state.seed, next.state.year, t.id);
+      // The academies keep the option whoever coaches them.
+      out[t.id] = { off: cur.off === "option" ? "option" : d.off, def: d.def };
+    }
+    return out;
+  }
+
+  private fitCache = new Map<number, Map<number, number>>();
+  /**
+   * Each player's fit from his ratings in his coaches' schemes, in SDs: at his slot in the opening depth
+   * chart, or his best slot for a backup. Kickers, punters and snappers have none.
+   */
+  schemeFits(teamId: number): Map<number, number> {
+    let m = this.fitCache.get(teamId);
+    if (m) return m;
+    m = new Map();
+    const sc = this.allSchemes()[teamId];
+    const depth = this.seed.players?.[teamId]?.depth ?? {};
+    const slotOf = new Map<number, string>();
+    for (const [slot, ids] of Object.entries(depth)) if (ids?.[0] != null && !slotOf.has(ids[0])) slotOf.set(ids[0], slot);
+    for (const p of this.roster(teamId)) {
+      const u = unitOf(p.pos);
+      if (!sc || !u) continue;
+      const slot = slotOf.get(p.id) as Parameters<typeof schemeRating>[2];
+      const scheme = u === "off" ? sc.off : sc.def;
+      m.set(p.id, fitSD(p, schemeRating(p, scheme, slot && OFF_OR_DEF[u].has(slot) ? slot : undefined)));
+    }
+    this.fitCache.set(teamId, m);
+    return m;
+  }
+
+  /** A player's hidden makeup this season, with his scheme fit. */
+  hiddenOf(p: RatedPlayer): ReturnType<typeof hiddenPlayer> {
+    return hiddenPlayer(this.state.seed, this.state.year, p, this.schemeFits(p.team_id).get(p.id));
+  }
+
   teamContext(teamId: number): TeamContext {
     return this.state.hidden_ctx?.[teamId] ?? { new_coach: false, new_qb: false, continuity: false, coach: 0 };
   }
@@ -1909,7 +1997,7 @@ export class Season {
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
     const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
-      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood });
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood, schemeFit: this.schemeFits(teamId) });
     this.hiddenCache.set(teamId, { key, h });
     return h;
   }
@@ -1923,14 +2011,22 @@ export class Season {
     return { off: h.fit.off + h.chem.off + dev("off"), def: h.fit.def + h.chem.def + dev("def"), h };
   }
 
-  /** Winning beyond expectations lifts a locker room a little; losing more than expected wears on it. */
+  /**
+   * Momentum, sized to real games (reports/momentum.md: 14,756 FBS team-games, 2014-2025): a result against
+   * expectations moves the next game by about half a point per unit of (won - win chance). An upset loss
+   * stings (1 point per unit) more than an upset win lifts (0.25), it is mostly gone a game later (x0.3),
+   * streaks don't stack, and it is never worth more than a point. Stored in hidden points (one is worth
+   * POINTS_PER_UNIT of margin) and split across offense and defense.
+   */
   private updateMorale(g: Game): void {
     const s = this.state;
     const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
     this.donors(g, p);
     const homeWon = g.home_score! > g.away_score! ? 1 : 0;
+    const cap = MOMENTUM.cap / POINTS_PER_UNIT;
     for (const [id, d] of [[g.home_id, homeWon - p], [g.away_id, p - homeWon]] as const) {
-      s.morale![id] = Math.round(Math.max(-1.5, Math.min(1.5, (s.morale![id] ?? 0) * 0.9 + 0.3 * d)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
+      const hit = (d < 0 ? MOMENTUM.loss : MOMENTUM.win) * d / POINTS_PER_UNIT;
+      s.morale![id] = Math.round(Math.max(-cap, Math.min(cap, (s.morale![id] ?? 0) * MOMENTUM.carry + hit)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
     }
   }
 
@@ -1967,12 +2063,97 @@ export class Season {
     })) as Record<Unit, { development: number; fit: number; chemistry: number }>;
     // Traits read like a scout's grade: to the nearest 5, sharper the longer the staff has had him.
     const trait = (x: number) => Math.round(Math.max(1, Math.min(99, x + (1 - known) * 15 * rng.gauss(0, 1))) / 5) * 5;
+    // Each player's fit in the coaches' system (adaptable players shrug off a poor one), from its own stream so
+    // adding it left the other reads where they were. Kickers and snappers have no system to fit.
+    const frng = new Rng(mixSeed(s.seed, s.year, teamId, "staff-fit", week));
     const players = this.roster(teamId).map((p) => {
-      const hp = hiddenPlayer(s.seed, s.year, p);
+      const hp = this.hiddenOf(p);
+      const f = hp.fit < 0 ? hp.fit * (1 - 0.6 * hp.adaptability / 99) : hp.fit;
+      const fit = unitOf(p.pos) ? Math.round((f + (1 - known) * 1.2 * frng.gauss(0, 1)) * 10) / 10 : null;
       return { pid: p.id, growth: blur(h.growth.get(p.id) ?? 0, 3), expected: Math.round(hp.expected * progress(s.year, date) * 10) / 10,
-        leadership: trait(hp.leadership), adaptability: trait(hp.adaptability) };
+        leadership: trait(hp.leadership), adaptability: trait(hp.adaptability), fit };
     });
     return { known, units, players };
+  }
+
+  /** The development phase a date is in for a team (its opener ends fall camp). */
+  devPhase(teamId: number | null, date = this.state.date): DevPhase {
+    const s = this.state;
+    const first = s.games.filter((g) => g.kind === "regular" && (teamId == null || g.home_id === teamId || g.away_id === teamId)).reduce<ISODate | null>((m, g) => (m == null || g.date < m ? g.date : m), null);
+    return devPhase(s.year, date, first ?? `${s.year}-08-29`);
+  }
+
+  /**
+   * Your staff's read of how many overall points each player has gained this year by a date: what scouts
+   * expected by now plus his development beyond it, blurred by how well the staff knows him. The blur is
+   * the same all year for a player and shrinks as he's watched (and as there is more growth to see), so
+   * the read moves smoothly from week to week.
+   */
+  devReads(teamId: number, date = this.state.date): Map<number, number> {
+    const s = this.state, out = new Map<number, number>();
+    const h = this.hidden(teamId, date);
+    if (!h) return out;
+    const phi = progress(s.year, date);
+    const known = Math.min(0.9, 0.5 + Math.max(0, daysBetween(`${s.year}-08-01`, date)) / 150);
+    for (const p of this.roster(teamId)) {
+      const noise = new Rng(mixSeed(s.seed, s.year, p.id, "dev-read")).gauss(0, 1);
+      out.set(p.id, Math.round((phi * hiddenPlayer(s.seed, s.year, p).expected + (h.growth.get(p.id) ?? 0) + 3 * (1 - known) * phi * noise) * 10) / 10 + 0); // + 0: no -0, which a save turns into 0
+    }
+    return out;
+  }
+
+  /** Snapshot your staff's development read when a phase begins, and every Monday in season (the last four kept). */
+  private trackDevelopment(today: ISODate): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return;
+    const key = `${s.year}:${this.devPhase(me, today).kind}`;
+    const t = s.dev_track;
+    const fresh = !t || t.key !== key || t.team !== me;
+    if (!fresh && !(key.endsWith(":season") && weekday(today) === 1)) return;
+    const read = Object.fromEntries(this.devReads(me, today));
+    if (fresh) s.dev_track = { key, team: me, date: today, start: read, weeks: [] };
+    else t!.weeks = [...t!.weeks, { date: today, read }].slice(-4);
+  }
+
+  /**
+   * The Development screen for your team: the phase of the year, and for each player what he is working on
+   * and how far he has come this phase against what the staff planned for (his class's expected growth
+   * plus his plan). Ratings themselves move at the rollover; until then this is the staff's read.
+   */
+  developmentReport(teamId: number) {
+    const s = this.state, date = s.date;
+    const phase = this.devPhase(teamId, date);
+    const t = s.dev_track?.team === teamId && s.dev_track.key === `${s.year}:${phase.kind}` ? s.dev_track : null;
+    // Without a snapshot yet (a new league, or one saved before this), the phase is measured from its start.
+    const baseDate = t?.date ?? (phase.start > date ? date : phase.start);
+    const now = this.devReads(teamId, date);
+    let then: Map<number, number> | null = null;
+    const base = (pid: number) => t?.start[pid] ?? (then ??= this.devReads(teamId, baseDate)).get(pid) ?? now.get(pid) ?? 0;
+    const week = t?.weeks.length ? t.weeks[0] : null;
+    const last = t?.weeks.length ? t.weeks[t.weeks.length - 1] : null;
+    const pEnd = progress(s.year, phase.end), pBase = progress(s.year, baseDate), pNow = progress(s.year, date);
+    const trait = new Map((this.staffView(teamId, date)?.players ?? []).map((x) => [x.pid, x]));
+    // Starters on offense and defense (a lineman who long-snaps is not the line's starter for that).
+    const dc = this.depthChart(teamId);
+    const starters = new Set([...OFFENSE_SLOTS, ...DEFENSE_SLOTS].map((k) => dc[k]?.[0]).filter((x) => x != null));
+    const players = this.roster(teamId).map((p) => {
+      const plan = teamId === s.user_team_id ? s.lab?.[p.id] : undefined;
+      const exp = hiddenPlayer(s.seed, s.year, p).expected;
+      const r1 = (x: number) => Math.round(x * 10) / 10;
+      const so_far = now.get(p.id) ?? 0, gained = r1(so_far - base(p.id));
+      // What the staff planned for this phase: his share of a normal year's growth, plus his plan's work.
+      const target = r1((pEnd - pBase) * exp + labGain(plan, phase.end) - labGain(plan, baseDate));
+      const by_now = r1((pNow - pBase) * exp + labGain(plan, date) - labGain(plan, baseDate));
+      // In season: his read now against a few Mondays ago, less what a normal week adds.
+      const trend = week && week.read[p.id] != null ? r1(so_far - week.read[p.id] - (pNow - progress(s.year, week.date)) * exp - labGain(plan, date) + labGain(plan, week.date)) : null;
+      return {
+        pid: p.id, name: playerName(p), pos: p.pos, class: p.class, years: p.years, ovr: p.ovr, starter: starters.has(p.id), gp: s.player_stats?.[p.id]?.gp ?? 0,
+        plan: plan ?? null, focus: devFocus(p, plan), so_far, gained, target, by_now, trend,
+        last_week: last && last.read[p.id] != null ? r1(so_far - last.read[p.id]) : null,
+        leadership: trait.get(p.id)?.leadership ?? null, adaptability: trait.get(p.id)?.adaptability ?? null,
+      };
+    });
+    return { phase, since: baseDate, done: pNow >= 1, weeks: t?.weeks.length ?? 0, trend_since: week?.date ?? null, players };
   }
 
   /** The staff's camp and midseason reports on your team. */
@@ -2108,7 +2289,7 @@ export class Season {
       value, pay, ratio_away: away.ratio, demand: 1 + 0.4 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
       start_here, start_away: best.start,
       dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
-      fit: Math.max(-1.5, Math.min(1.5, hiddenPlayer(s.seed, s.year, p).fit)),
+      fit: Math.max(-1.5, Math.min(1.5, this.hiddenOf(p).fit)),
       win_here: winTerm(me.prestige, me.win, me.tier === 0, q), win_away: winTerm(best.tier === 0 ? 70 : best.tier === 1 ? 40 : 25, 0.55, best.tier === 0, q),
       home_here: home, home_away: homeTerm(250, false),
       morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier, tier_away: best.tier,
@@ -2132,9 +2313,11 @@ export class Season {
     return v > 0 ? Math.round(now * vNext / v) : 0;
   }
 
-  /** The personality your staff assumes until you've talked with him. */
+  /** Whether you've talked with him: until then your staff assumes his class's typical personality. */
   private known(pid: number): boolean { return this.state.talked?.[pid] != null; }
-  private personaOf(pid: number, truth: boolean): Persona { return truth ? persona(this.state.seed, pid) : AVERAGE_PERSONA; }
+  private personaOf(pid: number, truth: boolean): Persona { const w = persona(this.state.seed, pid); return truth ? w : typicalPersona(w.kind); }
+  /** A player's (or prospect's) personality as his page shows it: his class always, his own traits once you've talked with him. */
+  personaRead(pid: number) { return personaView(this.state.seed, pid, this.known(pid)); }
 
   /**
    * A player's portal watch as you see it: his chance to enter, the reasons and what would keep him. Your staff's
@@ -2157,7 +2340,7 @@ export class Season {
     const why = top === "playing" ? (ctx.start_away > ctx.start_here ? `He wants to start: he's behind ${STARTERS[p.pos] === 1 ? "the starter" : "the starters"} here and would start elsewhere.` : "He wants more playing time.")
       : top === "winning" ? "He wants to play for a winner." : top === "home" ? "He wants to be closer to home." : top === "fit" ? "He doesn't fit your scheme." : top === "development" ? "He doesn't think he's developing here." : top === "unhappy" ? "He's unhappy here." : null;
     return {
-      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: committed ? "Committed" : WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
+      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: committed ? "Committed" : WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: PERSONA_NAMES[w.kind],
       reasons, leaving, value: ctx.value, pay: ctx.pay, keep, walk_range: walk == null ? null : [roundPay(walk * (this.known(pid) ? 0.95 : 0.8)), roundPay(walk * (this.known(pid) ? 1.05 : 1.25))],
       fix: leaving ? "He's out of eligibility after this season." : committed ? `He's committed to stay next season (${money(s.next_deals?.[pid]?.amount ?? ctx.pay)}).` : keep == null ? `${reasons[0]?.reason === "pay" ? "Money alone won't settle him." : "Money won't fix this."} ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : this.known(pid) ? `Pay him ${money(keep)} next season and he'll commit to stay.` : `Your staff thinks about ${money(keep)} next season would keep him.`,
       promise: s.promises?.[pid] ?? null,
@@ -3054,6 +3237,9 @@ export class Season {
     // Your games are always called: by you live, or by your coordinators from your game plan.
     const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls")), {
       plans: { [userSide]: this.gamePlan }, prep: { [userSide]: scaleEdge(prepEdge(this.prepFor(g.id)), this.prepFactor()) },
+      schemes: { home: this.allSchemes()[g.home_id], away: this.allSchemes()[g.away_id] },
+      scout: { home: this.scoutKnowledge(g.home_id, g.id), away: this.scoutKnowledge(g.away_id, g.id) },
+      ratings: { home: this.teamRatings(g.home_id) ?? undefined, away: this.teamRatings(g.away_id) ?? undefined },
     }) : null;
     if (hs && as) {
       const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")),
@@ -3115,6 +3301,40 @@ export class Season {
     this.compiled.delete(me);
     rep.news.push(this.news(today, "injury", `${this.team(me).school} ${p.pos} ${name} ${injuryOutlook(days)}`,
       `${name} was hurt (${type}) in a hard ${PRACTICE_DAYS[wd - 1]} practice.`, [me]));
+  }
+
+  /**
+   * Film of the next opponent: in the six days before your game, the staff's opponent share of its week
+   * goes into film, worth more with a better scouting staff.
+   */
+  private filmDay(today: ISODate): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.recruiting) return;
+    const g = this.nextUserGame();
+    if (!g || g.date <= today || daysBetween(today, g.date) > 6) return;
+    if (!s.film || s.film.game_id !== g.id) s.film = { game_id: g.id, hours: 0 };
+    const share = timeSplit(s.recruiting.user.time, true).opponent;
+    s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(staffSkill(this.staff(me), "scouting"))) * 10) / 10;
+  }
+
+  /** How well a team's staff knows its opponent in a game (0 to 1): your film this week, or a usual week for everyone else. */
+  scoutKnowledge(teamId: number, gameId: number): number {
+    const s = this.state;
+    if (teamId === s.user_team_id) return knowledge(BASE_FILM + (s.film?.game_id === gameId ? s.film.hours : 0));
+    return knowledge(BASE_FILM + USUAL_FILM_HOURS * filmEff(staffSkill(this.staff(teamId), "scouting")));
+  }
+
+  /** Your staff's report on your next opponent: what it knows, and the tendencies it has found. */
+  scoutReport(): { game_id: number; opponent: number; knowledge: number; hours: number; usual: number; insights: Insight[]; schemes: TeamSchemes } | null {
+    const s = this.state, me = s.user_team_id, g = this.nextUserGame();
+    if (me == null || !g) return null;
+    const opp = g.home_id === me ? g.away_id : g.home_id;
+    const r = this.teamRatings(opp);
+    const sc = this.allSchemes()[opp];
+    if (!r || !sc) return null;
+    const k = this.scoutKnowledge(me, g.id);
+    return { game_id: g.id, opponent: opp, knowledge: k, hours: s.film?.game_id === g.id ? s.film.hours : 0, usual: USUAL_FILM_HOURS * filmEff(staffSkill(this.staff(me), "scouting")),
+      insights: insights(tendencies(r, sc), k, s.seed, g.id), schemes: sc };
   }
 
   private play(g: Game, rep: DayReport): void {

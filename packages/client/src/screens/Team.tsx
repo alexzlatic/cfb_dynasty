@@ -68,7 +68,7 @@ export function TeamPage({ tid }: { tid: number }) {
           <Panel title="Schedule"><GameTable games={data.games} showDate /></Panel>
           {data.players.length ? (
             <Panel title={`Roster (${data.players.length})`} right={<a href={`#/l/${id}/depth/${tid}`}>Depth chart</a>}>
-              <RosterTable players={data.players} depth={data.depth} injuries={data.injuries} />
+              <RosterTable players={data.players} depth={data.depth} injuries={data.injuries} personas={data.personas} />
             </Panel>
           ) : (
             <Panel title={`Roster (${data.roster.length})`} right={

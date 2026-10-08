@@ -122,6 +122,7 @@ export function PlanScreen() {
                   <tr><td>4th-down aggressiveness</td><td className="num">{signed(sc.ratings.aggressiveness)}</td><td className="num muted">0</td></tr>
                 </tbody></table>
               )}
+              {info.film && <FilmRoom film={info.film} school={opp.school} />}
               {sc.injuries.length > 0 && <p className="small"><b>Starters out:</b> {sc.injuries.map((i) => `${i.name} (${i.pos})`).join(", ")}</p>}
               {sc.last.length > 0 && <><h4>Last games</h4><GameTable games={sc.last} showDate /></>}
             </>
@@ -129,5 +130,27 @@ export function PlanScreen() {
         </Panel>
       </div>
     </div>
+  );
+}
+
+const SIDE: Record<string, string> = { offense: "Their offense", defense: "Their defense", personnel: "Who gets the ball" };
+
+/** What your staff has found on film of the next opponent, and how much more there is to find. */
+function FilmRoom({ film, school }: { film: NonNullable<PlanInfo["film"]>; school: string }) {
+  const k = film.knowledge;
+  const read = k >= 0.8 ? "knows them cold" : k >= 0.55 ? "has a good read" : k >= 0.35 ? "has a partial read" : "has barely started";
+  return (
+    <>
+      <h4>Film room</h4>
+      <p className="small">{school} runs a <b>{film.off_name}</b> offense and a <b>{film.def_name}</b> front. Your staff {read} ({Math.round(100 * k)}%):
+        {" "}{film.hours.toFixed(0)} hours of film this week, about {film.usual.toFixed(0)} in a usual week at {Math.round(100 * film.share)}% of the staff's time.</p>
+      {film.insights.length ? (
+        <table className="grid tight"><tbody>
+          {film.insights.map((x) => <tr key={x.id}><td className="small muted">{SIDE[x.side]}</td><td className="small">{x.text}{x.counter && <> <b>{x.counter}</b></>}</td></tr>)}
+        </tbody></table>
+      ) : <p className="small muted">Nothing stands out on film yet.</p>}
+      <p className="small muted">Your coordinators use what the staff knows on game day, and knowing them better than they know you is worth up to about a point.
+        More film time (Recruiting, Staff and scouting) finds more, at the cost of recruiting and practice.</p>
+    </>
   );
 }
