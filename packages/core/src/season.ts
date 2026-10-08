@@ -12,8 +12,8 @@ import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
-import { FOCUS_MAX, RESERVE, collectiveBase, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
-import { activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, type Contract } from "./money.ts";
+import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
+import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
 import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
@@ -86,6 +86,8 @@ export interface SeasonState {
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
   contracts?: Record<number, Contract>;
   pools?: Record<number, number>;
+  /** Football's retention fund by school (Protect College Sports Act rules only). */
+  retention?: Record<number, number>;
   /** Each school's collective (booster NIL money) and its deals by player id. */
   collectives?: Record<number, CollectiveState>;
   nil?: Record<number, NilDeal>;
@@ -296,7 +298,17 @@ export class Season {
       s.events = sortEvents([...s.events.filter((e) => !POST.has(e.type) || e.status === "done"),
         ...postseasonEvents(s.year, next.playoff).filter((e) => e.date >= s.date)]);
     }
+    const pcsa = !!next.pcsa !== !!s.settings.pcsa;
+    if (pcsa && s.games.some((g) => g.status === "final")) throw new Error("the Protect College Sports Act rules can only change before the season's first game");
     s.settings = next;
+    if (pcsa) {
+      // New rules, new budgets: every athletic department and collective signs its roster again.
+      this.startMoney();
+      this.startCollectives();
+      s.player_morale = {};
+      s.team_mood = undefined;
+      this.weeklyMorale();
+    }
   }
 
   /** Run today in the fixed order (morning events, actions, day processing, evening games), then move to tomorrow. */
@@ -373,40 +385,101 @@ export class Season {
   }
 
   // ---- money -------------------------------------------------------------------------------------
-  /** Every school's football revenue-share budget, and the contracts its athletic department has signed. */
+  /** A power program's roster budget this year (revenue share and NIL), from The Athletic's 2026 estimates. */
+  private rosterBudget(t: Team): number | null {
+    const rb = this.seed.finances?.[t.id]?.roster_budget;
+    return rb ? Math.round(rb * rosterBudgetYear(this.state.year) / 10_000) * 10_000 : null;
+  }
+
+  /** What a school's boosters put into its football roster in a normal year, before any of it goes to the retention fund. */
+  private boosters(t: Team): number {
+    const rb = this.rosterBudget(t);
+    return collectiveBase(t, rb ? { budget: rb, pool: footballPool(t, this.state.year, this.seed.finances?.[t.id]?.roster_budget) } : null);
+  }
+
+  /**
+   * Every school's football revenue-share budget, and the contracts its athletic department has signed.
+   * Under the Protect College Sports Act the athletic department also runs a retention fund, paid for with
+   * booster money that used to go through the collective (up to football's share of $22.5M).
+   */
   startMoney(): void {
     const s = this.state;
     s.pools = {};
+    s.retention = {};
     s.contracts = {};
     for (const t of this.teams) {
-      const pool = footballPool(t, s.year);
+      const pool = footballPool(t, s.year, this.seed.finances?.[t.id]?.roster_budget);
       if (!pool) continue;
       s.pools[t.id] = pool;
-      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year));
+      const ret = s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t)) / 10_000) * 10_000 : 0;
+      if (ret) s.retention[t.id] = ret;
+      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year, ret));
     }
   }
 
-  /** A team's revenue-share payroll this year. */
+  /** A team's revenue-share payroll this year (retention fund included). */
   payroll(teamId: number): number {
     const s = this.state;
     return this.roster(teamId).reduce((a, p) => a + (activeContract(s.contracts?.[p.id], s.year)?.amount ?? 0), 0);
   }
 
+  /** What a team has paid from its retention fund this year. */
+  private retentionPaid(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (activeContract(s.contracts?.[p.id], s.year)?.retention ?? 0), 0);
+  }
+
+  /** A team's NIL deals this year. */
+  private nilPaid(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (s.nil?.[p.id]?.amount ?? 0), 0);
+  }
+
   /**
-   * Sign one of your players to a revenue-share contract (amount 0 ends his deal). Your payroll has to
-   * stay under football's budget, and a deal can't run past his eligibility.
+   * A team's roster budget: the athletic department's revenue share (and retention fund) and the
+   * collective's money, one pool its head coach spends; what's signed and what's left.
+   */
+  rosterPool(teamId: number): { revenue_share: number; retention: number; collective: number; total: number; signed: number; room: number } | null {
+    const s = this.state, pool = s.pools?.[teamId];
+    if (!pool) return null;
+    const retention = s.retention?.[teamId] ?? 0, nil = this.nilPaid(teamId);
+    const collective = nil + (s.collectives?.[teamId]?.reserve ?? 0);
+    const total = pool + retention + collective, signed = this.payroll(teamId) + nil;
+    return { revenue_share: pool, retention, collective, total, signed, room: total - signed };
+  }
+
+  /**
+   * Pay one of your players `amount` a year (0 ends his deal). It comes out of your one roster pool: the
+   * revenue share first, then the retention fund for a player who has completed a season with you, then
+   * the collective. Revenue share runs `years` seasons (up to his eligibility); the collective's part is
+   * a yearly NIL deal, and it has to pass the fair-market-value review.
    */
   setContract(pid: number, amount: number, years: number): void {
     const s = this.state, me = s.user_team_id;
     const p = this.playerById.get(pid);
     if (me == null || !p || p.team_id !== me) throw new Error("you can only sign your own players");
-    const contracts = { ...s.contracts };
-    if (amount <= 0) { delete contracts[pid]; s.contracts = contracts; return; }
+    const cur = activeContract(s.contracts?.[pid], s.year), curNil = s.nil?.[pid]?.amount ?? 0;
+    const c = s.collectives?.[me];
+    const contracts = { ...s.contracts }, nil = { ...s.nil };
+    const setNil = (x: number) => {
+      if (c) c.reserve = Math.round(c.reserve + curNil - x);
+      if (x > 0) nil[pid] = { amount: x, status: "approved", date: s.date }; else delete nil[pid];
+      s.nil = nil;
+    };
+    if (amount <= 0) { delete contracts[pid]; s.contracts = contracts; setNil(0); return; }
     if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
-    const room = (s.pools?.[me] ?? 0) - this.payroll(me) + (activeContract(s.contracts?.[pid], s.year)?.amount ?? 0);
-    if (amount > room) throw new Error(`that is over your budget: $${Math.round(room / 1000)}K left`);
-    contracts[pid] = { amount, years, start: s.year };
+    const k = (x: number) => `$${Math.round(x / 1000).toLocaleString("en-US")}K`;
+    const baseRoom = Math.max(0, (s.pools?.[me] ?? 0) - (this.payroll(me) - this.retentionPaid(me)) + (cur ? cur.amount - (cur.retention ?? 0) : 0));
+    const retRoom = returning(p) ? Math.max(0, (s.retention?.[me] ?? 0) - this.retentionPaid(me) + (cur?.retention ?? 0)) : 0;
+    const nilRoom = (c?.reserve ?? 0) + curNil;
+    const fromBase = Math.min(amount, baseRoom), fromRet = Math.min(amount - fromBase, retRoom), fromNil = amount - fromBase - fromRet;
+    if (fromNil > nilRoom) throw new Error(`that is over your roster budget: ${k(baseRoom + retRoom + nilRoom)} left for him`);
+    const top = fmvCeiling(this.value(pid), !!s.settings.pcsa);
+    if (fromNil > top) throw new Error(`the fair-market-value review would cut his NIL deal to ${k(top)}: offer at most ${k(fromBase + fromRet + top)}`);
+    if (fromBase + fromRet > 0) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}) };
+    else delete contracts[pid];
     s.contracts = contracts;
+    setNil(fromNil);
   }
 
   /** Each collective's opening deals: most of its year's money, held back a little for the season. */
@@ -415,8 +488,10 @@ export class Season {
     s.collectives = {};
     s.nil = {};
     for (const t of this.teams) {
-      const base = collectiveBase(t);
-      if (!base) continue;
+      // Under the Protect College Sports Act the retention fund is booster money the school now pays itself.
+      const boosters = this.boosters(t);
+      if (!boosters) continue;
+      const base = Math.max(0, boosters - (s.retention?.[t.id] ?? 0));
       s.collectives[t.id] = { base, reserve: base };
       this.collectiveRound(t.id, base * (1 - RESERVE), s.date);
     }
@@ -436,7 +511,7 @@ export class Season {
     const value = new Map(targets.map((x) => [x.id, x.value]));
     for (const [pid, extra] of spend(targets, Math.min(budget, c.reserve), c.focus)) {
       const was = s.nil![pid]?.amount ?? 0;
-      const d = review(was + extra, value.get(pid)!, date);
+      const d = review(was + extra, value.get(pid)!, date, !!s.settings.pcsa);
       // What the review cut stays with the collective.
       if (d.amount <= was) continue;
       c.reserve -= d.amount - was;
@@ -461,6 +536,8 @@ export class Season {
     if (!s.collectives || today.slice(8) !== "01" || !["09", "10", "11", "12"].includes(today.slice(5, 7))) return;
     for (const t of this.teams) {
       const c = s.collectives[t.id];
+      // Your collective's money is yours to spend (setContract); it doesn't make deals on its own.
+      if (t.id === s.user_team_id) continue;
       if (c && c.reserve >= 0.05 * c.base) this.collectiveRound(t.id, c.reserve - 0.05 * c.base, today);
     }
   }
@@ -579,7 +656,8 @@ export class Season {
     let postseason = 0;
     for (const g of s.games) if (g.status === "final" && (g.kind === "bowl" || g.kind === "playoff") && (g.home_id === teamId || g.away_id === teamId)) postseason += postseasonShare(g.kind, !!g.title);
     const projects = (s.projects ?? []).filter((p) => p.team_id === teamId).reduce((a, p) => a + p.cost / p.years, 0);
-    const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors, support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
+    // The retention fund is booster money given to the school instead of the collective.
+    const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors + (s.retention?.[teamId] ?? 0), support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
     const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations, facilities: Math.round(b.fixed.facilities + projects) };
     const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
     return { revenue, expenses, surplus: sum(revenue) - sum(expenses), source: b.source };

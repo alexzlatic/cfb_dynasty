@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useData, useLeague } from "../App.tsx";
 import { api } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
@@ -8,17 +7,9 @@ import { Panel } from "./common.tsx";
 export function CollectiveScreen({ tid }: { tid?: number }) {
   const { id, state, team } = useLeague();
   const data = useData(() => api.collective(id, tid), [state.date, tid]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   if (!data) return <p className="muted">Loading...</p>;
   if (data.team_id == null) return <Panel title="Collective"><p className="muted">This school has no collective.</p></Panel>;
   const t = team(data.team_id);
-  const setFocus = async (focus: string[]) => {
-    setBusy(true); setErr(null);
-    try { await api.act(id, "set_collective_focus", { focus }); } catch (e) { setErr((e as Error).message); }
-    setBusy(false);
-  };
-  const toggle = (pos: string) => setFocus(data.focus.includes(pos) ? data.focus.filter((x) => x !== pos) : [...data.focus, pos]);
   const cut = data.deals.filter((d) => d.deal.status === "cut");
   return (
     <div>
@@ -29,17 +20,13 @@ export function CollectiveScreen({ tid }: { tid?: number }) {
             <tr><td>In player deals</td><td className="num">{money(data.spent)}</td></tr>
             <tr><td>On hand for new deals</td><td className="num">{money(data.reserve)}</td></tr>
           </tbody></table>
-          <p className="small muted">The collective is the boosters' money, not yours: it fills the gap between what the school pays a player and what he's worth, then buys stars with what's left.
-            Donors give more when the team wins beyond expectations, and the collective makes new deals on the first of each month in the season.
-            Every deal goes through the fair-market-value review, which cuts back anything far above what players like him get.</p>
+          {data.mine
+            ? <p className="small muted">Your collective raises the boosters' money and you decide where it goes: it's part of your <a href={`#/l/${id}/payroll`}>roster budget</a>.
+                Donors give more when the team wins beyond expectations and less when it loses. Every NIL deal goes through the fair-market-value review.</p>
+            : <p className="small muted">This school's collective fills the gap between what the school pays a player and what he's worth, then pays stars with what's left, on the first of each month in the season.
+                Donors give more when the team wins beyond expectations. Every deal goes through the fair-market-value review, which cuts back anything far above what players like him get.</p>}
         </Panel>
-        {data.mine ? (
-          <Panel title="Where you've asked it to spend">
-            <p className="small muted">Pick up to {data.focus_max} positions; the collective takes care of them first and gives their stars a bigger share of what's left.</p>
-            <div className="seg small">{data.positions.map((p) => <button key={p} disabled={busy || (!data.focus.includes(p) && data.focus.length >= data.focus_max)} className={data.focus.includes(p) ? "on" : ""} onClick={() => toggle(p)}>{p}</button>)}</div>
-            {err && <p className="error small">{err}</p>}
-          </Panel>
-        ) : <div />}
+        <div />
       </div>
       <div className="cols even">
         <Panel title={`Deals (${data.deals.length})`}>

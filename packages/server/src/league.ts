@@ -41,7 +41,7 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "collectives", "nil", "player_morale", "team_mood",
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
@@ -107,7 +107,7 @@ export class League {
       player_stats: meta.player_stats ?? undefined, award_week: meta.award_week ?? undefined, awards: meta.awards ?? undefined,
       redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
       hidden_ctx: meta.hidden_ctx ?? undefined, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
-      contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
+      contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, retention: meta.retention ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
       player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
       budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
@@ -122,7 +122,7 @@ export class League {
     for (const r of db.prepare("SELECT team_id, data FROM players").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
     const packed = Object.fromEntries((db.prepare("SELECT team_id, data FROM rated_teams").all() as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]));
     const players = Object.keys(packed).length ? unpackPlayers(packed, rosters) : undefined;
-    lg.season = new Season(state, { teams, ratings, players } as SeedBundle);
+    lg.season = new Season(state, { teams, ratings, players, finances: seed?.finances } as SeedBundle);
     // Leagues saved before season stats and careers: rebuild stats from the box scores, and start the
     // career the way a new league would (as the school's real head coach).
     if (!("player_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));

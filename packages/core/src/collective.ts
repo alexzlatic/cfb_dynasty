@@ -33,23 +33,29 @@ export const RESERVE = 0.15;
 export const FOCUS_MAX = 3;
 
 /**
- * A collective's normal year, from its program's size. Until real booster giving is loaded this is
- * estimated from conference and prestige: the biggest power-conference collectives spend $20M or more,
- * a typical one under $10M, most Group of Five collectives a million or two.
+ * A collective's normal year. For power-conference schools and Notre Dame it is the program's roster
+ * budget (The Athletic's 2026 estimates, scaled to the year; see importer/build_finances.py) less what the
+ * athletic department pays in revenue share: $30M or more at the top, a few million at the bottom. Without
+ * one it is estimated from conference and prestige: most Group of Five collectives spend a million or two.
  */
-export function collectiveBase(t: Pick<Team, "conference" | "school" | "level" | "prestige">): number {
+export function collectiveBase(t: Pick<Team, "conference" | "school" | "level" | "prestige">, roster?: { budget: number; pool: number } | null): number {
   if (t.level !== "fbs") return 0;
+  if (roster) return Math.round(Math.max(300_000, roster.budget - roster.pool) / 10_000) * 10_000;
   const p = (t.prestige ?? 0) / 100;
   const x = P4.has(t.conference) || t.school === "Notre Dame" ? 2_000_000 + 22_000_000 * p * p : 300_000 + 4_000_000 * p * p;
   return Math.round(x / 10_000) * 10_000;
 }
 
-/** The most the review approves for a player: comparable deals for players like him, with room for a premium. */
-export const fmvCeiling = (value: number) => Math.round((1.6 * value + 25_000) / 1000) * 1000;
+/**
+ * The most the review approves for a player: comparable deals for players like him, with room for a
+ * premium. The Protect College Sports Act's stricter test (a deal must pay what a business would pay
+ * him for the same work) leaves less room.
+ */
+export const fmvCeiling = (value: number, pcsa = false) => Math.round((pcsa ? 1.25 * value + 10_000 : 1.6 * value + 25_000) / 1000) * 1000;
 
 /** The review: deals within the range of comparable deals pass; anything above is cut back to it. */
-export function review(amount: number, value: number, date: string): NilDeal {
-  const top = fmvCeiling(value);
+export function review(amount: number, value: number, date: string, pcsa = false): NilDeal {
+  const top = fmvCeiling(value, pcsa);
   return amount <= top ? { amount, status: "approved", date } : { amount: top, asked: amount, status: "cut", date };
 }
 
@@ -74,7 +80,7 @@ export function spend(targets: NilTarget[], budget: number, focus: Pos[] = []): 
     left -= gap;
   }
   // Money left over goes to the best players (the coach's positions count double), beyond their value.
-  const stars = order.slice(0, 12);
+  const stars = order.slice(0, 20);
   const w = (t: NilTarget) => t.value * (want.has(t.pos) ? 2 : 1);
   const tw = stars.reduce((a, t) => a + w(t), 0);
   if (left >= 10_000 && tw > 0) {

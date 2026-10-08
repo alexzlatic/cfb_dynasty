@@ -333,42 +333,47 @@ describe("hidden ratings and development plans", () => {
 describe("money", () => {
   const postR = (path: string, b: unknown): Promise<any> => post(path, b).catch(() => post(path, b));
   const getR = (path: string): Promise<any> => get(path).catch(() => get(path));
-  it("signs revenue-share contracts under football's budget through the action log, and replays", async () => {
+  it("spends one roster pool (revenue share and collective) through the action log, and replays", async () => {
     const { id } = await postR("/api/leagues", { name: "Payroll", team_id: 2509, seed: 41 });
     const lg = manager.get(id);
     const pr = await getR(`/api/leagues/${id}/payroll`);
     expect(pr.team_id).toBe(2509);
-    expect(pr.pool).toBeGreaterThan(10_000_000);
-    expect(pr.payroll).toBeLessThanOrEqual(pr.pool);
-    expect(pr.payroll).toBeGreaterThan(pr.pool * 0.9);
+    expect(pr.pool.revenue_share).toBeGreaterThan(10_000_000);
+    expect(pr.pool.collective).toBeGreaterThan(0);
+    expect(pr.pool.total).toBe(pr.pool.revenue_share + pr.pool.retention + pr.pool.collective);
+    expect(pr.pool.signed).toBeLessThanOrEqual(pr.pool.total);
     // Every FBS school's athletic department signed its players, under its budget.
     for (const t of lg.season.teams.filter((x) => x.level === "fbs")) expect(lg.season.payroll(t.id)).toBeLessThanOrEqual(lg.season.state.pools![t.id]);
     const act = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "sign_contract", payload });
+    const payOf = (p: any) => (p.contract?.amount ?? 0) + (p.nil?.amount ?? 0);
+    const baseRoom = pr.pool.revenue_share - pr.players.reduce((a: number, p: any) => a + (p.contract?.amount ?? 0), 0);
+    // A deal beyond the revenue share comes from the collective, and its part has to pass the review.
+    const q = pr.players.filter((p: any) => p.value > 0 && !p.nil).sort((a: any, b: any) => a.value - b.value)[0];
+    const school = baseRoom + (q.contract?.amount ?? 0);
+    expect((await act({ pid: q.pid, amount: school + q.ceiling + 50_000, years: 1 })).error).toMatch(/fair-market-value/);
+    expect((await act({ pid: q.pid, amount: school + q.ceiling, years: 1 })).ok).toBe(true);
+    expect(lg.season.state.contracts![q.pid].amount).toBe(school);
+    expect(lg.season.state.nil![q.pid].amount).toBe(q.ceiling);
+    expect(lg.season.payroll(2509)).toBe(pr.pool.revenue_share);
+    expect((await act({ pid: q.pid, amount: 0 })).ok).toBe(true);
+    expect(lg.season.state.contracts![q.pid]).toBeUndefined();
+    expect(lg.season.state.nil![q.pid]).toBeUndefined();
+    expect(lg.season.rosterPool(2509)!.room).toBe(pr.pool.room + payOf(q));
     const top = [...pr.players].sort((a: any, b: any) => b.value - a.value)[0];
-    const room = pr.pool - pr.payroll + (top.contract?.amount ?? 0);
-    expect((await act({ pid: top.pid, amount: room + 50_000, years: 1 })).error).toMatch(/over your budget/);
+    expect((await act({ pid: top.pid, amount: pr.pool.room + payOf(top) + 50_000, years: 1 })).error).toMatch(/over your roster budget/);
     expect((await act({ pid: top.pid, amount: 100_000, years: 9 })).error).toMatch(/1 to 4 seasons/);
     expect((await act({ pid: lg.season.roster(135)[0].id, amount: 100_000, years: 1 })).error).toMatch(/own players/);
-    expect((await act({ pid: top.pid, amount: room, years: 1 })).ok).toBe(true);
-    expect(lg.season.payroll(2509)).toBe(pr.pool);
-    const cut = pr.players.find((p: any) => p.contract && p.pid !== top.pid);
-    expect((await act({ pid: cut.pid, amount: 0 })).ok).toBe(true);
-    expect(lg.season.state.contracts![cut.pid]).toBeUndefined();
     const other = await getR(`/api/leagues/${id}/payroll?team=135`);
     expect(other.mine).toBe(false);
 
-    // The collective: deals under review, your focus, and donors who follow the results.
+    // The collective: its deals passed review, and it doesn't make new ones for you.
     const col = await getR(`/api/leagues/${id}/collective`);
     expect(col.mine).toBe(true);
     expect(col.deals.length).toBeGreaterThan(20);
     for (const d of col.deals) expect(d.deal.amount).toBeLessThanOrEqual(d.ceiling);
-    const focus = (f: unknown) => postR(`/api/leagues/${id}/actions`, { type: "set_collective_focus", payload: { focus: f } });
-    expect((await focus(["QB", "OL", "CB", "S"])).error).toMatch(/at most 3/);
-    expect((await focus(["XX"])).error).toMatch(/positions/);
-    expect((await focus(["OL", "CB"])).ok).toBe(true);
-    const before = lg.season.state.collectives![2509].reserve;
+    const nil0 = JSON.stringify(lg.season.roster(2509).map((p) => lg.season.state.nil![p.id] ?? null));
     lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
-    expect(lg.season.state.collectives![2509].reserve).toBeLessThan(before);
+    expect(JSON.stringify(lg.season.roster(2509).map((p) => lg.season.state.nil![p.id] ?? null))).toBe(nil0);
     // Starters you stop paying sour; their unit's chemistry follows.
     const mood0 = lg.season.state.team_mood![2509].def;
     const starters = new Set(Object.values(lg.season.depthChart(2509)).map((x) => x[0]));
@@ -408,12 +413,26 @@ describe("money", () => {
     again.close();
   }, 120_000);
 
+  it("adopts the Protect College Sports Act's retention fund before the season's first game", async () => {
+    const lg = manager.create({ name: "PCSA", user_team_id: 2509, seed: 9 });
+    const before = lg.season.rosterPool(251)!;
+    lg.apply({ type: "update_settings", payload: { pcsa: true } });
+    const after = lg.season.rosterPool(251)!;
+    expect(after.retention).toBeGreaterThan(5_000_000);
+    // The retention fund is booster money moved from the collective to the school, not new money.
+    expect(Math.abs(after.total - before.total)).toBeLessThan(0.05 * before.total);
+    for (const p of lg.season.roster(251)) if (lg.season.state.contracts![p.id]?.retention) expect(p.years).toBeGreaterThan(0);
+    expect(lg.season.budget(251)!.revenue.donors).toBeGreaterThan(after.retention);
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
+    expect(() => lg.apply({ type: "update_settings", payload: { pcsa: false } })).toThrow(/before the season's first game/);
+  }, 60_000);
+
   it("a league saved before money gets its contracts when opened", async () => {
     const lg = manager.create({ name: "Pre-money save", user_team_id: 2509, seed: 5 });
     const want = lg.season.state.contracts;
     const nil = lg.season.state.nil;
     const budget = lg.season.budget(2509);
-    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'collectives', 'nil', 'player_morale', 'team_mood', 'budgets', 'facilities', 'projects', 'ticket_prices', 'gate', 'requests')");
+    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'retention', 'collectives', 'nil', 'player_morale', 'team_mood', 'budgets', 'facilities', 'projects', 'ticket_prices', 'gate', 'requests')");
     const { League } = await import("../src/league.ts");
     const again = League.open("pre-money", manager.path(lg.id), manager.seed());
     expect(again.season.state.contracts).toEqual(want);

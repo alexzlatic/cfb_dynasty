@@ -51,6 +51,14 @@ export function SettingsScreen() {
           <option value="mine">My games</option><option value="mine_and_ranked">My games, ranked matchups and the postseason</option><option value="all">Every game</option>
         </select></label>
       </section>
+      <section className="panel">
+        <h3>College sports rules</h3>
+        <label className="check"><input type="checkbox" checked={!!s.pcsa} onChange={(e) => setS({ ...s, pcsa: e.target.checked })} /> Protect College Sports Act</label>
+        <p className="muted small">The federal bill the Senate passed in September 2026, now waiting on the House. Each school may pay up to $22.5M a year above the
+          revenue-share cap to players who have completed a season there, paid for with booster money that used to go through the collective, and NIL deals face a
+          stricter fair-market-value test. Its other rules (one free transfer, five years to play four, no head coach leaving mid-season, conferences capped at 20)
+          take effect when the transfer portal and coaching moves arrive. Changing this re-signs every roster, so it can only change before the season's first game.</p>
+      </section>
       <button className="primary" onClick={save}>Save settings</button> {msg && <span className="muted">{msg}</span>}
     </div>
   );

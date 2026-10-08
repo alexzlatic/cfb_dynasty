@@ -20,8 +20,12 @@ export interface DevelopmentView {
 
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number; retention?: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
+  /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
+  returning: boolean; ceiling: number;
 }
+/** A school's one roster pool: the AD's revenue share (and retention fund) plus the collective's money. */
+export interface RosterPool { revenue_share: number; retention: number; collective: number; total: number; signed: number; room: number }
 export interface NilDeal { amount: number; asked?: number; status: "approved" | "cut"; date: string }
 export interface CollectiveView {
   team_id: number | null; mine: boolean; base: number; reserve: number; focus: string[]; focus_max: number; positions: string[]; spent: number;
@@ -29,8 +33,8 @@ export interface CollectiveView {
   conference: { team_id: number; base: number; spent: number }[];
 }
 export interface PayrollView {
-  team_id: number | null; year: number; cap: number; football_share: number; pool: number; payroll: number; mine: boolean;
-  players: PayrollPlayer[]; conference: { team_id: number; pool: number; payroll: number }[];
+  team_id: number | null; year: number; cap: number; football_share: number; pcsa: boolean; pool: RosterPool; mine: boolean;
+  players: PayrollPlayer[]; conference: ({ team_id: number } & RosterPool)[];
   /** Your locker room: what pay and playing time are doing to each unit's chemistry, in points a game. */
   mood: { off: number; def: number } | null;
 }

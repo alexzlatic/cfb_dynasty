@@ -6,23 +6,44 @@ ratings boost.
 
 ## Paying players
 
-Two kinds of money reach players, kept apart as the House settlement does.
+Two kinds of money reach players, and you spend both as **one roster pool**.
 
-- **Revenue share (yours).** The school pays players directly under a cap of $20.5M in 2025-26 for all
-  sports, growing 4% a year ($21.32M in 2026-27). Football gets 75% of it. Every power-conference school and
-  Notre Dame pays the full amount, and other schools pay a share that grows with prestige. Each AD signs its
-  roster at the start (`aiContracts`): every player gets the same share of his value, never more than his
-  value. You sign, change or end your players' deals with `sign_contract` (dollars a year, seasons up to his
-  eligibility), and your payroll can't go over football's budget.
-- **Collective NIL (the boosters').** Each collective has a normal year sized by conference and prestige: the
-  biggest spend $20M or more, a typical power school under $10M, most Group of Five schools $1-2M. It fills
-  each player's gap to his value (starters first, your focus positions first), then buys stars with what's
-  left. It holds 15% back, donors add to it or take from it after wins or losses beyond expectations, and it
-  spends on the first of each month in the season. You steer it toward up to three positions
-  (`set_collective_focus`).
-- **Fair-market-value review.** Every deal goes through a review like the College Sports Commission's NIL Go:
-  anything above 1.6 times a player's value plus $25K is cut back to that. About 1% of AI deals are cut, all at
-  the top of the market.
+- **Revenue share (the athletic department's).** The school pays players directly under a cap for all
+  sports: $20.5M in 2025-26, $21.5M in 2026-27, then 4% a year. Your AD decides how much goes to football
+  (about 75% at power schools; schools whose whole roster budget is smaller give less, like Boston
+  College; other schools give a share that grows with prestige).
+- **Collective NIL (the boosters').** Your collective raises money on top. Donors give more after wins
+  beyond expectations and less after losses.
+- **Your pool.** Revenue share plus the collective's money is your roster budget, and you decide who gets
+  it (`sign_contract`: dollars a year, seasons up to his eligibility; 0 ends his deal). A deal is paid
+  from revenue share first, then the collective; the collective's part is a yearly NIL deal and has to
+  pass the **fair-market-value review** (like the College Sports Commission's NIL Go): an NIL part above
+  1.6 times his value plus $25K is refused. Your collective never makes deals on its own.
+- **AI schools.** Each AD signs its roster at the start (`aiContracts`: every player the same share of
+  his value, never more than his value), and each collective fills gaps to value (starters first), then
+  pays its top 20 players with what's left, holding 15% back for monthly deals in the season. About 1% of
+  its deals are cut back by the review, all at the top of the market.
+- **How much.** Power-conference and Notre Dame roster budgets come from The Athletic's 2026 estimates
+  (`importer/roster_budgets_2026.csv`: 21 published ranges, the rest of the Big Ten from its published
+  order, and the other schools from their conference's average spread by prestige), scaled 0.8 for 2025
+  and +4% a year after 2026. The collective is that budget less football's revenue share. Group of Five
+  collectives are estimated (a million or two). The full table needs www.nytimes.com allowed.
+
+## Protect College Sports Act (setting)
+
+The Senate passed the Act (S. 4668) 77-22 on September 28, 2026; it is waiting on the House. Turn it on in
+Settings (`pcsa`) before the season's first game; switching re-signs every roster.
+
+- **Retention fund:** each school may pay up to $22.5M a year above the cap to players who have completed a
+  season there (football gets 75%, as of the cap). A school funds it with booster money that used to go
+  through its collective (up to 60% of it), so the total roster budget barely moves but more of it is
+  the school's, and only returning players can get it. Until the portal arrives, "returning" means any
+  player past his first year.
+- **Stricter fair-market value:** NIL deals must pay what a business would pay him, so the review's
+  ceiling drops to 1.25 times his value plus $10K.
+- **Later:** one free transfer, five years to play (from 19 or high school graduation), no head coach
+  leaving for another school mid-season, conferences capped at 20 teams and a 5% agent fee cap come with
+  the transfer portal and career moves (M3).
 
 A player's **value** (`playerValue` in `money.ts`) is what the national market pays a player like him in a
 year, revenue share and NIL together. It depends on position and overall rating, with a soft ceiling (a

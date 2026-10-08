@@ -5,7 +5,7 @@ import type { Team } from "./types.ts";
  * Money (M2). Two kinds of money reach players, kept apart the way the House settlement does:
  *
  *   - revenue share: the school pays players directly, every school's total across all sports under a
- *     cap ($20.5M in 2025-26, about 4% more each year). Football gets most of it (about three quarters).
+ *     cap ($21.5M in 2026-27, about 4% more each year). Football gets most of it (about three quarters).
  *     These are contracts, by player, that you sign for your team.
  *   - collective NIL: boosters' money, on top (see collective.ts).
  *
@@ -13,9 +13,25 @@ import type { Team } from "./types.ts";
  * together): it sets his asking price, and what he compares his pay with.
  */
 
-/** The revenue-share cap for all sports at a school, by the year a season starts (2025 = 2025-26). */
+/** The revenue-share cap for all sports at a school, by the year a season starts: $20.5M in 2025-26, $21.5M in 2026-27, then 4% a year. */
 export function revenueCap(year: number): number {
-  return Math.round(20_500_000 * Math.pow(1.04, year - 2025) / 1000) * 1000;
+  return year <= 2025 ? 20_500_000 : Math.round(21_500_000 * Math.pow(1.04, year - 2026) / 1000) * 1000;
+}
+
+/**
+ * The Protect College Sports Act's retention fund (passed by the Senate in September 2026): a school may
+ * pay up to $22.5M a year above the cap to athletes who have completed a season there. Football's share
+ * is the same as of the cap.
+ */
+export const RETENTION_FUND = 22_500_000;
+
+/**
+ * What a football program spends on its roster in a year, revenue share and program-controlled NIL
+ * together, relative to 2026 (The Athletic's 2026 estimates): 2025 budgets were about a fifth smaller,
+ * and they grow with the cap after.
+ */
+export function rosterBudgetYear(year: number): number {
+  return year <= 2025 ? 0.8 : Math.pow(1.04, year - 2026);
 }
 
 /** Football's share of the cap at a school that spends all of it (most give football about three quarters). */
@@ -74,9 +90,11 @@ const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
  * pays the full cap; other schools pay what they can afford, which grows with their program's size.
  * Until real athletic department finances are loaded this is estimated from conference and prestige.
  */
-export function footballPool(t: Pick<Team, "conference" | "school" | "level" | "prestige">, year: number): number {
+export function footballPool(t: Pick<Team, "conference" | "school" | "level" | "prestige">, year: number, rosterBudget?: number | null): number {
   const full = revenueCap(year) * FOOTBALL_SHARE;
   if (t.level !== "fbs") return 0;
+  // A school whose whole roster budget is smaller than the cap can't give football all of it (Boston College).
+  if (rosterBudget) return round(Math.min(full, 0.85 * rosterBudget * rosterBudgetYear(year)));
   if (P4.has(t.conference) || t.school === "Notre Dame") return round(full);
   return round(full * Math.max(0.08, Math.min(0.6, 0.06 + 0.5 * (t.prestige ?? 0) / 100)));
 }
@@ -86,7 +104,12 @@ export interface Contract {
   amount: number;
   years: number;
   start: number;
+  /** The part of `amount` paid from the retention fund (Protect College Sports Act rules). */
+  retention?: number;
 }
+
+/** A player has completed a season at his school (he can be paid from the retention fund). Transfers come with the portal in M3. */
+export const returning = (p: Pick<RatedPlayer, "years">) => p.years >= 1;
 
 /** Contracts in force in `year`. */
 export function activeContract(c: Contract | undefined, year: number): Contract | null {
@@ -96,21 +119,33 @@ export function activeContract(c: Contract | undefined, year: number): Contract 
 /**
  * How an athletic department spends football's budget: every player gets the same share of his value
  * (the budget over the roster's total value), never more than his value, and the money a capped player
- * leaves goes to the rest. Deals run through the player's eligibility, up to two years.
+ * leaves goes to the rest. Deals run through the player's eligibility, up to two years. Under the
+ * Protect College Sports Act a retention fund then goes to players who have completed a season at the
+ * school, the same way, toward what's left of their value.
  */
-export function aiContracts(roster: Pick<RatedPlayer, "id" | "pos" | "ovr" | "stars" | "years">[], pool: number, year: number): Record<number, Contract> {
+export function aiContracts(roster: Pick<RatedPlayer, "id" | "pos" | "ovr" | "stars" | "years">[], pool: number, year: number, retention = 0): Record<number, Contract> {
   const vals = roster.map((p) => ({ p, v: playerValue(p) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v || a.p.id - b.p.id);
   const out: Record<number, Contract> = {};
-  let left = pool, total = vals.reduce((a, x) => a + x.v, 0);
-  // Pay from the cheapest up, so a share that would overpay someone is capped at his value and the rest spreads.
-  for (let i = vals.length - 1; i >= 0; i--) {
-    const { p, v } = vals[i];
-    const share = total > 0 ? left * v / total : 0;
-    const amount = Math.floor(Math.min(v, share) / 1000) * 1000;
-    total -= v;
-    if (amount <= 0) continue;
-    left -= amount;
-    out[p.id] = { amount, years: Math.min(2, eligibilityLeft(p)), start: year };
+  const share = (xs: { p: (typeof vals)[number]["p"]; v: number }[], budget: number, give: (id: number, amount: number) => void) => {
+    let left = budget, total = xs.reduce((a, x) => a + x.v, 0);
+    // Pay from the cheapest up, so a share that would overpay someone is capped and the rest spreads.
+    for (let i = xs.length - 1; i >= 0; i--) {
+      const { p, v } = xs[i];
+      const amount = Math.floor(Math.min(v, total > 0 ? left * v / total : 0) / 1000) * 1000;
+      total -= v;
+      if (amount <= 0) continue;
+      left -= amount;
+      give(p.id, amount);
+    }
+  };
+  const byId = new Map(vals.map((x) => [x.p.id, x.p]));
+  share(vals, pool, (id, amount) => { out[id] = { amount, years: Math.min(2, eligibilityLeft(byId.get(id)!)), start: year }; });
+  if (retention > 0) {
+    const gaps = vals.filter((x) => returning(x.p)).map((x) => ({ p: x.p, v: x.v - (out[x.p.id]?.amount ?? 0) })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v || a.p.id - b.p.id);
+    share(gaps, retention, (id, amount) => {
+      const c = out[id] ?? { amount: 0, years: Math.min(2, eligibilityLeft(byId.get(id)!)), start: year };
+      out[id] = { ...c, amount: c.amount + amount, retention: amount };
+    });
   }
   return out;
 }

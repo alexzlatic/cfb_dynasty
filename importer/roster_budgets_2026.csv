@@ -1,0 +1,42 @@
+school,low,high,source
+# The Athletic's 2026 roster budget estimates (revenue share plus program-controlled NIL, in $M), published
+# 2026-09-16 (Mandel, Ubben, Khan), as reported by On3, Saturday Down South, 247Sports and Bleacher Report.
+# Conference averages: SEC 33-38, Big Ten 27-31, ACC 21-25, Big 12 18-22. Schools not listed are filled
+# from those averages by build_finances.py. Replace with the full table when nytimes.com is reachable.
+Ohio State,49,54,The Athletic via On3
+Oregon,48,54,The Athletic via On3
+Texas,45,55,The Athletic via On3
+LSU,47,50,The Athletic via On3
+Texas A&M,45,50,The Athletic via On3
+Miami,44,50,The Athletic via On3
+Notre Dame,41,48,The Athletic via On3
+Tennessee,41,43,The Athletic via Saturday Down South
+Ole Miss,39,45,The Athletic via Saturday Down South
+Alabama,38,42,The Athletic via On3
+Texas Tech,38,42,The Athletic via On3
+USC,37,40,The Athletic via On3
+Michigan,36,40,The Athletic via On3
+Florida,31,41,The Athletic via On3
+Georgia,31,34,The Athletic via On3
+Penn State,29,32,The Athletic via On3
+Oklahoma,28,34,The Athletic via Saturday Down South
+Kentucky,23,26,The Athletic via On3
+Arkansas,22,25,The Athletic via On3
+Oklahoma State,15,19,The Athletic via On3
+Boston College,8,13,The Athletic via On3
+# Big Ten order below Michigan as reported (Nebraska, Penn State, Wisconsin, UCLA, Maryland, Michigan State,
+# Northwestern, Washington, Rutgers, Illinois, Minnesota, Iowa, Purdue); values interpolated between the
+# known ranges to the conference's 27-31 average.
+Indiana,32,36,interpolated from The Athletic's Big Ten order
+Nebraska,30,32,interpolated from The Athletic's Big Ten order
+Wisconsin,27,30,interpolated from The Athletic's Big Ten order
+UCLA,26,29,interpolated from The Athletic's Big Ten order
+Maryland,25,28,interpolated from The Athletic's Big Ten order
+Michigan State,24,27,interpolated from The Athletic's Big Ten order
+Northwestern,23,26,interpolated from The Athletic's Big Ten order
+Washington,22,25,interpolated from The Athletic's Big Ten order
+Rutgers,21,23,interpolated from The Athletic's Big Ten order
+Illinois,19,22,interpolated from The Athletic's Big Ten order
+Minnesota,18,21,interpolated from The Athletic's Big Ten order
+Iowa,17,20,interpolated from The Athletic's Big Ten order
+Purdue,15,18,interpolated from The Athletic's Big Ten order
