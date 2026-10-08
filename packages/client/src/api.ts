@@ -57,12 +57,27 @@ export interface ProspectRow {
   potential: { est: number; lo: number; hi: number } | null; ovr: { lo: number; hi: number } | null;
   evals: number; hours: number; commit: { team_id: number; signed: boolean; date: string } | null;
   offers: number[]; interest: number; top_schools: { team_id: number; hours: number; offered: boolean }[];
+  /** Place on your big board (-1 when not on it). */
+  board: number; scouting: boolean; lat: number; lon: number;
 }
+/** A school a prospect is considering: his chance of picking it if he chose today. */
+export interface Considering { team: number; share: number; offered: boolean; hours: number }
+export interface ProspectPageData extends ProspectRow {
+  considering: Considering[];
+  history: { date: string; est: number; lo: number; hi: number }[];
+  ratings: { attr: string; now: number; arrival: number }[];
+  years_out: number;
+}
+export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
+/** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
+export type MapPoint = [number, number, number, number, number, number | null, number, string, string];
 export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number }
 export interface RecruitingView {
-  available: boolean; team_id: number | null; year: number; date: string; cls: number; classes: { cls: number; grade: number }[];
+  available: boolean; team_id: number | null; year: number; date: string; cls: number;
+  classes: { cls: number; grade: number; total: number; known: number; rated: number; found: number }[];
   total: number; prospects: ProspectRow[];
-  settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit };
+  settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit; board: number[] };
+  home: { lat: number | null; lon: number | null; state: string | null } | null;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
   hours: number; regions: Record<string, { name: string; states: string[] }>; costs: { region: number; trip_near: number; trip_far: number; trip_hours: { near: number; far: number } };
 }
@@ -120,7 +135,8 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null }>(`/api/leagues/${id}/players/${pid}`),
+    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
+    potential: { est: number; lo: number; hi: number } }>(`/api/leagues/${id}/players/${pid}`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; defenders: Record<string, { name: string; pos: string; team_id: number } | null> }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
@@ -137,6 +153,9 @@ export const api = {
   liveSub: (id: string, slot: string, pid: number) => req<LiveResult>(`/api/leagues/${id}/live/sub`, { method: "POST", body: JSON.stringify({ slot, pid }) }),
   plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
   recruiting: (id: string, q: Record<string, string>) => req<RecruitingView>(`/api/leagues/${id}/recruiting?` + new URLSearchParams(q)),
+  prospect: (id: string, pid: number) => req<ProspectPageData>(`/api/leagues/${id}/recruiting/prospect?pid=${pid}`),
+  board: (id: string) => req<{ rows: BoardRow[] }>(`/api/leagues/${id}/recruiting/board`),
+  recruitMap: (id: string, cls: number, pos = "") => req<{ cls: number; points: MapPoint[] }>(`/api/leagues/${id}/recruiting/map?cls=${cls}${pos ? `&pos=${pos}` : ""}`),
   classRanks: (id: string, cls: number) => req<ClassRank[]>(`/api/leagues/${id}/recruiting/rankings?cls=${cls}&limit=25`),
   liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),
   act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),

@@ -1188,7 +1188,8 @@ export class Season {
       const start = `${p.cls - 4}-08-01`;
       for (let d = s.date, i = 0; d >= start && i < 53; d = addDays(d, -7), i++) {
         const r = schoolRead(eye, p, d, s.seed, st.user.evals[p.id] ?? 0);
-        history.unshift({ date: d, est: Math.round(r.est * 10) / 10, lo: Math.round((r.est - 1.65 * r.sd) * 10) / 10, hi: Math.round((r.est + 1.65 * r.sd) * 10) / 10 });
+        const c = (v: number) => Math.round(Math.max(40, Math.min(99, v)) * 10) / 10;
+        history.unshift({ date: d, est: c(r.est), lo: c(r.est - 1.65 * r.sd), hi: c(r.est + 1.65 * r.sd) });
       }
     }
     // Ratings as your staff projects them: his strengths and weaknesses (they see those), at his estimated level.

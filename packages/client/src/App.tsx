@@ -25,6 +25,7 @@ import { PayrollScreen } from "./screens/Payroll.tsx";
 import { CollectiveScreen } from "./screens/Collective.tsx";
 import { BudgetScreen } from "./screens/Budget.tsx";
 import { RecruitingScreen } from "./screens/Recruiting.tsx";
+import { ProspectPage } from "./screens/Prospect.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -59,10 +60,34 @@ export function App() {
   return <Start />;
 }
 
-const NAV: [string, string][] = [
-  ["home", "Home"], ["calendar", "Calendar"], ["schedule", "Schedule"], ["standings", "Standings"], ["polls", "Polls"],
-  ["postseason", "Postseason"], ["awards", "Awards"], ["writers", "Writers"], ["news", "News"], ["settings", "Settings"],
+/** The menu: a few sections, each with its pages. `mine` pages need a team; `on` says which screens belong to a page. */
+interface NavPage { label: string; href: (id: string, my: number | null) => string; on: (screen: string, arg: string | undefined, my: number | null) => boolean; mine?: boolean }
+interface NavSection { key: string; label: string; pages: NavPage[] }
+const page = (label: string, path: string, screens: string[] = [path.split("/")[0]], mine = false): NavPage => ({
+  label, mine, href: (id) => `#/l/${id}/${path}`,
+  on: (screen, arg) => screens.includes(screen) && (!path.includes("/") || arg === path.split("/")[1]),
+});
+const myPage = (label: string, screen: string): NavPage => ({
+  label, mine: true, href: (id, my) => `#/l/${id}/${screen}/${my}`, on: (s, arg, my) => s === screen && Number(arg) === my,
+});
+const NAV: NavSection[] = [
+  { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("News", "news"), page("Calendar", "calendar")] },
+  { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
+    page("Development", "development", ["development"], true), page("Game day", "live", ["live"], true)] },
+  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Prospects", "recruiting/list", ["recruiting"]),
+    page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
+  { key: "money", label: "Money", pages: [page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
+  { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Polls", "polls"), page("Postseason", "postseason"),
+    page("Awards", "awards"), page("Writers", "writers", ["writers", "writer"])] },
+  { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
 ];
+/** Which section a screen belongs to (pages about other teams, games and players sit under League). */
+function sectionOf(screen: string, arg: string | undefined, my: number | null): string {
+  for (const sec of NAV) if (sec.pages.some((p) => p.on(screen, arg, my))) return sec.key;
+  if (screen === "prospect") return "recruiting";
+  if (screen === "player" || screen === "team" || screen === "depth" || screen === "game") return "league";
+  return "home";
+}
 
 function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: string }) {
   const [state, setState] = useState<LeagueState | null>(null);
@@ -87,8 +112,21 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
 
   if (err) return <div className="page"><p className="error">{err}</p><a href="#/">Back to leagues</a></div>;
   if (!ctx || !state) return <div className="page muted">Loading league...</div>;
+  return <Shell id={id} screen={screen} arg={arg} ctx={ctx} state={state} teams={teams} busy={busy} setBusy={setBusy} toast={toast} setToast={setToast} />;
+}
+
+/** The league's frame: the top bar in your school's colors, the menu and the page. */
+function Shell({ id, screen, arg, ctx, state, teams, busy, setBusy, toast, setToast }: {
+  id: string; screen: string; arg?: string; ctx: LeagueCtx; state: LeagueState; teams: Map<number, Team>; busy: boolean;
+  setBusy: (b: boolean) => void; toast: string | null; setToast: (t: string | null) => void;
+}) {
   const my = state.user_team_id != null ? teams.get(state.user_team_id) : undefined;
-  const bg = my?.color ?? "#1d2733", fg = onColor(bg);
+  const bg = my?.color ?? "#1d2733", fg = onColor(bg), alt = my?.alt_color ?? "#c9a227";
+  // Your school's colors run through the whole game (accents, headings, highlights).
+  useEffect(() => {
+    const r = document.documentElement.style;
+    r.setProperty("--team", bg); r.setProperty("--team2", alt); r.setProperty("--onteam", fg);
+  }, [bg, alt, fg]);
 
   const sim = async (kind: string, extra: Record<string, string> = {}) => {
     setBusy(true);
@@ -99,23 +137,16 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
   return (
     <Ctx.Provider value={ctx}>
       <header className="topbar" style={{ background: bg, color: fg, borderBottomColor: my?.alt_color ?? "#000" }}>
+        <span className="histnav">
+          <button title="Back (Alt+Left)" onClick={() => history.back()}>‹</button>
+          <button title="Forward (Alt+Right)" onClick={() => history.forward()}>›</button>
+        </span>
         <a href="#/" className="brand" style={{ color: fg }}>CFB Dynasty</a>
         {my && <a className="myteam" href={`#/l/${id}/team/${my.id}`} style={{ color: fg }}><Logo team={my} size={34} /> {my.school} {my.mascot}</a>}
         <div className="today"><div className="date">{fmtDate(state.date, true)}</div><div className="small">{state.name}</div></div>
         <SimControls busy={busy} done={state.done} year={state.year} onSim={sim} date={state.date} />
       </header>
-      <nav className="tabs">
-        {NAV.map(([k, label]) => <a key={k} href={`#/l/${id}/${k}`} className={screen === k ? "on" : ""}>{label}</a>)}
-        {my && <a href={`#/l/${id}/team/${my.id}`} className={screen === "team" && Number(arg) === my.id ? "on" : ""}>My team</a>}
-        {my && <a href={`#/l/${id}/depth/${my.id}`} className={screen === "depth" && Number(arg) === my.id ? "on" : ""}>Depth chart</a>}
-        {my && <a href={`#/l/${id}/plan`} className={screen === "plan" ? "on" : ""}>Game plan</a>}
-        {my && <a href={`#/l/${id}/development`} className={screen === "development" ? "on" : ""}>Development</a>}
-        {my && <a href={`#/l/${id}/payroll`} className={screen === "payroll" && (!arg || Number(arg) === my.id) ? "on" : ""}>Payroll</a>}
-        {my && <a href={`#/l/${id}/collective`} className={screen === "collective" && (!arg || Number(arg) === my.id) ? "on" : ""}>Collective</a>}
-        {my && <a href={`#/l/${id}/budget`} className={screen === "budget" && (!arg || Number(arg) === my.id) ? "on" : ""}>Budget</a>}
-        {my && <a href={`#/l/${id}/recruiting`} className={screen === "recruiting" ? "on" : ""}>Recruiting</a>}
-        {my && (state.my_next_game?.date === state.date || screen === "live") && <a href={`#/l/${id}/live`} className={"gameday" + (screen === "live" ? " on" : "")}>Game day</a>}
-      </nav>
+      <Nav id={id} screen={screen} arg={arg} my={my?.id ?? null} gameday={state.my_next_game?.date === state.date} />
       <main className="page">
         {screen === "home" && <Home />}
         {screen === "calendar" && <CalendarScreen />}
@@ -139,10 +170,31 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         {screen === "payroll" && <PayrollScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "collective" && <CollectiveScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "budget" && <BudgetScreen tid={arg ? Number(arg) : undefined} />}
-        {screen === "recruiting" && <RecruitingScreen />}
+        {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
+        {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>
+  );
+}
+
+/** The two-level menu: sections across the top, the open section's pages underneath. */
+function Nav({ id, screen, arg, my, gameday }: { id: string; screen: string; arg?: string; my: number | null; gameday: boolean }) {
+  const cur = sectionOf(screen, arg, my);
+  const visible = (p: NavPage) => (!p.mine || my != null) && (p.label !== "Game day" || gameday || screen === "live");
+  const sec = NAV.find((x) => x.key === cur)!;
+  return (
+    <nav className="nav">
+      <div className="sections">
+        {NAV.filter((x) => x.pages.some(visible)).map((x) => {
+          const first = x.pages.find(visible)!;
+          return <a key={x.key} href={first.href(id, my)} className={x.key === cur ? "on" : ""}>{x.label}{x.key === "team" && gameday && <span className="dot" title="Game day" />}</a>;
+        })}
+      </div>
+      <div className="pages">
+        {sec.pages.filter(visible).map((p) => <a key={p.label} href={p.href(id, my)} className={(p.on(screen, arg, my) ? "on" : "") + (p.label === "Game day" ? " gameday" : "")}>{p.label}</a>)}
+      </div>
+    </nav>
   );
 }
 
