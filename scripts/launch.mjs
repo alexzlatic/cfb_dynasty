@@ -39,7 +39,10 @@ function head() { try { return sh("git", ["rev-parse", "HEAD"]); } catch { retur
 function update() {
   try {
     if (sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]) !== "main") return log("update skipped: not on main");
-    if (sh("git", ["status", "--porcelain", "--untracked-files=no"])) return log("update skipped: local changes");
+    // npm install can rewrite the lockfile on another machine; that alone must not block updates.
+    const changed = sh("git", ["diff", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+    if (changed.length === 1 && changed[0] === "package-lock.json") sh("git", ["checkout", "--", "package-lock.json"]);
+    else if (changed.length) return log("update skipped: local changes in", changed.join(", "));
     sh("git", ["pull", "--ff-only", "--quiet", "origin", "main"], { timeout: 30_000 });
     log("code is up to date at", head().slice(0, 7));
   } catch (e) { log("update skipped:", e.message.split("\n")[0]); }
