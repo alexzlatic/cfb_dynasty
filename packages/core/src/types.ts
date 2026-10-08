@@ -39,7 +39,7 @@ export interface ScheduledGame {
   neutral: boolean; conference_game: boolean; venue_id: number | null; venue: string | null; notes: string | null;
 }
 
-export type GameKind = "regular" | "conf_champ" | "playoff";
+export type GameKind = "regular" | "conf_champ" | "playoff" | "bowl";
 
 export interface Game {
   id: number; kind: GameKind; week: number; date: ISODate; kickoff_et: string | null;

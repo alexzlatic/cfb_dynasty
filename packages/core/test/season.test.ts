@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Season, bracketOrder, loadSeed, openingPairs, runSim, validatePlayoff } from "../src/index.ts";
+import { BOWLS, NY6, Season, bracketOrder, loadSeed, openingPairs, runSim, selectBowls, validatePlayoff } from "../src/index.ts";
 
 const seed = loadSeed();
 
@@ -30,6 +30,14 @@ describe("postseason formats", () => {
       expect(po.filter((g) => g.title)).toHaveLength(c.games ? 1 : 0);
       expect(s.state.champion).not.toBeNull();
       expect(s.latestPoll("ap")!.ranks[0].team_id).toBe(s.state.champion);
+      // Bowls: every one played, no team in two postseason games, and no bowl both a playoff site and a bowl.
+      const bowls = s.state.games.filter((g) => g.kind === "bowl");
+      expect(bowls.length).toBeGreaterThan(30);
+      expect(bowls.every((g) => g.status === "final" && g.neutral)).toBe(true);
+      const post = [...bowls, ...po.filter((g) => g.round === 1)].flatMap((g) => [g.home_id, g.away_id]);
+      expect(new Set(post).size).toBe(post.length);
+      const names = [...bowls.map((g) => g.label), ...po.map((g) => g.venue).filter(Boolean)];
+      expect(new Set(names).size).toBe(names.length);
     });
   }
   it("switching format before selection day rebuilds the postseason calendar", () => {
@@ -60,5 +68,27 @@ describe("polls", () => {
     const s = Season.create(seed, { seed: 8 });
     const purdue = s.state.writers.find((w) => w.beat.kind === "team" && w.beat.team_id === 2509);
     expect(purdue?.voter.homer).toBeGreaterThan(0);
+  });
+});
+
+describe("bowl selection", () => {
+  const bowls = [...NY6, ...BOWLS].map((bowl) => ({ bowl, date: "2026-12-31" }));
+  const team = (id: number, conference: string, eligible = true) => ({ id, conference, busy_until: "2026-12-05", eligible });
+  it("fills tie-ins best first, then at-large, then ineligible teams only for bowls nobody else can fill", () => {
+    const pool = [team(1, "Big Ten"), team(2, "SEC"), team(3, "Big 12"), team(4, "Big Ten"), team(5, "ACC"), team(6, "ACC", false)];
+    const picks = selectBowls(bowls, pool, new Set());
+    const rose = picks.find((p) => p.bowl.name === "Rose Bowl")!;
+    expect([rose.home, rose.away]).toEqual([1, 3]);
+    const sugar = picks.find((p) => p.bowl.name === "Sugar Bowl")!;
+    expect(sugar.home).toBe(2);
+    // Sugar's Big 12 side has no Big 12 team left, so it waits for the at-large pass, after Orange took its ACC team.
+    expect(picks.find((p) => p.bowl.name === "Orange Bowl")!.home).toBe(5);
+    expect(picks.flatMap((p) => [p.home, p.away]).sort()).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+  it("avoids conference matchups and rematches when it can, and skips teams still playing", () => {
+    const pool = [team(1, "SEC"), team(2, "SEC"), team(3, "Big Ten"), { ...team(4, "Big Ten"), busy_until: "2027-01-01" }];
+    const picks = selectBowls(bowls.filter((b) => b.bowl.sides[0].length === 0), pool, new Set(["1-3"]));
+    expect(picks).toHaveLength(1);
+    expect([picks[0].home, picks[0].away]).toEqual([1, 2]);
   });
 });
