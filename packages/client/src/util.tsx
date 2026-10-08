@@ -35,3 +35,6 @@ export function onColor(hex: string): string {
 }
 
 export const heightStr = (inches: number | null) => (inches ? `${Math.floor(inches / 12)}-${inches % 12}` : "");
+
+/** Dollars as a short amount: $6.5M, $320K, $0. */
+export const money = (x: number) => (Math.abs(x) >= 1e6 ? `$${(x / 1e6).toFixed(Math.abs(x) >= 1e7 ? 1 : 2)}M` : `$${Math.round(x / 1000)}K`).replace("$0K", "$0");

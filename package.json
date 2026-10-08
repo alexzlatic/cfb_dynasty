@@ -25,7 +25,8 @@
     "seed:players": "tsx packages/core/scripts/rate-players.ts",
     "check:seasons": "tsx packages/core/scripts/season-counts.ts",
     "replay:2025": "tsx packages/core/scripts/replay-2025.ts",
-    "check:m1": "tsx packages/core/scripts/m1-gates.ts"
+    "check:m1": "tsx packages/core/scripts/m1-gates.ts",
+    "check:m2": "tsx packages/core/scripts/m2-gates.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

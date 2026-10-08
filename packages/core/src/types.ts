@@ -124,12 +124,19 @@ export interface Settings {
   keep_pbp: "mine" | "mine_and_ranked" | "all";
   /** How often players get hurt: 1 = real football, 0 = never. */
   injuries: number;
+  /**
+   * Play under the Protect College Sports Act (passed by the Senate in September 2026, awaiting the House):
+   * a retention fund above the revenue-share cap for players who have completed a season at the school,
+   * paid from booster money that used to go through collectives, and a tighter fair-market-value test for
+   * NIL deals. Its transfer, eligibility and coaching rules arrive with the portal and career moves.
+   */
+  pcsa: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   playoff: { format: "playoff", teams: 12, auto_bids: 5, byes: 4, campus_first_round: true },
   conf_title_games: true, home_field_points: 2.5, poll_bias: 1, poll_noise: 1,
-  stop_on: ["season_end"], keep_pbp: "mine_and_ranked", injuries: 1,
+  stop_on: ["season_end"], keep_pbp: "mine_and_ranked", injuries: 1, pcsa: false,
 };
 
 export interface SeedBundle {
@@ -144,6 +151,8 @@ export interface SeedBundle {
   power: Record<string, number>;
   /** Rated players, auto depth charts and scheme offsets by team (players.json); absent in old seeds. */
   players?: Record<string, TeamPlayers>;
+  /** Home crowds last season and any real football finances by team (finances.json); absent in old seeds. */
+  finances?: Record<string, { attendance: number | null; home_games: number; lines: Record<string, number> | null; /** 2026 dollars, revenue share and NIL (power schools). */ roster_budget?: number | null }>;
 }
 
 export interface TeamPlayers {

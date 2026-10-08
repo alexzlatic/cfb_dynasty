@@ -113,6 +113,8 @@ export const unitOf = (pos: string): Unit | null => (OFF_POS.has(pos) ? "off" : 
 export function hiddenTeam(o: {
   seed: number; year: number; team_id: number; date: ISODate; ctx: TeamContext;
   roster: RatedPlayer[]; starters: Record<Unit, RatedPlayer[]>; morale?: number; lab?: Record<number, LabPlan>;
+  /** Chemistry from players' morale about pay and playing time, in points by unit (morale.ts). */
+  mood?: Record<Unit, number>;
 }): HiddenTeam {
   const { seed, year, ctx } = o;
   const phi = progress(year, o.date);
@@ -141,7 +143,7 @@ export function hiddenTeam(o: {
     // Continuity: a good locker room gets better and a bad one worse.
     if (ctx.continuity) cz *= 1.15;
     const sd = ctx.continuity ? CHEM_SD.continuity : u === "off" && ctx.new_qb ? CHEM_SD.new_qb : CHEM_SD.same_qb;
-    chem[u] = r2(phi * sd * cz + 0.5 * (o.morale ?? 0));
+    chem[u] = r2(phi * sd * cz + 0.5 * (o.morale ?? 0) + (o.mood?.[u] ?? 0));
   }
   // Development: better chemistry, faster development (young players gain the most from it); a staff
   // development plan adds about 2 overall points over 80 days (2.5 at most).

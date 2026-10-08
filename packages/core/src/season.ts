@@ -4,12 +4,16 @@ import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday
 import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { POSITIONS, playerName, type RatedPlayer } from "./players.ts";
+import { POSITIONS, playerName, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
+import { moods, unitMood } from "./morale.ts";
+import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
+import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
+import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
 import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
@@ -79,6 +83,35 @@ export interface SeasonState {
   morale?: Record<number, number>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
+  /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
+  contracts?: Record<number, Contract>;
+  pools?: Record<number, number>;
+  /** Football's retention fund by school (Protect College Sports Act rules only). */
+  retention?: Record<number, number>;
+  /** Each school's collective (booster NIL money) and its deals by player id. */
+  collectives?: Record<number, CollectiveState>;
+  nil?: Record<number, NilDeal>;
+  /** Each player's morale about pay and playing time (it builds week by week), and what it does to each unit's chemistry. */
+  player_morale?: Record<number, number>;
+  team_mood?: Record<number, Record<Unit, number>>;
+  /** Each school's budget inputs, facilities and the upgrades its AD is building. */
+  budgets?: Record<number, Budget>;
+  facilities?: Record<number, Facilities>;
+  projects?: Project[];
+  /** Your ticket price for a home game, by game id (absent = the usual price). */
+  ticket_prices?: Record<number, number>;
+  /** Crowds and ticket money at each home game played. */
+  gate?: Record<number, { attendance: number; price: number; revenue: number }>;
+  /** Your requests to the AD for facility upgrades and the answers. */
+  requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
+}
+
+/** One school's budget for the fiscal year: lines so far and projected to June 30. */
+export interface BudgetView {
+  revenue: Record<RevenueLine, number>;
+  expenses: Record<ExpenseLine, number>;
+  surplus: number;
+  source: Budget["source"];
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -228,6 +261,10 @@ export class Season {
     };
     const season = new Season(state, seed);
     season.startHidden(seed.coaches ?? []);
+    season.startMoney();
+    season.startCollectives();
+    season.startFinance(seed.finances);
+    season.weeklyMorale();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
   }
@@ -261,7 +298,17 @@ export class Season {
       s.events = sortEvents([...s.events.filter((e) => !POST.has(e.type) || e.status === "done"),
         ...postseasonEvents(s.year, next.playoff).filter((e) => e.date >= s.date)]);
     }
+    const pcsa = !!next.pcsa !== !!s.settings.pcsa;
+    if (pcsa && s.games.some((g) => g.status === "final")) throw new Error("the Protect College Sports Act rules can only change before the season's first game");
     s.settings = next;
+    if (pcsa) {
+      // New rules, new budgets: every athletic department and collective signs its roster again.
+      this.startMoney();
+      this.startCollectives();
+      s.player_morale = {};
+      s.team_mood = undefined;
+      this.weeklyMorale();
+    }
   }
 
   /** Run today in the fixed order (morning events, actions, day processing, evening games), then move to tomorrow. */
@@ -282,6 +329,8 @@ export class Season {
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
     this.adMeetings(today, rep);
+    this.collectiveMonth(today);
+    if (weekday(today) === 1) this.weeklyMorale();
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -335,6 +384,320 @@ export class Season {
     rep.news.push(this.news(date, "ad", head, text, [c.team_id]));
   }
 
+  // ---- money -------------------------------------------------------------------------------------
+  /** A power program's roster budget this year (revenue share and NIL), from The Athletic's 2026 estimates. */
+  private rosterBudget(t: Team): number | null {
+    const rb = this.seed.finances?.[t.id]?.roster_budget;
+    return rb ? Math.round(rb * rosterBudgetYear(this.state.year) / 10_000) * 10_000 : null;
+  }
+
+  /** What a school's boosters put into its football roster in a normal year, before any of it goes to the retention fund. */
+  private boosters(t: Team): number {
+    const rb = this.rosterBudget(t);
+    return collectiveBase(t, rb ? { budget: rb, pool: footballPool(t, this.state.year, this.seed.finances?.[t.id]?.roster_budget) } : null);
+  }
+
+  /**
+   * Every school's football revenue-share budget, and the contracts its athletic department has signed.
+   * Under the Protect College Sports Act the athletic department also runs a retention fund, paid for with
+   * booster money that used to go through the collective (up to football's share of $22.5M).
+   */
+  startMoney(): void {
+    const s = this.state;
+    s.pools = {};
+    s.retention = {};
+    s.contracts = {};
+    for (const t of this.teams) {
+      const pool = footballPool(t, s.year, this.seed.finances?.[t.id]?.roster_budget);
+      if (!pool) continue;
+      s.pools[t.id] = pool;
+      const ret = s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t)) / 10_000) * 10_000 : 0;
+      if (ret) s.retention[t.id] = ret;
+      Object.assign(s.contracts, aiContracts(this.roster(t.id), pool, s.year, ret));
+    }
+  }
+
+  /** A team's revenue-share payroll this year (retention fund included). */
+  payroll(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (activeContract(s.contracts?.[p.id], s.year)?.amount ?? 0), 0);
+  }
+
+  /** What a team has paid from its retention fund this year. */
+  private retentionPaid(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (activeContract(s.contracts?.[p.id], s.year)?.retention ?? 0), 0);
+  }
+
+  /** A team's NIL deals this year. */
+  private nilPaid(teamId: number): number {
+    const s = this.state;
+    return this.roster(teamId).reduce((a, p) => a + (s.nil?.[p.id]?.amount ?? 0), 0);
+  }
+
+  /**
+   * A team's roster budget: the athletic department's revenue share (and retention fund) and the
+   * collective's money, one pool its head coach spends; what's signed and what's left.
+   */
+  rosterPool(teamId: number): { revenue_share: number; retention: number; collective: number; total: number; signed: number; room: number } | null {
+    const s = this.state, pool = s.pools?.[teamId];
+    if (!pool) return null;
+    const retention = s.retention?.[teamId] ?? 0, nil = this.nilPaid(teamId);
+    const collective = nil + (s.collectives?.[teamId]?.reserve ?? 0);
+    const total = pool + retention + collective, signed = this.payroll(teamId) + nil;
+    return { revenue_share: pool, retention, collective, total, signed, room: total - signed };
+  }
+
+  /**
+   * Pay one of your players `amount` a year (0 ends his deal). It comes out of your one roster pool: the
+   * revenue share first, then the retention fund for a player who has completed a season with you, then
+   * the collective. Revenue share runs `years` seasons (up to his eligibility); the collective's part is
+   * a yearly NIL deal, and it has to pass the fair-market-value review.
+   */
+  setContract(pid: number, amount: number, years: number): void {
+    const s = this.state, me = s.user_team_id;
+    const p = this.playerById.get(pid);
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only sign your own players");
+    const cur = activeContract(s.contracts?.[pid], s.year), curNil = s.nil?.[pid]?.amount ?? 0;
+    const c = s.collectives?.[me];
+    const contracts = { ...s.contracts }, nil = { ...s.nil };
+    const setNil = (x: number) => {
+      if (c) c.reserve = Math.round(c.reserve + curNil - x);
+      if (x > 0) nil[pid] = { amount: x, status: "approved", date: s.date }; else delete nil[pid];
+      s.nil = nil;
+    };
+    if (amount <= 0) { delete contracts[pid]; s.contracts = contracts; setNil(0); return; }
+    if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
+    const k = (x: number) => `$${Math.round(x / 1000).toLocaleString("en-US")}K`;
+    const baseRoom = Math.max(0, (s.pools?.[me] ?? 0) - (this.payroll(me) - this.retentionPaid(me)) + (cur ? cur.amount - (cur.retention ?? 0) : 0));
+    const retRoom = returning(p) ? Math.max(0, (s.retention?.[me] ?? 0) - this.retentionPaid(me) + (cur?.retention ?? 0)) : 0;
+    const nilRoom = (c?.reserve ?? 0) + curNil;
+    const fromBase = Math.min(amount, baseRoom), fromRet = Math.min(amount - fromBase, retRoom), fromNil = amount - fromBase - fromRet;
+    if (fromNil > nilRoom) throw new Error(`that is over your roster budget: ${k(baseRoom + retRoom + nilRoom)} left for him`);
+    const top = fmvCeiling(this.value(pid), !!s.settings.pcsa);
+    if (fromNil > top) throw new Error(`the fair-market-value review would cut his NIL deal to ${k(top)}: offer at most ${k(fromBase + fromRet + top)}`);
+    if (fromBase + fromRet > 0) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}) };
+    else delete contracts[pid];
+    s.contracts = contracts;
+    setNil(fromNil);
+  }
+
+  /** Each collective's opening deals: most of its year's money, held back a little for the season. */
+  startCollectives(): void {
+    const s = this.state;
+    s.collectives = {};
+    s.nil = {};
+    for (const t of this.teams) {
+      // Under the Protect College Sports Act the retention fund is booster money the school now pays itself.
+      const boosters = this.boosters(t);
+      if (!boosters) continue;
+      const base = Math.max(0, boosters - (s.retention?.[t.id] ?? 0));
+      s.collectives[t.id] = { base, reserve: base };
+      this.collectiveRound(t.id, base * (1 - RESERVE), s.date);
+    }
+  }
+
+  /** A player's pay this year: his revenue-share contract and his NIL deal. */
+  pay(pid: number): number {
+    const s = this.state;
+    return (activeContract(s.contracts?.[pid], s.year)?.amount ?? 0) + (s.nil?.[pid]?.amount ?? 0);
+  }
+
+  /** A collective spends up to `budget` of its reserve; every deal goes through the review. */
+  private collectiveRound(teamId: number, budget: number, date: ISODate): void {
+    const s = this.state, c = s.collectives![teamId];
+    const starters = new Set(Object.values(this.depthChart(teamId)).map((ids) => ids[0]));
+    const targets: NilTarget[] = this.roster(teamId).map((p) => ({ id: p.id, pos: p.pos, value: playerValue(p), pay: this.pay(p.id), starter: starters.has(p.id) }));
+    const value = new Map(targets.map((x) => [x.id, x.value]));
+    for (const [pid, extra] of spend(targets, Math.min(budget, c.reserve), c.focus)) {
+      const was = s.nil![pid]?.amount ?? 0;
+      const d = review(was + extra, value.get(pid)!, date, !!s.settings.pcsa);
+      // What the review cut stays with the collective.
+      if (d.amount <= was) continue;
+      c.reserve -= d.amount - was;
+      s.nil![pid] = d;
+    }
+    c.reserve = Math.max(0, Math.round(c.reserve));
+  }
+
+  /** Donors give more when a team wins beyond expectations and less when it loses. */
+  private donors(g: Game, homeChance: number): void {
+    const s = this.state;
+    const homeWon = g.home_score! > g.away_score! ? 1 : 0;
+    for (const [id, d] of [[g.home_id, homeWon - homeChance], [g.away_id, homeChance - homeWon]] as const) {
+      const c = s.collectives?.[id];
+      if (c) c.reserve = Math.max(0, Math.round(c.reserve + 0.04 * c.base * d));
+    }
+  }
+
+  /** On the first of each month in the season every collective spends what it has on hand. */
+  private collectiveMonth(today: ISODate): void {
+    const s = this.state;
+    if (!s.collectives || today.slice(8) !== "01" || !["09", "10", "11", "12"].includes(today.slice(5, 7))) return;
+    for (const t of this.teams) {
+      const c = s.collectives[t.id];
+      // Your collective's money is yours to spend (setContract); it doesn't make deals on its own.
+      if (t.id === s.user_team_id) continue;
+      if (c && c.reserve >= 0.05 * c.base) this.collectiveRound(t.id, c.reserve - 0.05 * c.base, today);
+    }
+  }
+
+  /** Ask your collective to spend on these positions (at most three; empty for no preference). */
+  setCollectiveFocus(focus: Pos[]): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.collectives?.[me]) throw new Error("your school has no collective");
+    if (focus.length > FOCUS_MAX) throw new Error(`ask for at most ${FOCUS_MAX} positions`);
+    s.collectives = { ...s.collectives, [me]: { ...s.collectives[me], focus: [...new Set(focus)] } };
+  }
+
+  /**
+   * Once a week every player weighs his pay and playing time, and his morale moves toward how he feels
+   * now. Each unit's chemistry follows its starters' morale, measured against the rest of the country.
+   */
+  weeklyMorale(): void {
+    const s = this.state;
+    const pm = (s.player_morale ??= {});
+    const raw = new Map<number, Record<Unit, number>>();
+    const hurt = new Set(s.injuries!.filter((i) => i.back > s.date).map((i) => i.pid));
+    // Once a team's season is over its players' morale holds (and its chemistry no longer matters) until next year.
+    const playing = new Set(s.games.filter((g) => g.status !== "final").flatMap((g) => [g.home_id, g.away_id]));
+    const done = !!s.team_mood && s.games.some((g) => g.status === "final");
+    const frozen: Record<number, Record<Unit, number>> = {};
+    for (const t of this.teams) {
+      const roster = this.roster(t.id);
+      if (t.level !== "fbs" || !roster.length || !s.pools?.[t.id]) continue;
+      if (done && !playing.has(t.id)) { if (s.team_mood![t.id]) frozen[t.id] = s.team_mood![t.id]; continue; }
+      const depth = this.depthChart(t.id);
+      const starters = new Set(Object.values(depth).map((ids) => ids[0]).filter((x) => x != null));
+      // A player expects to start when his value ranks among his position's starting jobs.
+      const jobs = new Map<string, number>();
+      for (const id of starters) { const p = this.playerById.get(id); if (p) jobs.set(p.pos, (jobs.get(p.pos) ?? 0) + 1); }
+      const byPos = new Map<string, RatedPlayer[]>();
+      for (const p of roster) { const g = byPos.get(p.pos); if (g) g.push(p); else byPos.set(p.pos, [p]); }
+      const expects = new Set<number>();
+      for (const [pos, n] of jobs) byPos.get(pos)?.sort((a, b) => this.value(b.id) - this.value(a.id) || a.id - b.id).slice(0, n).forEach((p) => expects.add(p.id));
+      const { mood, room } = moods(roster.map((p) => ({ id: p.id, pos: p.pos, unit: unitOf(p.pos), value: this.value(p.id), pay: this.pay(p.id),
+        starter: starters.has(p.id), expects_start: expects.has(p.id) && !hurt.has(p.id) })));
+      for (const [id, m] of mood) pm[id] = Math.round((0.7 * (pm[id] ?? 0) + 0.3 * m) * 100) / 100 + 0;
+      const unit = (slots: readonly string[]) => slots.map((k) => depth[k as keyof DepthChart]?.[0]).filter((x): x is number => x != null).map((id) => pm[id] ?? 0);
+      raw.set(t.id, { off: unitMood(unit(OFFENSE_FIELD), room.off), def: unitMood(unit(DEFENSE_FIELD), room.def) });
+    }
+    // Against the rest of the country, so the scouted view stays unbiased.
+    const avg = (u: Unit) => [...raw.values()].reduce((a, x) => a + x[u], 0) / Math.max(1, raw.size);
+    const ao = avg("off"), ad = avg("def");
+    const tm: Record<number, Record<Unit, number>> = { ...frozen };
+    for (const [id, x] of raw) tm[id] = { off: Math.round((x.off - ao) * 100) / 100 + 0, def: Math.round((x.def - ad) * 100) / 100 + 0 };
+    s.team_mood = tm;
+  }
+
+  // ---- budget, game day and facilities ------------------------------------------------------------
+  /** Every FBS school's budget inputs and facilities. */
+  startFinance(fin?: SeedBundle["finances"]): void {
+    const s = this.state;
+    s.budgets = {};
+    s.facilities = {};
+    s.projects ??= [];
+    s.ticket_prices ??= {};
+    s.gate ??= {};
+    for (const t of this.teams) {
+      const b = budgetFor(t, fin?.[t.id]);
+      const f = facilitiesFor(t, s.seed);
+      if (b) s.budgets[t.id] = b;
+      if (f) s.facilities[t.id] = f;
+    }
+  }
+
+  private homeGames(teamId: number): Game[] {
+    return this.state.games.filter((g) => g.home_id === teamId && !g.neutral && (g.kind === "regular" || g.kind === "playoff"));
+  }
+
+  /** A home game's ticket price: yours if you set one, otherwise the school's usual price. */
+  ticketPrice(g: Game): number {
+    return this.state.ticket_prices?.[g.id] ?? this.state.budgets?.[g.home_id]?.price ?? 0;
+  }
+
+  /** The crowd a home game would draw at a price, from how the season is going today. */
+  expectedCrowd(g: Game, price = this.ticketPrice(g)): number {
+    const s = this.state, b = s.budgets?.[g.home_id];
+    if (!b) return 0;
+    let w = 0, n = 0;
+    for (const x of s.games) {
+      if (x.status !== "final" || (x.home_id !== g.home_id && x.away_id !== g.home_id)) continue;
+      n++;
+      if ((x.home_id === g.home_id) === (x.home_score! > x.away_score!)) w++;
+    }
+    return crowd(b, { price, winPct: n ? w / n : null, ranked: this.rankOf(g.home_id) != null, oppRanked: this.rankOf(g.away_id) != null,
+      oppFcs: this.teamById.get(g.away_id)?.level === "fcs", prestige: this.team(g.home_id).prestige ?? 0 });
+  }
+
+  /** Set your ticket price for one of your home games not yet played (null for the usual price). */
+  setTicketPrice(gameId: number, price: number | null): void {
+    const s = this.state, g = s.games.find((x) => x.id === gameId);
+    if (!g || g.home_id !== s.user_team_id || g.neutral || g.status === "final") throw new Error("you can only price your own home games still to play");
+    const tp = { ...s.ticket_prices };
+    if (price == null) delete tp[gameId];
+    else tp[gameId] = price;
+    s.ticket_prices = tp;
+  }
+
+  private recordGate(g: Game): void {
+    const s = this.state;
+    if (g.neutral || !s.budgets?.[g.home_id] || (g.kind !== "regular" && g.kind !== "playoff")) return;
+    const price = this.ticketPrice(g), attendance = this.expectedCrowd(g, price);
+    (s.gate ??= {})[g.id] = { attendance, price, revenue: attendance * price };
+  }
+
+  /** A school's budget for this fiscal year: what's come in and gone out, and what's still to come. */
+  budget(teamId: number): BudgetView | null {
+    const s = this.state, b = s.budgets?.[teamId];
+    if (!b) return null;
+    let tickets = 0;
+    for (const g of this.homeGames(teamId)) tickets += g.status === "final" ? s.gate?.[g.id]?.revenue ?? 0 : this.expectedCrowd(g) * this.ticketPrice(g);
+    let postseason = 0;
+    for (const g of s.games) if (g.status === "final" && (g.kind === "bowl" || g.kind === "playoff") && (g.home_id === teamId || g.away_id === teamId)) postseason += postseasonShare(g.kind, !!g.title);
+    const projects = (s.projects ?? []).filter((p) => p.team_id === teamId).reduce((a, p) => a + p.cost / p.years, 0);
+    // The retention fund is booster money given to the school instead of the collective.
+    const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors + (s.retention?.[teamId] ?? 0), support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
+    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations, facilities: Math.round(b.fixed.facilities + projects) };
+    const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
+    return { revenue, expenses, surplus: sum(revenue) - sum(expenses), source: b.source };
+  }
+
+  /**
+   * Ask your athletic director to upgrade a facility one grade. The AD approves when this year's football
+   * surplus covers the first year's payment, and builds it over one to three years.
+   */
+  requestProject(area: Area): { approved: boolean; reason: string } {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.facilities?.[me]) throw new Error("your school has no facilities to upgrade");
+    if (!Object.hasOwn(AREAS, area)) throw new Error(`unknown area ${area}`);
+    if ((s.projects ?? []).some((p) => p.team_id === me && p.area === area)) throw new Error(`the ${AREAS[area].toLowerCase()} is already being upgraded`);
+    const now = s.facilities[me][area];
+    if (now >= 5) throw new Error(`the ${AREAS[area].toLowerCase()} is already among the best in the country`);
+    const t = this.team(me);
+    const { cost, years } = projectCost(area, now + 1, ["SEC", "Big Ten", "ACC", "Big 12"].includes(t.conference) || t.school === "Notre Dame");
+    const surplus = this.budget(me)!.surplus;
+    const c = s.career, ad = c ? `${c.ad.first} ${c.ad.last}` : "Your athletic director";
+    const $ = (x: number) => `$${(x / 1e6).toFixed(1)}M`;
+    if (surplus < cost / years) {
+      const reason = `${ad} turned down the ${AREAS[area].toLowerCase()} upgrade: it costs ${$(cost)} over ${years} year(s), and football's surplus this year is ${$(surplus)}.`;
+      s.requests = [...(s.requests ?? []), { date: s.date, area, approved: false, reason }];
+      return { approved: false, reason };
+    }
+    s.projects = [...(s.projects ?? []), { team_id: me, area, to: now + 1, cost, years, start: s.date, done: `${s.year + years}-08-01` }];
+    const reason = `${ad} approved a ${$(cost)} ${AREAS[area].toLowerCase()} upgrade to grade ${now + 1}, ready by August ${s.year + years}.`;
+    s.requests = [...(s.requests ?? []), { date: s.date, area, approved: true, reason }];
+    return { approved: true, reason };
+  }
+
+  private values = new Map<number, number>();
+  /** A player's market value this year. */
+  value(pid: number): number {
+    let v = this.values.get(pid);
+    if (v == null) { const p = this.playerById.get(pid); v = p ? playerValue(p) : 0; this.values.set(pid, v); }
+    return v;
+  }
+
   // ---- true vs scouted ratings ------------------------------------------------------------------
   /** Record what each team's camps were built on, from its coaches and opening lineup. */
   startHidden(coaches: Coach[]): void {
@@ -379,11 +742,12 @@ export class Season {
     // FCS rosters are generated filler, with nothing true for scouts to miss; they play their ratings.
     if (!roster.length || !s.hidden_ctx || this.teamById.get(teamId)?.level === "fcs") return null;
     const lab = teamId === s.user_team_id ? s.lab : undefined;
-    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}`;
+    const mood = s.team_mood?.[teamId];
+    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}|${mood ? `${mood.off},${mood.def}` : ""}`;
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
     const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
-      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab });
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood });
     this.hiddenCache.set(teamId, { key, h });
     return h;
   }
@@ -401,6 +765,7 @@ export class Season {
   private updateMorale(g: Game): void {
     const s = this.state;
     const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
+    this.donors(g, p);
     const homeWon = g.home_score! > g.away_score! ? 1 : 0;
     for (const [id, d] of [[g.home_id, homeWon - p], [g.away_id, p - homeWon]] as const) {
       s.morale![id] = Math.round(Math.max(-1.5, Math.min(1.5, (s.morale![id] ?? 0) * 0.9 + 0.3 * d)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0
@@ -833,6 +1198,7 @@ export class Season {
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
+    this.recordGate(g);
     const { sim, gd, sides, caller } = this.gameSetup(g);
     const subs = s.subs?.[g.id] ?? [];
     const userSide = caller?.userSide;

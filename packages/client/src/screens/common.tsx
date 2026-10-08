@@ -44,6 +44,6 @@ export function NewsList({ items, compact = false }: { items: NewsItem[]; compac
   );
 }
 
-export function Panel({ title, children, right }: { title: string; children: React.ReactNode; right?: React.ReactNode }) {
+export function Panel({ title, children, right }: { title: React.ReactNode; children: React.ReactNode; right?: React.ReactNode }) {
   return <section className="panel"><h3>{title}<span className="right">{right}</span></h3>{children}</section>;
 }

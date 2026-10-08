@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { AWARD_NAMES, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -109,6 +109,57 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const ctx = S.teamContext(me);
         const players = S.roster(me).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr }));
         return { team_id: me, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v, players, depth: S.depthChart(me) };
+      }
+      case route === "payroll": {
+        // A team's revenue-share payroll (yours by default), and every school's in its conference.
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        const t = S.teamById.get(team);
+        if (!t) return { team_id: null };
+        const starters = new Set(Object.values(S.depthChart(team)).map((ids) => ids[0]).filter((x) => x != null));
+        const pcsa = !!s.settings.pcsa;
+        const players = S.roster(team).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr,
+          value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, morale: s.player_morale?.[pl.id] ?? 0, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
+          gp: s.player_stats?.[pl.id]?.gp ?? 0, returning: returning(pl), ceiling: fmvCeiling(S.value(pl.id), pcsa) }));
+        const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === t.conference).map((x) => ({ team_id: x.id, ...S.rosterPool(x.id)! })).filter((x) => x.total != null)
+          .sort((a, b) => b.signed - a.signed);
+        return { team_id: team, year: s.year, cap: revenueCap(s.year), football_share: FOOTBALL_SHARE, pcsa, pool: S.rosterPool(team),
+          mine: team === s.user_team_id, players, conference, mood: team === s.user_team_id ? s.team_mood?.[team] ?? null : null };
+      }
+      case route === "collective": {
+        // A school's collective: its money, its deals and what the review did to them.
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        const c = s.collectives?.[team];
+        if (!c) return { team_id: null };
+        const deals = S.roster(team).filter((pl) => s.nil?.[pl.id]).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, ovr: pl.ovr,
+          value: S.value(pl.id), ceiling: fmvCeiling(S.value(pl.id), !!s.settings.pcsa), revenue_share: activeContract(s.contracts?.[pl.id], s.year)?.amount ?? 0, deal: s.nil![pl.id] }))
+          .sort((a, b) => b.deal.amount - a.deal.amount);
+        const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === S.teamById.get(team)!.conference && s.collectives?.[x.id])
+          .map((x) => ({ team_id: x.id, base: s.collectives![x.id].base, spent: S.roster(x.id).reduce((a, pl) => a + (s.nil?.[pl.id]?.amount ?? 0), 0) }))
+          .sort((a, b) => b.spent - a.spent);
+        return { team_id: team, mine: team === s.user_team_id, base: c.base, reserve: c.reserve, focus: c.focus ?? [], focus_max: FOCUS_MAX, positions: POSITIONS,
+          spent: deals.reduce((a, d) => a + d.deal.amount, 0), deals, conference };
+      }
+      case route === "budget": {
+        // A school's budget (yours by default), its home games and facilities, and its conference's budgets.
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        const b = S.budget(team), inputs = s.budgets?.[team];
+        if (!b || !inputs) return { team_id: null };
+        const mine = team === s.user_team_id;
+        const home = s.games.filter((g) => g.home_id === team && !g.neutral && (g.kind === "regular" || g.kind === "playoff")).map((g) => ({
+          game: gameRow(g), price: S.ticketPrice(g), custom: s.ticket_prices?.[g.id] != null,
+          attendance: g.status === "final" ? s.gate?.[g.id]?.attendance ?? null : S.expectedCrowd(g),
+          revenue: g.status === "final" ? s.gate?.[g.id]?.revenue ?? null : S.expectedCrowd(g) * S.ticketPrice(g),
+          // What a few other prices would draw, so you can see the trade-off.
+          options: mine && g.status !== "final" ? [0.8, 1, 1.25, 1.5].map((k) => { const price = Math.round(inputs.price * k); const a = S.expectedCrowd(g, price); return { price, attendance: a, revenue: a * price }; }) : [],
+        }));
+        const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === S.teamById.get(team)!.conference).map((x) => {
+          const v = S.budget(x.id)!;
+          const sum = (o: Record<string, number>) => Object.values(o).reduce((a, y) => a + y, 0);
+          return { team_id: x.id, revenue: sum(v.revenue), expenses: sum(v.expenses), surplus: v.surplus };
+        }).sort((a, b) => b.revenue - a.revenue);
+        return { team_id: team, mine, year: s.year, ...b, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES }, usual_price: inputs.price, capacity: inputs.capacity,
+          home, conference, facilities: s.facilities?.[team] ?? null, areas: AREAS, projects: (s.projects ?? []).filter((p) => p.team_id === team),
+          requests: mine ? (s.requests ?? []).slice(-5).reverse() : [] };
       }
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {

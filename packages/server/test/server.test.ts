@@ -329,3 +329,126 @@ describe("hidden ratings and development plans", () => {
     again.close();
   }, 60_000);
 });
+
+describe("money", () => {
+  const postR = (path: string, b: unknown): Promise<any> => post(path, b).catch(() => post(path, b));
+  const getR = (path: string): Promise<any> => get(path).catch(() => get(path));
+  it("spends one roster pool (revenue share and collective) through the action log, and replays", async () => {
+    const { id } = await postR("/api/leagues", { name: "Payroll", team_id: 2509, seed: 41 });
+    const lg = manager.get(id);
+    const pr = await getR(`/api/leagues/${id}/payroll`);
+    expect(pr.team_id).toBe(2509);
+    expect(pr.pool.revenue_share).toBeGreaterThan(10_000_000);
+    expect(pr.pool.collective).toBeGreaterThan(0);
+    expect(pr.pool.total).toBe(pr.pool.revenue_share + pr.pool.retention + pr.pool.collective);
+    expect(pr.pool.signed).toBeLessThanOrEqual(pr.pool.total);
+    // Every FBS school's athletic department signed its players, under its budget.
+    for (const t of lg.season.teams.filter((x) => x.level === "fbs")) expect(lg.season.payroll(t.id)).toBeLessThanOrEqual(lg.season.state.pools![t.id]);
+    const act = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "sign_contract", payload });
+    const payOf = (p: any) => (p.contract?.amount ?? 0) + (p.nil?.amount ?? 0);
+    const baseRoom = pr.pool.revenue_share - pr.players.reduce((a: number, p: any) => a + (p.contract?.amount ?? 0), 0);
+    // A deal beyond the revenue share comes from the collective, and its part has to pass the review.
+    const q = pr.players.filter((p: any) => p.value > 0 && !p.nil).sort((a: any, b: any) => a.value - b.value)[0];
+    const school = baseRoom + (q.contract?.amount ?? 0), extra = 100_000;
+    expect((await act({ pid: q.pid, amount: school + extra, years: 1 })).ok).toBe(true);
+    expect(lg.season.state.contracts![q.pid].amount).toBe(school);
+    expect(lg.season.state.nil![q.pid].amount).toBe(extra);
+    expect(lg.season.payroll(2509)).toBe(pr.pool.revenue_share);
+    expect((await act({ pid: q.pid, amount: 0 })).ok).toBe(true);
+    expect(lg.season.state.contracts![q.pid]).toBeUndefined();
+    expect(lg.season.state.nil![q.pid]).toBeUndefined();
+    expect(lg.season.rosterPool(2509)!.room).toBe(pr.pool.room + payOf(q));
+    const top = [...pr.players].sort((a: any, b: any) => b.value - a.value)[0];
+    expect((await act({ pid: top.pid, amount: pr.pool.room + payOf(top) + 50_000, years: 1 })).error).toMatch(/over your roster budget/);
+    expect((await act({ pid: top.pid, amount: 100_000, years: 9 })).error).toMatch(/1 to 4 seasons/);
+    expect((await act({ pid: lg.season.roster(135)[0].id, amount: 100_000, years: 1 })).error).toMatch(/own players/);
+    const other = await getR(`/api/leagues/${id}/payroll?team=135`);
+    expect(other.mine).toBe(false);
+
+    // The collective: its deals passed review, and it doesn't make new ones for you.
+    const col = await getR(`/api/leagues/${id}/collective`);
+    expect(col.mine).toBe(true);
+    expect(col.deals.length).toBeGreaterThan(20);
+    for (const d of col.deals) expect(d.deal.amount).toBeLessThanOrEqual(d.ceiling);
+    const nil0 = JSON.stringify(lg.season.roster(2509).map((p) => lg.season.state.nil![p.id] ?? null));
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
+    expect(JSON.stringify(lg.season.roster(2509).map((p) => lg.season.state.nil![p.id] ?? null))).toBe(nil0);
+    // Starters you stop paying sour; their unit's chemistry follows.
+    const mood0 = lg.season.state.team_mood![2509].def;
+    const starters = new Set(Object.values(lg.season.depthChart(2509)).map((x) => x[0]));
+    for (const p of lg.season.roster(2509)) if (starters.has(p.id) && lg.season.state.contracts![p.id] && ["DE", "DT", "LB", "CB", "S"].includes(p.pos)) {
+      expect((await act({ pid: p.id, amount: 0 })).ok).toBe(true);
+    }
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-30" } });
+    expect(lg.season.state.team_mood![2509].def).toBeLessThan(mood0 - 0.2);
+    expect((await getR(`/api/leagues/${id}/payroll`)).players.some((p: any) => p.morale < -0.25)).toBe(true);
+
+    // Budget: ticket prices for home games still to play, crowds at the ones played, and facility requests.
+    const bud = await getR(`/api/leagues/${id}/budget`);
+    expect(bud.mine).toBe(true);
+    const played = bud.home.filter((h: any) => h.game.status === "final");
+    expect(played.length).toBeGreaterThan(0);
+    for (const h of played) expect(h.attendance).toBeLessThanOrEqual(bud.capacity);
+    const next = bud.home.find((h: any) => h.game.status !== "final");
+    const ticket = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "set_ticket_price", payload });
+    expect((await ticket({ game_id: played[0].game.id, price: 80 })).error).toMatch(/still to play/);
+    expect((await ticket({ game_id: next.game.id, price: 9999 })).error).toMatch(/\$5 to \$500/);
+    expect((await ticket({ game_id: next.game.id, price: next.price * 2 })).ok).toBe(true);
+    expect(lg.season.expectedCrowd(lg.season.state.games.find((g) => g.id === next.game.id)!)).toBeLessThan(next.attendance);
+    const area = Object.keys(bud.facilities).find((k) => bud.facilities[k] < 5)!;
+    expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area } })).ok).toBe(true);
+    expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area: "moat" } })).error).toMatch(/unknown area/);
+    expect(lg.season.state.requests!.length).toBe(1);
+
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("money-check", manager.path(id));
+    expect(again.season.state.contracts).toEqual(lg.season.state.contracts);
+    expect(again.season.state.nil).toEqual(lg.season.state.nil);
+    expect(again.season.state.collectives).toEqual(lg.season.state.collectives);
+    expect(again.season.state.team_mood).toEqual(lg.season.state.team_mood);
+    expect(again.season.budget(2509)).toEqual(lg.season.budget(2509));
+    again.close();
+  }, 120_000);
+
+  it("refuses only egregious NIL offers", async () => {
+    const lg = manager.create({ name: "Rich collective", user_team_id: 194, seed: 3 });
+    const S = lg.season, c = S.state.collectives![194];
+    const q = S.roster(194).filter((p) => S.value(p.id) > 0).sort((a, b) => S.value(a.id) - S.value(b.id))[0];
+    const school = S.state.pools![194] - S.payroll(194) + (S.state.contracts![q.id]?.amount ?? 0);
+    expect(c.reserve).toBeGreaterThan(2_000_000);
+    const top = 4 * S.value(q.id) + 500_000;
+    expect(() => lg.apply({ type: "sign_contract", payload: { pid: q.id, amount: school + top + 100_000, years: 1 } })).toThrow(/fair-market-value/);
+    lg.apply({ type: "sign_contract", payload: { pid: q.id, amount: school + 3 * S.value(q.id) + 50_000, years: 1 } });
+    expect(S.state.nil![q.id].status).toBe("approved");
+  }, 60_000);
+
+  it("adopts the Protect College Sports Act's retention fund before the season's first game", async () => {
+    const lg = manager.create({ name: "PCSA", user_team_id: 2509, seed: 9 });
+    const before = lg.season.rosterPool(251)!;
+    lg.apply({ type: "update_settings", payload: { pcsa: true } });
+    const after = lg.season.rosterPool(251)!;
+    expect(after.retention).toBeGreaterThan(5_000_000);
+    // The retention fund is booster money moved from the collective to the school, not new money.
+    expect(Math.abs(after.total - before.total)).toBeLessThan(0.05 * before.total);
+    for (const p of lg.season.roster(251)) if (lg.season.state.contracts![p.id]?.retention) expect(p.years).toBeGreaterThan(0);
+    expect(lg.season.budget(251)!.revenue.donors).toBeGreaterThan(after.retention);
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
+    expect(() => lg.apply({ type: "update_settings", payload: { pcsa: false } })).toThrow(/before the season's first game/);
+  }, 60_000);
+
+  it("a league saved before money gets its contracts when opened", async () => {
+    const lg = manager.create({ name: "Pre-money save", user_team_id: 2509, seed: 5 });
+    const want = lg.season.state.contracts;
+    const nil = lg.season.state.nil;
+    const budget = lg.season.budget(2509);
+    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'retention', 'collectives', 'nil', 'player_morale', 'team_mood', 'budgets', 'facilities', 'projects', 'ticket_prices', 'gate', 'requests')");
+    const { League } = await import("../src/league.ts");
+    const again = League.open("pre-money", manager.path(lg.id), manager.seed());
+    expect(again.season.state.contracts).toEqual(want);
+    expect(again.season.state.nil).toEqual(nil);
+    expect(again.season.budget(2509)).toEqual(budget);
+    again.close();
+  }, 60_000);
+});
