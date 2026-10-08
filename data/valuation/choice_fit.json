@@ -1,0 +1,46 @@
+{
+ "years": [
+  2024,
+  2025
+ ],
+ "recruits": 5096,
+ "features": [
+  "prestige",
+  "prestige_x_quality",
+  "log_distance",
+  "home_state",
+  "win_pct",
+  "power",
+  "power_x_quality"
+ ],
+ "recruit": {
+  "prestige": 0.2887,
+  "prestige_x_quality": -0.1651,
+  "log_distance": -1.092,
+  "home_state": 0.7403,
+  "win_pct": 0.2574,
+  "power": 0.2533,
+  "power_x_quality": 0.3932
+ },
+ "top_hit": 0.2043,
+ "chance": 0.0287,
+ "transfers": 3381,
+ "transfer_features": [
+  "prestige",
+  "prestige_up",
+  "log_distance",
+  "same_conference",
+  "win_pct",
+  "power"
+ ],
+ "transfer": {
+  "prestige": -0.3949,
+  "prestige_up": -0.226,
+  "log_distance": -0.5405,
+  "same_conference": -0.1653,
+  "win_pct": -0.4713,
+  "power": 0.5332
+ },
+ "transfer_top_hit": 0.0538,
+ "transfer_chance": 0.0266
+}

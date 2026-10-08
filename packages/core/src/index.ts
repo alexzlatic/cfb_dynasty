@@ -23,3 +23,4 @@ export * from "./money.ts";
 export * from "./collective.ts";
 export * from "./morale.ts";
 export * from "./finance.ts";
+export * from "./valuation.ts";

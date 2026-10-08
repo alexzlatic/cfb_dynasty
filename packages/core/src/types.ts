@@ -153,6 +153,8 @@ export interface SeedBundle {
   players?: Record<string, TeamPlayers>;
   /** Home crowds last season and any real football finances by team (finances.json); absent in old seeds. */
   finances?: Record<string, { attendance: number | null; home_games: number; lines: Record<string, number> | null; /** 2026 dollars, revenue share and NIL (power schools). */ roster_budget?: number | null }>;
+  /** Each school's program style from its real newcomers (styles.json); absent in old seeds. */
+  styles?: Record<string, { portal_share: number; style: "develop" | "balanced" | "portal" | "win_now"; newcomers: number }>;
 }
 
 export interface TeamPlayers {
