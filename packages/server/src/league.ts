@@ -37,7 +37,7 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "collectives", "nil"] as const;
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "collectives", "nil", "player_morale", "team_mood"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -103,6 +103,7 @@ export class League {
       redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
       hidden_ctx: meta.hidden_ctx ?? undefined, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
       contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
+      player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
@@ -125,6 +126,7 @@ export class League {
     // Leagues saved before money: athletic departments sign their contracts the way a new league's would.
     if (!meta.contracts) lg.season.startMoney();
     if (!meta.collectives) lg.season.startCollectives();
+    if (!meta.team_mood) lg.season.weeklyMorale();
     return lg;
   }
 

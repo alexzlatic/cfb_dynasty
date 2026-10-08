@@ -10,6 +10,7 @@ import { expectations, meetingText, newCareer, securityTrail, winChance, type Ca
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
+import { moods, unitMood } from "./morale.ts";
 import { FOCUS_MAX, RESERVE, collectiveBase, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
 import { activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
@@ -87,6 +88,9 @@ export interface SeasonState {
   /** Each school's collective (booster NIL money) and its deals by player id. */
   collectives?: Record<number, CollectiveState>;
   nil?: Record<number, NilDeal>;
+  /** Each player's morale about pay and playing time (it builds week by week), and what it does to each unit's chemistry. */
+  player_morale?: Record<number, number>;
+  team_mood?: Record<number, Record<Unit, number>>;
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -238,6 +242,7 @@ export class Season {
     season.startHidden(seed.coaches ?? []);
     season.startMoney();
     season.startCollectives();
+    season.weeklyMorale();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
   }
@@ -293,6 +298,7 @@ export class Season {
     this.practiceDay(today, rep);
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
+    if (weekday(today) === 1) this.weeklyMorale();
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -447,6 +453,42 @@ export class Season {
     s.collectives = { ...s.collectives, [me]: { ...s.collectives[me], focus: [...new Set(focus)] } };
   }
 
+  /**
+   * Once a week every player weighs his pay and playing time, and his morale moves toward how he feels
+   * now. Each unit's chemistry follows its starters' morale, measured against the rest of the country.
+   */
+  weeklyMorale(): void {
+    const s = this.state;
+    const pm = { ...s.player_morale };
+    const raw = new Map<number, Record<Unit, number>>();
+    for (const t of this.teams) {
+      const roster = this.roster(t.id);
+      if (t.level !== "fbs" || !roster.length || !s.pools?.[t.id]) continue;
+      const depth = this.depthChart(t.id);
+      const starters = new Set(Object.values(depth).map((ids) => ids[0]).filter((x) => x != null));
+      const hurt = new Set(this.injured(t.id).map((i) => i.pid));
+      // A player expects to start when his value ranks among his position's starting jobs.
+      const jobs = new Map<string, number>();
+      for (const id of starters) { const p = this.playerById.get(id); if (p) jobs.set(p.pos, (jobs.get(p.pos) ?? 0) + 1); }
+      const value = new Map(roster.map((p) => [p.id, playerValue(p)]));
+      const expects = new Set<number>();
+      for (const [pos, n] of jobs) roster.filter((p) => p.pos === pos).sort((a, b) => value.get(b.id)! - value.get(a.id)! || a.id - b.id).slice(0, n).forEach((p) => expects.add(p.id));
+      const { mood, room } = moods(roster.map((p) => ({ id: p.id, pos: p.pos, unit: unitOf(p.pos), value: value.get(p.id)!, pay: this.pay(p.id),
+        starter: starters.has(p.id), expects_start: expects.has(p.id) && !hurt.has(p.id) })));
+      for (const [id, m] of mood) pm[id] = Math.round((0.7 * (pm[id] ?? 0) + 0.3 * m) * 100) / 100 + 0;
+      const field = lineup(depth, this.playerById).slot;
+      const unit = (slots: readonly string[]) => slots.map((k) => field[k as keyof typeof field]?.id).filter((x): x is number => x != null).map((id) => pm[id] ?? 0);
+      raw.set(t.id, { off: unitMood(unit(OFFENSE_FIELD), room.off), def: unitMood(unit(DEFENSE_FIELD), room.def) });
+    }
+    // Against the rest of the country, so the scouted view stays unbiased.
+    const avg = (u: Unit) => [...raw.values()].reduce((a, x) => a + x[u], 0) / Math.max(1, raw.size);
+    const ao = avg("off"), ad = avg("def");
+    const tm: Record<number, Record<Unit, number>> = {};
+    for (const [id, x] of raw) tm[id] = { off: Math.round((x.off - ao) * 100) / 100 + 0, def: Math.round((x.def - ad) * 100) / 100 + 0 };
+    s.player_morale = pm;
+    s.team_mood = tm;
+  }
+
   /** A player's market value this year. */
   value(pid: number): number {
     const p = this.playerById.get(pid);
@@ -497,11 +539,12 @@ export class Season {
     // FCS rosters are generated filler, with nothing true for scouts to miss; they play their ratings.
     if (!roster.length || !s.hidden_ctx || this.teamById.get(teamId)?.level === "fcs") return null;
     const lab = teamId === s.user_team_id ? s.lab : undefined;
-    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}`;
+    const mood = s.team_mood?.[teamId];
+    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}|${mood ? `${mood.off},${mood.def}` : ""}`;
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
     const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
-      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab });
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood });
     this.hiddenCache.set(teamId, { key, h });
     return h;
   }

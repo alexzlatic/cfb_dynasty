@@ -2,6 +2,9 @@ import { useMemo, useState } from "react";
 import { useData, useLeague } from "../App.tsx";
 import { api, type PayrollPlayer } from "../api.ts";
 import { Logo, money } from "../util.tsx";
+
+/** A player's morale about pay and playing time, in words (as in core's morale.ts). */
+const moodWord = (m: number) => (m >= 0.25 ? "Happy" : m > -0.25 ? "Content" : m > -0.8 ? "Unhappy" : "Angry");
 import { Panel } from "./common.tsx";
 
 type Sort = "value" | "pay" | "pos" | "gap";
@@ -52,8 +55,10 @@ export function PayrollScreen({ tid }: { tid?: number }) {
             <tr><td>Room</td><td className={"num " + (room < 0 ? "loss" : "")}>{money(room)}</td></tr>
             <tr><td className="muted">Players' market value (all {data.players.length})</td><td className="num muted">{money(data.players.reduce((a, p) => a + p.value, 0))}</td></tr>
           </tbody></table>
+          {data.mood && <p className="small">Locker room: pay and playing time are worth {data.mood.off >= 0 ? "+" : ""}{data.mood.off.toFixed(1)} points a game on offense and {data.mood.def >= 0 ? "+" : ""}{data.mood.def.toFixed(1)} on defense, against an average team.</p>}
           <p className="small muted">The revenue-share cap is {money(data.cap)} a school this year for every sport; most schools give football about {Math.round(data.football_share * 100)}% of it.
-            A player's value is what the national market pays a player like him (revenue share and NIL together). Players notice when they're paid well below it.</p>
+            A player's value is what the national market pays a player like him (revenue share and NIL together).
+            Each week players weigh their pay against teammates (what your school pays for value) and their playing time against their worth: an underpaid starter, a benched star or a backup paid like a starter costs chemistry.</p>
         </Panel>
         <Panel title={`${t?.conference} payrolls`}>
           <table className="grid tight"><thead><tr><th>School</th><th className="num">Signed</th><th className="num">Budget</th></tr></thead><tbody>
@@ -67,7 +72,7 @@ export function PayrollScreen({ tid }: { tid?: number }) {
         {(["value", "pay", "gap", "pos"] as const).map((k) => <button key={k} className={sort === k ? "on" : ""} onClick={() => setSort(k)}>{k === "value" ? "Value" : k === "pay" ? "Paid most" : k === "gap" ? "Most underpaid" : "Position"}</button>)}</span>}>
         {err && <p className="error small">{err}</p>}
         <table className="grid tight">
-          <thead><tr><th>Player</th><th>Class</th><th className="num">Ovr</th><th className="num">GP</th><th className="num">Value</th><th className="num">Revenue share</th><th className="num" title="His collective deal">NIL</th><th className="num" title="Revenue share and NIL as a share of his value">Of value</th><th>Through</th>{data.mine && <th></th>}</tr></thead>
+          <thead><tr><th>Player</th><th>Class</th><th className="num">Ovr</th><th className="num">GP</th><th className="num">Value</th><th className="num">Revenue share</th><th className="num" title="His collective deal">NIL</th><th className="num" title="Revenue share and NIL as a share of his value">Of value</th><th>Through</th><th title="How he feels about his pay and playing time">Mood</th>{data.mine && <th></th>}</tr></thead>
           <tbody>{rows.map((p) => {
             const pay = p.contract?.amount ?? 0, nil = p.nil?.amount ?? 0, pct = p.value ? (pay + nil) / p.value : null;
             return (
@@ -77,6 +82,7 @@ export function PayrollScreen({ tid }: { tid?: number }) {
                 <td className="num">{money(p.value)}</td><td className="num">{pay ? money(pay) : <span className="muted">none</span>}</td><td className="num muted">{nil ? money(nil) : ""}</td>
                 <td className={"num " + (pct == null ? "" : pct < 0.5 && p.starter ? "loss" : pct > 1.2 ? "win" : "muted")}>{pct == null ? "" : `${Math.round(pct * 100)}%`}</td>
                 <td className="muted small">{p.contract ? `${p.contract.start + p.contract.years - 1}-${String(p.contract.start + p.contract.years).slice(2)}` : ""}</td>
+                <td className={"small " + (p.morale <= -0.25 ? "loss" : p.morale >= 0.25 ? "win" : "muted")}>{moodWord(p.morale)}</td>
                 {data.mine && <td>{editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay || p.value) / 1000)), years: Math.min(p.eligibility, p.contract?.years ?? 1) })}>{pay ? "Change" : "Offer"}</button>}</td>}
               </tr>
             );

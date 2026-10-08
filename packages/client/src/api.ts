@@ -20,7 +20,7 @@ export interface DevelopmentView {
 
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number } | null; nil: NilDeal | null; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
 }
 export interface NilDeal { amount: number; asked?: number; status: "approved" | "cut"; date: string }
 export interface CollectiveView {
@@ -31,6 +31,8 @@ export interface CollectiveView {
 export interface PayrollView {
   team_id: number | null; year: number; cap: number; football_share: number; pool: number; payroll: number; mine: boolean;
   players: PayrollPlayer[]; conference: { team_id: number; pool: number; payroll: number }[];
+  /** Your locker room: what pay and playing time are doing to each unit's chemistry, in points a game. */
+  mood: { off: number; def: number } | null;
 }
 
 export interface LeagueState {

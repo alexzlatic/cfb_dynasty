@@ -369,6 +369,15 @@ describe("money", () => {
     const before = lg.season.state.collectives![2509].reserve;
     lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
     expect(lg.season.state.collectives![2509].reserve).toBeLessThan(before);
+    // Starters you stop paying sour; their unit's chemistry follows.
+    const mood0 = lg.season.state.team_mood![2509].def;
+    const starters = new Set(Object.values(lg.season.depthChart(2509)).map((x) => x[0]));
+    for (const p of lg.season.roster(2509)) if (starters.has(p.id) && lg.season.state.contracts![p.id] && ["DE", "DT", "LB", "CB", "S"].includes(p.pos)) {
+      expect((await act({ pid: p.id, amount: 0 })).ok).toBe(true);
+    }
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-30" } });
+    expect(lg.season.state.team_mood![2509].def).toBeLessThan(mood0 - 0.2);
+    expect((await getR(`/api/leagues/${id}/payroll`)).players.some((p: any) => p.morale < -0.25)).toBe(true);
 
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);
@@ -377,6 +386,7 @@ describe("money", () => {
     expect(again.season.state.contracts).toEqual(lg.season.state.contracts);
     expect(again.season.state.nil).toEqual(lg.season.state.nil);
     expect(again.season.state.collectives).toEqual(lg.season.state.collectives);
+    expect(again.season.state.team_mood).toEqual(lg.season.state.team_mood);
     again.close();
   }, 120_000);
 

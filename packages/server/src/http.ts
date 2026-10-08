@@ -117,12 +117,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!t) return { team_id: null };
         const starters = new Set(Object.values(S.depthChart(team)).map((ids) => ids[0]).filter((x) => x != null));
         const players = S.roster(team).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr,
-          value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
+          value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, morale: s.player_morale?.[pl.id] ?? 0, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
           gp: s.player_stats?.[pl.id]?.gp ?? 0 }));
         const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === t.conference).map((x) => ({ team_id: x.id, pool: s.pools?.[x.id] ?? 0, payroll: S.payroll(x.id) }))
           .sort((a, b) => b.payroll - a.payroll);
         return { team_id: team, year: s.year, cap: revenueCap(s.year), football_share: FOOTBALL_SHARE, pool: s.pools?.[team] ?? 0, payroll: S.payroll(team),
-          mine: team === s.user_team_id, players, conference };
+          mine: team === s.user_team_id, players, conference, mood: team === s.user_team_id ? s.team_mood?.[team] ?? null : null };
       }
       case route === "collective": {
         // A school's collective: its money, its deals and what the review did to them.
