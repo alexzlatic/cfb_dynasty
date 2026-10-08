@@ -23,7 +23,8 @@
     "results:check": "tsx packages/core/scripts/results-check.ts",
     "seed:power": "tsx packages/core/scripts/power.ts",
     "seed:players": "tsx packages/core/scripts/rate-players.ts",
-    "check:seasons": "tsx packages/core/scripts/season-counts.ts"
+    "check:seasons": "tsx packages/core/scripts/season-counts.ts",
+    "replay:2025": "tsx packages/core/scripts/replay-2025.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

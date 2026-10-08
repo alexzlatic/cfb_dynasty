@@ -1,15 +1,16 @@
 /**
- * Rates every player on the 2026 FBS and FCS rosters and writes data/seed/2026wk1/players.json.
+ * Rates every player on a season's FBS and FCS rosters and writes data/seed/<season>wk1/players.json.
  *
- *   npx tsx packages/core/scripts/rate-players.ts
+ *   npx tsx packages/core/scripts/rate-players.ts [season]      (default 2026)
  *
- * Inputs are the CFBD pulls in importer/.cache (recruiting 2019-2026, player season stats, usage and
- * PPA for 2024 and 2025) plus the seed's rosters and preseason team ratings. Nothing from the 2026
- * season is used.
+ * Inputs are the CFBD pulls in importer/.cache (the last eight recruiting classes, player season stats,
+ * usage and PPA for the two seasons before) plus the seed's rosters and preseason team ratings. Nothing
+ * from the rated season is used except who started at QB in its first game (see below). For 2026 that
+ * is recruiting 2019-2026 and stats from 2025 and 2024.
  *
  * 1. Prior from who the player is: recruiting composite (z within his class), seasons in college and
- *    position, fit on players with large 2025 samples.
- * 2. Evidence from stats: 2025, plus 2024 at half weight, standardized against regulars at the position
+ *    position, fit on players with large last-season samples.
+ * 2. Evidence from stats: last season, plus the season before at half weight, standardized against regulars at the position
  *    and discounted by level (Group of Five, FCS).
  * 3. Shrink: z = prior + (evidence - prior) * n / (n + k), with k per stat by how noisy it is.
  * 4. Team anchor: compile each team's auto depth chart and move its starters' unit ratings (bounded)
@@ -28,7 +29,9 @@ import { mixSeed } from "../src/hash.ts";
 import { packPlayer } from "../src/seed.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
-const SEED = join(ROOT, "data/seed/2026wk1");
+const SEASON = Number(process.argv[2] || 2026);
+const LAST = SEASON - 1;
+const SEED = join(ROOT, `data/seed/${SEASON}wk1`);
 const CACHE = join(ROOT, "importer/.cache");
 const read = (p: string) => JSON.parse(readFileSync(p, "utf8"));
 
@@ -39,7 +42,7 @@ const priors: Record<string, { ratings: TeamRatings }> = read(join(SEED, "team_r
 // ---- recruiting -----------------------------------------------------------------------------------
 interface Recruit { year: number; stars: number; rating: number; rank: number | null; position: string; rz: number }
 const recruitById = new Map<string, Recruit>(), recruitByAthlete = new Map<string, Recruit>();
-for (let y = 2019; y <= 2026; y++) {
+for (let y = SEASON - 7; y <= SEASON; y++) {
   const rows: any[] = read(join(CACHE, `recruiting_players__year-${y}_classification-HighSchool.json`));
   const rs = rows.map((r) => r.rating).filter((x) => x != null);
   const m = rs.reduce((a, b) => a + b, 0) / rs.length;
@@ -59,7 +62,7 @@ const stats = new Map<string, { line: Line; tier: number }>();
 const usage = new Map<string, { pass: number; rush: number }>();
 const ppa = new Map<string, { pass: number | null; rush: number | null }>();
 const fbsNames = new Set(teams.filter((t) => t.level === "fbs").map((t) => t.school));
-for (const [year, w] of [[2025, 1], [2024, 0.5]] as const) {
+for (const [year, w] of [[LAST, 1], [LAST - 1, 0.5]] as const) {
   for (const r of read(join(CACHE, `stats_player_season__year-${year}.json`)) as any[]) {
     const id = String(r.playerId);
     const tier = P4.has(r.conference) || r.team === "Notre Dame" ? 0 : fbsNames.has(r.team) ? -0.35 : -1.0;
@@ -71,14 +74,14 @@ for (const [year, w] of [[2025, 1], [2024, 0.5]] as const) {
     if (/\.(PCT|YPC|YPA|YPR|AVG|YPP)$/.test(key)) continue;
     if (key.endsWith(".LONG")) e.line[key] = Math.max(e.line[key] ?? 0, v);
     else e.line[key] = (e.line[key] ?? 0) + w * v;
-    if (year === 2025 || !stats.has(id)) e.tier = tier;
+    if (year === LAST || !stats.has(id)) e.tier = tier;
     stats.set(id, e);
   }
   for (const r of read(join(CACHE, `player_usage__year-${year}.json`)) as any[]) {
-    if (year === 2025 || !usage.has(String(r.id))) usage.set(String(r.id), { pass: r.usage.pass ?? 0, rush: r.usage.rush ?? 0 });
+    if (year === LAST || !usage.has(String(r.id))) usage.set(String(r.id), { pass: r.usage.pass ?? 0, rush: r.usage.rush ?? 0 });
   }
   for (const r of read(join(CACHE, `ppa_players_season__year-${year}.json`)) as any[]) {
-    if (year === 2025 || !ppa.has(String(r.id))) ppa.set(String(r.id), { pass: r.averagePPA?.pass ?? null, rush: r.averagePPA?.rush ?? null });
+    if (year === LAST || !ppa.has(String(r.id))) ppa.set(String(r.id), { pass: r.averagePPA?.pass ?? null, rush: r.averagePPA?.rush ?? null });
   }
 }
 
@@ -190,7 +193,7 @@ for (const [tid, list] of Object.entries(rosters)) {
     const rec = (r.recruit_ids ?? []).map((x: any) => recruitById.get(String(x))).find(Boolean) ?? recruitByAthlete.get(String(r.id));
     const pos = gamePos(r.pos, rec, r.weight);
     const classYears: Record<string, number> = { FR: 0.5, SO: 1.5, JR: 2.5, SR: 3.5 };
-    const years = rec ? Math.max(0, Math.min(5, 2026 - rec.year)) : classYears[r.class] ?? 1.5;
+    const years = rec ? Math.max(0, Math.min(5, SEASON - rec.year)) : classYears[r.class] ?? 1.5;
     const st = stats.get(String(r.id));
     work.push({
       id: String(r.id), rec, tier: st?.tier ?? (teamOf.get(Number(tid))?.level === "fbs" ? -0.35 : -1),
@@ -264,7 +267,7 @@ const PRIOR: [number, number, number] = [-1.1, 0.3, 0.25];
 // ---- rate ------------------------------------------------------------------------------------------
 for (const w of work) {
   const { p } = w;
-  const rng = new Rng(mixSeed(2026, "player", p.id));
+  const rng = new Rng(mixSeed(SEASON, "player", p.id));
   const spec = MAP[p.pos];
   // The fit above only sees players who played, so recruiting looks weaker than it is; the prior uses
   // fixed weights instead (a 5-star true freshman starts near 73, an average recruit grows about
@@ -428,12 +431,12 @@ function applyBase(r: Rate, shift: number): number {
   return LOG.has(r) ? LEAGUE[r] * Math.exp(shift) : 1 / (1 + Math.exp(-(Math.log(LEAGUE[r] / (1 - LEAGUE[r])) + shift)));
 }
 
-// The dynasty opens on Aug 24, 2026 with each team's real starting QB (from its first 2026 game's
-// passing line) at the top of the depth chart; the auto depth chart's own pick is kept as the backup.
+// The dynasty opens (Aug 24, 2026) with each team's real starting QB (from its first game's passing line
+// that season) at the top of the depth chart; the auto depth chart's own pick is kept as the backup.
 const realQb = new Map<number, number>();
 const schoolId = new Map(teams.map((t) => [t.school, t.id]));
 for (const wk of [2, 1]) {
-  for (const gm of read(join(CACHE, `games_players__year-2026_week-${wk}_category-passing.json`)) as any[]) {
+  for (const gm of read(join(CACHE, `games_players__year-${SEASON}_week-${wk}_category-passing.json`)) as any[]) {
     for (const t of gm.teams) {
       const ca = t.categories.flatMap((c: any) => c.types).find((ty: any) => ty.name === "C/ATT");
       const best = ca?.athletes.map((a: any) => ({ id: Number(a.id), att: Number(String(a.stat).split("/")[1] ?? 0) })).sort((a: any, b: any) => b.att - a.att)[0];
@@ -478,7 +481,7 @@ for (const [tid, list] of Object.entries(rosters)) {
   void list;
 }
 
-writeFileSync(join(SEED, "players.json"), JSON.stringify({ as_of: "2026-08-24", format: 1, teams: out }));
+writeFileSync(join(SEED, "players.json"), JSON.stringify({ as_of: read(join(SEED, "manifest.json")).start_date, format: 1, teams: out }));
 process.stdout.on("error", () => {});
 console.log(`rated ${work.length} players on ${Object.keys(out).length} teams; ${work.filter((w) => w.p.basis === "stats").length} from stats`);
 console.log("prior fits (a, b recruit z, c years):", JSON.stringify(Object.fromEntries([...priorFit].map(([k, v]) => [k, v.map((x) => +x.toFixed(3))]))));

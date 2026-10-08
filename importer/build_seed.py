@@ -1,16 +1,17 @@
-"""Build the 2026 Week 1 seed bundle (data/seed/2026wk1/) from CollegeFootballData.
+"""Build a season's Week 1 seed bundle (data/seed/<season>wk1/) from CollegeFootballData.
 
 The bundle is what a new league is created from: teams, venues, conferences, rosters, coaches,
-the 2026 schedule, team-level engine ratings as of Aug 24, 2026, the 2027 recruiting class and
-history pulls for later milestones. Nothing from a 2026 game result feeds the sim; the real
+the season's schedule, team-level engine ratings as of the preseason, next year's recruiting class and
+history pulls for later milestones. Nothing from a game result of that season feeds the sim; the real
 results are stored separately for the "what really happened" screen.
 
 Run from the repo root (CFBD auth is injected by the network proxy, or set CFBD_API_KEY):
 
-    python3 importer/build_seed.py                 # uses importer/.cache for raw pulls
+    python3 importer/build_seed.py                 # 2026; uses importer/.cache for raw pulls
     python3 importer/build_seed.py --refresh       # re-pull everything
+    python3 importer/build_seed.py --season 2025 --replay   # the 2025 replay bundle (no recruits, history or coordinators)
 
-team_ratings.json (FBS engine ratings) is built first by importer/build_team_ratings.py.
+team_ratings.json (FBS engine ratings) is built first by importer/build_team_ratings.py (same --year).
 """
 from __future__ import annotations
 
@@ -29,9 +30,12 @@ from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "importer/.cache"
-OUT = ROOT / "data/seed/2026wk1"
 API = "https://api.collegefootballdata.com"
+# Set by main() from --season. START is the dynasty's first day: the Monday of the week before Week 1's Saturday
+# (Week 0 in 2025).
 SEASON = 2026
+START = {2026: "2026-08-24", 2025: "2025-08-18"}
+OUT = ROOT / "data/seed/2026wk1"
 EASTERN = ZoneInfo("America/New_York")
 
 sys.path.insert(0, str(ROOT / "reference"))
@@ -172,7 +176,7 @@ def build_coaches(teams, rosters, refresh: bool, coord_csv: Path | None):
     firsts = Counter(p["first"] for r in rosters.values() for p in r if p["first"])
     lasts = Counter(p["last"] for r in rosters.values() for p in r if p["last"])
     fpool, lpool = [n for n, k in firsts.items() if k >= 8], [n for n, k in lasts.items() if k >= 4]
-    rng = random.Random(20260824)
+    rng = random.Random(int(START[SEASON].replace("-", "")))
     for t in teams:
         if t["id"] not in have:
             coaches.append({"team_id": t["id"], "role": "HC", "first": rng.choice(fpool), "last": rng.choice(lpool),
@@ -206,14 +210,15 @@ def build_schedule(teams, refresh: bool):
 
 # ---- FCS and missing-FBS team strength ---------------------------------------------------------
 def team_strength_points(teams, refresh: bool):
-    """Points vs an average FBS team on a neutral field for teams that were FCS in 2025.
+    """Points vs an average FBS team on a neutral field for teams that were FCS last season (2025 for 2026).
 
-    A ridge-regressed rating over every 2025 game between FBS and FCS teams: FBS opponents are fixed at
-    their 2025 SP+ rating, FCS teams are linked through their games with each other, margins are capped
+    A ridge-regressed rating over every last-season game between FBS and FCS teams: FBS opponents are fixed at
+    their final SP+ rating, FCS teams are linked through their games with each other, margins are capped
     at 35 and every team is shrunk toward the FCS mean with 3 games of prior weight (M0 spec: tuned in
     M1 so FCS upsets happen at real rates)."""
-    sp = {r["team"]: r["rating"] for r in pull("/ratings/sp?year=2025", refresh) if r.get("rating") is not None}
-    games = pull("/games?year=2025", refresh)
+    last = SEASON - 1
+    sp = {r["team"]: r["rating"] for r in pull(f"/ratings/sp?year={last}", refresh) if r.get("rating") is not None}
+    games = pull(f"/games?year={last}", refresh)
     fcs = set()
     edges = []
     for g in games:
@@ -277,7 +282,7 @@ def scaled_team(points: float, school: str, abbr: str, roster: list):
         "kick_return_avg": 21.0, "punt_return_avg": 8.0, "aggressiveness": 0.0, "scramble_rate": 0.0, "scramble_scale": 0.0,
         "pass_tendency": {}, "qb": nm(qbs[0]) if qbs else "QB1", "kicker": nm(ks[0]) if ks else "K",
         "punter": nm(ps[0]) if ps else "P", "rushers": rushers, "receivers": receivers,
-        "notes": f"scaled league-average team, {points:+.1f} pts vs average FBS (2025 games vs FBS, shrunk)",
+        "notes": f"scaled league-average team, {points:+.1f} pts vs average FBS ({SEASON - 1} games vs FBS, shrunk)",
     }
 
 
@@ -304,14 +309,15 @@ def calibrate_scale(games: int = 3000) -> float:
 
 # ---- brand prestige -------------------------------------------------------------------------
 def add_prestige(teams, refresh: bool) -> None:
-    """0-100 brand score that poll voters lean on: 2021-25 win % and 2022-26 recruiting class points,
+    """0-100 brand score that poll voters lean on: the last five seasons' win % (2021-25 for 2026) and the last five
+    recruiting classes' points (2022-26),
     each as a percentile among FBS teams, weighted 45/55. FCS programs sit at 5-25 by win %."""
     wins, recs = defaultdict(lambda: [0, 0]), defaultdict(list)
-    for y in range(2021, 2026):
+    for y in range(SEASON - 5, SEASON):
         for r in pull(f"/records?year={y}", refresh):
             wins[r.get("teamId")][0] += r["total"]["wins"]
             wins[r.get("teamId")][1] += r["total"]["games"]
-    for y in range(2022, 2027):
+    for y in range(SEASON - 4, SEASON + 1):
         for r in pull(f"/recruiting/teams?year={y}", refresh):
             recs[r["team"]].append(r["points"])
     wp = {t["id"]: wins[t["id"]][0] / max(1, wins[t["id"]][1]) for t in teams}
@@ -328,11 +334,19 @@ def add_prestige(teams, refresh: bool) -> None:
 
 # ---- main -------------------------------------------------------------------------------------
 def main() -> None:
+    global SEASON, OUT
     ap = argparse.ArgumentParser()
+    ap.add_argument("--season", type=int, default=2026, choices=sorted(START))
     ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--coordinators", type=Path, default=ROOT / "importer/coordinators_2026.csv")
+    ap.add_argument("--coordinators", type=Path, help="researched coordinators (default importer/coordinators_<season>.csv)")
     ap.add_argument("--skip-history", action="store_true")
+    ap.add_argument("--replay", action="store_true",
+                    help="only what a season replay needs: no recruiting class, history pulls or researched coordinators")
     args = ap.parse_args()
+    SEASON = args.season
+    OUT = ROOT / f"data/seed/{SEASON}wk1"
+    start = START[SEASON]
+    coord = None if args.replay else (args.coordinators or ROOT / f"importer/coordinators_{SEASON}.csv")
     OUT.mkdir(parents=True, exist_ok=True)
 
     print("teams, conferences, venues")
@@ -341,7 +355,7 @@ def main() -> None:
     print("rosters")
     rosters = build_rosters(teams, args.refresh)
     print("coaches")
-    coaches = build_coaches(teams, rosters, args.refresh, args.coordinators)
+    coaches = build_coaches(teams, rosters, args.refresh, coord)
     print(Counter((c["role"], c["source"]) for c in coaches))
     print("schedule")
     sched, real = build_schedule(teams, args.refresh)
@@ -363,11 +377,11 @@ def main() -> None:
     for t in teams:
         if t["level"] == "fbs" and t["school"] in fbs_built:
             ratings[t["id"]] = {"source": "preseason_prior_v2", **{"ratings": fbs_built[t["school"]]}}
-        else:  # FCS teams, and 2026 FBS newcomers rated from their 2025 FCS season
+        else:  # FCS teams, and FBS newcomers rated from their last FCS season
             pts = strength[t["school"]] / slope
-            ratings[t["id"]] = {"source": "fcs_2025_vs_fbs_shrunk", "points": round(strength[t["school"]], 1),
+            ratings[t["id"]] = {"source": f"fcs_{SEASON - 1}_vs_fbs_shrunk", "points": round(strength[t["school"]], 1),
                                 "ratings": scaled_team(pts, t["school"], t["abbr"], rosters.get(t["id"], []))}
-    write("team_ratings_all.json", {"season": SEASON, "as_of": "2026-08-24", "teams": ratings})
+    write("team_ratings_all.json", {"season": SEASON, "as_of": start, "teams": ratings})
 
     add_prestige(teams, args.refresh)
     write("teams.json", teams)
@@ -375,11 +389,24 @@ def main() -> None:
     write("rosters.json", {str(k): v for k, v in rosters.items()})
     write("coaches.json", coaches)
     write("schedule.json", sched)
-    write("real_results_2026.json", {"note": "Real 2026 scores. Comparison screen only; never fed to the sim.", "games": real})
+    write(f"real_results_{SEASON}.json", {"note": f"Real {SEASON} scores. Comparison only; never fed to the sim.", "games": real})
+
+    if args.replay:
+        write("manifest.json", {
+            "season": SEASON, "start_date": start, "built": datetime.now(EASTERN).isoformat(timespec="seconds"),
+            "counts": {"teams": Counter(t["level"] for t in teams), "players": sum(len(r) for r in rosters.values()),
+                       "games": len(sched), "coaches": len(coaches)},
+            "notes": [
+                f"Replay bundle: the {SEASON} season as of {start}, for the season replay check. No recruiting class or history.",
+                "Coordinators are generated; FCS head coaches are generated (CFBD covers FBS coaches only).",
+                "Logos are hotlinked from the CFBD CDN and cached by the server, not committed.",
+            ],
+        })
+        return
 
     print("recruits and history")
-    rec = pull("/recruiting/players?year=2027&classification=HighSchool", args.refresh)
-    write("recruits_2027.json", [{
+    rec = pull(f"/recruiting/players?year={SEASON + 1}&classification=HighSchool", args.refresh)
+    write(f"recruits_{SEASON + 1}.json", [{
         "id": r["id"], "name": r["name"], "pos": r.get("position"), "stars": r.get("stars"), "rating": r.get("rating"),
         "rank": r.get("ranking"), "height": r.get("height"), "weight": r.get("weight"), "school": r.get("school"),
         "city": r.get("city"), "state": r.get("stateProvince"), "lat": (r.get("hometownInfo") or {}).get("latitude"),
@@ -412,9 +439,9 @@ def main() -> None:
         write("history/records_2021_2025.json", {"fields": ["year", "team_id", "team", "conference", "wins", "losses", "conf_wins", "conf_losses"], "rows": recs})
 
     write("manifest.json", {
-        "season": SEASON, "start_date": "2026-08-24", "built": datetime.now(EASTERN).isoformat(timespec="seconds"),
+        "season": SEASON, "start_date": start, "built": datetime.now(EASTERN).isoformat(timespec="seconds"),
         "counts": {"teams": Counter(t["level"] for t in teams), "players": sum(len(r) for r in rosters.values()),
-                   "games": len(sched), "recruits_2027": len(rec), "coaches": len(coaches)},
+                   "games": len(sched), f"recruits_{SEASON + 1}": len(rec), "coaches": len(coaches)},
         "notes": [
             "FCS rosters are the real CFBD 2026 rosters (the M0 spec planned generated ones).",
             "FCS head coaches are generated; CFBD covers FBS coaches only.",

@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import type { Player, SeedBundle, TeamPlayers } from "./types.ts";
 import { ATTRS, overall, type Pos, type RatedPlayer } from "./players.ts";
 
-export const DEFAULT_SEED_DIR = fileURLToPath(new URL("../../../data/seed/2026wk1/", import.meta.url));
+/** The Week 1 seed bundle for a season (2026 is the game's; 2025 is the replay check's). */
+export const seedDir = (season: number) => fileURLToPath(new URL(`../../../data/seed/${season}wk1/`, import.meta.url));
+export const DEFAULT_SEED_DIR = seedDir(2026);
 
 const read = (dir: string, f: string) => JSON.parse(readFileSync(join(dir, f), "utf8"));
 
