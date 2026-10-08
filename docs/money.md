@@ -82,3 +82,55 @@ seasons chain together (M3).
 
 - `npm run check:m2` scores the M2 gates.
 - Speed is in `npm run check:m1`: money adds about 7% to a headless season.
+
+## Results move money (front office)
+
+A season's results reach next year's budget through each program's **fortune** (`fortunes.ts`), three
+multipliers around 1 that carry most of last year's value forward:
+
+- **Fans** (the usual home crowd) follow the record and a playoff berth.
+- **Donors** (booster giving and the collective) follow winning beyond expectations (each game's pregame
+  chance is the expectation), a playoff berth (worth much more at a Group of Five school than at a power
+  program, whose boosters expect it), playoff wins and a title. A losing season costs giving.
+- **The athletic department** gives football more revenue share, up to the cap, when football's revenue
+  beats what it was budgeted at when the season opened (tickets, postseason money, giving). Power schools
+  already paying the full cap feel it only through their boosters.
+
+Next season's budget (renewal talks, the portal, the Front office) projects the season so far, with the
+games still to play at their chances.
+
+**Postseason money** is keyed by bowl and conference so custom conferences can set their own: each bowl
+pays its reported 2025-26 amount (`BOWL_PAYOUT`, $750K for any other), and the playoff pays $4M for a first
+round or quarterfinal game, $6M for a semifinal or the title game, plus $2M travel. Each conference pools
+part of a member's payout (`CONFERENCE_POOL`: 70% in the power conferences, half elsewhere, none for
+independents) and splits the pool among all its members. Conference TV money is a per-member payout by
+conference (`conferenceMedia`); one-time charges such as exit fees are their own budget line (`charges`).
+
+**Budget classes** come from the roster budget in 2026 dollars: Elite ($30M+), Power ($20M+), Lower power
+($12M+), Upper Group of Five ($6M+), Group of Five ($3M+) and Lower Group of Five. In a test dynasty
+(`scripts/fortune-check.ts 2 7`) Memphis's roster budget went from $8.4M to $10.3M (+23%) after a 12-2 playoff
+season and Wyoming's from $4.4M to $5.6M (+26%) the next year; two runs in a row compound (the unit tests check
+it). 16-0 champion Georgia's grew 27%, and losing power programs gave back a few percent (the cap holds their
+revenue share; growth of 4% a year is in every number).
+
+## Multi-year deals
+
+A deal for more than one season locks a player in: no renegotiating in December until it ends, and he's much
+less likely to enter the portal (walking out on it is a bigger step than leaving a one-year deal). Players
+would rather sign for a year and test the market again, so for each season beyond one he wants more a year
+(`lengthPremium`: about 8% for most, much more for money-first players, little or nothing for loyal and
+homebody players), and players who want much more won't sign one at all (`maxYears`: mercenaries sign one-year
+deals only). You can offer one in renewal talks (he answers in a day or two) or on the Payroll page during the
+season (he answers at once). Your standing rule signs one-year deals; AI schools' deals still run a season or
+two without the lock.
+
+## Front office
+
+**Money > Front office** shows your budget class now and next season, how this season is moving fans,
+donors and your AD, and three tabs:
+
+- **Salaries:** every player's pay this season and the next three: paid, signed, locked (🔒), or an estimate
+  of what keeping him would cost at what you pay for value now; who's out of eligibility or may leave for the
+  NFL; and each season's roster budget against what's committed, with the room left.
+- **Projections:** football's budget this year and projected for the next two.
+- **History:** each past season's record, postseason, revenue, surplus, crowds, roster budget and class.

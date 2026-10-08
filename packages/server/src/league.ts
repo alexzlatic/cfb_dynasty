@@ -68,7 +68,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived"] as const;
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
