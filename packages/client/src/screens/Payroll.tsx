@@ -62,7 +62,7 @@ export function PayrollScreen({ tid }: { tid?: number }) {
           {data.mood && <p className="small">Locker room: pay and playing time are worth {data.mood.off >= 0 ? "+" : ""}{data.mood.off.toFixed(1)} points a game on offense and {data.mood.def >= 0 ? "+" : ""}{data.mood.def.toFixed(1)} on defense, against an average team.</p>}
           <p className="small muted">Your athletic director decides how much of the school's {money(data.cap)} revenue-share cap goes to football, and your collective raises NIL money on top
             (donors give more after wins beyond expectations). It's one pool and you decide who gets it: a deal is paid from revenue share first{data.pcsa ? ", then the retention fund," : ""} then the collective,
-            whose part has to pass the fair-market-value review. A player's value is what the national market pays a player like him.
+            whose part only gets stopped by the fair-market-value review if it's egregious. A player's value is what the national market pays a player like him.
             Each week players weigh their pay against teammates and their playing time against their worth: an underpaid starter, a benched star or a backup paid like a starter costs chemistry.</p>
         </Panel>
         <Panel title={`${t?.conference} roster budgets`}>

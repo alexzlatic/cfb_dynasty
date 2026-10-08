@@ -22,9 +22,9 @@ export function CollectiveScreen({ tid }: { tid?: number }) {
           </tbody></table>
           {data.mine
             ? <p className="small muted">Your collective raises the boosters' money and you decide where it goes: it's part of your <a href={`#/l/${id}/payroll`}>roster budget</a>.
-                Donors give more when the team wins beyond expectations and less when it loses. Every NIL deal goes through the fair-market-value review.</p>
+                Donors give more when the team wins beyond expectations and less when it loses. The fair-market-value review only stops egregious NIL deals.</p>
             : <p className="small muted">This school's collective fills the gap between what the school pays a player and what he's worth, then pays stars with what's left, on the first of each month in the season.
-                Donors give more when the team wins beyond expectations. Every deal goes through the fair-market-value review, which cuts back anything far above what players like him get.</p>}
+                Donors give more when the team wins beyond expectations. The fair-market-value review cuts back only egregious deals.</p>}
         </Panel>
         <div />
       </div>

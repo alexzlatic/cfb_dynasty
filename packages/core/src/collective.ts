@@ -6,8 +6,8 @@ import type { Team } from "./types.ts";
  * has a budget that grows with winning and donor mood. It makes deals with players, filling the gap
  * between what the school pays a player and what he's worth, and steers toward the positions the head
  * coach asks for. A rich collective with money left buys stars beyond their value, but every deal goes
- * through a fair-market-value review (the College Sports Commission's NIL Go clearinghouse): a deal far
- * above what a player like him gets is cut back, so a collective can't simply buy a roster.
+ * through a fair-market-value review (the College Sports Commission's NIL Go clearinghouse), which only
+ * stops egregious deals.
  */
 
 export interface CollectiveState {
@@ -47,11 +47,11 @@ export function collectiveBase(t: Pick<Team, "conference" | "school" | "level" |
 }
 
 /**
- * The most the review approves for a player: comparable deals for players like him, with room for a
- * premium. The Protect College Sports Act's stricter test (a deal must pay what a business would pay
- * him for the same work) leaves less room.
+ * The most the review approves for a player. Real reviews almost never stop a deal, so only egregious
+ * ones are: more than four times what players like him get, plus $500K. The Protect College Sports Act's
+ * test (a deal must pay what a business would pay him) is tighter: two and a half times, plus $250K.
  */
-export const fmvCeiling = (value: number, pcsa = false) => Math.round((pcsa ? 1.25 * value + 10_000 : 1.6 * value + 25_000) / 1000) * 1000;
+export const fmvCeiling = (value: number, pcsa = false) => Math.round((pcsa ? 2.5 * value + 250_000 : 4 * value + 500_000) / 1000) * 1000;
 
 /** The review: deals within the range of comparable deals pass; anything above is cut back to it. */
 export function review(amount: number, value: number, date: string, pcsa = false): NilDeal {

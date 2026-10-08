@@ -2,7 +2,7 @@ school,low,high,source
 # The Athletic's 2026 roster budget estimates (revenue share plus program-controlled NIL, in $M), published
 # 2026-09-16 (Mandel, Ubben, Khan), as reported by On3, Saturday Down South, 247Sports and Bleacher Report.
 # Conference averages: SEC 33-38, Big Ten 27-31, ACC 21-25, Big 12 18-22. Schools not listed are filled
-# from those averages by build_finances.py. Replace with the full table when nytimes.com is reachable.
+# from those averages by build_finances.py.
 Ohio State,49,54,The Athletic via On3
 Oregon,48,54,The Athletic via On3
 Texas,45,55,The Athletic via On3
@@ -24,19 +24,51 @@ Kentucky,23,26,The Athletic via On3
 Arkansas,22,25,The Athletic via On3
 Oklahoma State,15,19,The Athletic via On3
 Boston College,8,13,The Athletic via On3
-# Big Ten order below Michigan as reported (Nebraska, Penn State, Wisconsin, UCLA, Maryland, Michigan State,
-# Northwestern, Washington, Rutgers, Illinois, Minnesota, Iowa, Purdue); values interpolated between the
-# known ranges to the conference's 27-31 average.
-Indiana,32,36,interpolated from The Athletic's Big Ten order
-Nebraska,30,32,interpolated from The Athletic's Big Ten order
-Wisconsin,27,30,interpolated from The Athletic's Big Ten order
-UCLA,26,29,interpolated from The Athletic's Big Ten order
-Maryland,25,28,interpolated from The Athletic's Big Ten order
-Michigan State,24,27,interpolated from The Athletic's Big Ten order
-Northwestern,23,26,interpolated from The Athletic's Big Ten order
-Washington,22,25,interpolated from The Athletic's Big Ten order
-Rutgers,21,23,interpolated from The Athletic's Big Ten order
-Illinois,19,22,interpolated from The Athletic's Big Ten order
-Minnesota,18,21,interpolated from The Athletic's Big Ten order
-Iowa,17,20,interpolated from The Athletic's Big Ten order
-Purdue,15,18,interpolated from The Athletic's Big Ten order
+# Every other school read from The Athletic's chart of all 68 (bubble height, about +/- $1.5M), shared by Alex 2026-10-08.
+Indiana,36.5,39.5,The Athletic chart
+South Carolina,33.0,36.0,The Athletic chart
+Auburn,32.5,35.5,The Athletic chart
+Nebraska,32.3,35.3,The Athletic chart
+Wisconsin,29.7,32.7,The Athletic chart
+Clemson,29.7,32.7,The Athletic chart
+Virginia Tech,28.9,31.9,The Athletic chart
+Missouri,28.1,31.1,The Athletic chart
+Mississippi State,27.2,30.2,The Athletic chart
+NC State,26.7,29.7,The Athletic chart
+UCLA,26.6,29.6,The Athletic chart
+Georgia Tech,26.1,29.1,The Athletic chart
+Vanderbilt,25.8,28.8,The Athletic chart
+BYU,25.7,28.7,The Athletic chart
+Florida State,25.3,28.3,The Athletic chart
+TCU,24.1,27.1,The Athletic chart
+Maryland,23.9,26.9,The Athletic chart
+Louisville,23.0,26.0,The Athletic chart
+North Carolina,22.5,25.5,The Athletic chart
+Northwestern,22.4,25.4,The Athletic chart
+Virginia,22.3,25.3,The Athletic chart
+Michigan State,21.7,24.7,The Athletic chart
+Illinois,20.9,23.9,The Athletic chart
+Rutgers,20.5,23.5,The Athletic chart
+Arizona State,20.1,23.1,The Athletic chart
+California,19.6,22.6,The Athletic chart
+SMU,19.5,22.5,The Athletic chart
+Baylor,19.0,22.0,The Athletic chart
+West Virginia,18.3,21.3,The Athletic chart
+Washington,18.3,21.3,The Athletic chart
+Syracuse,18.1,21.1,The Athletic chart
+Stanford,17.6,20.6,The Athletic chart
+Utah,16.5,19.5,The Athletic chart
+Colorado,16.5,19.5,The Athletic chart
+Iowa,15.8,18.8,The Athletic chart
+Purdue,15.2,18.2,The Athletic chart
+Pittsburgh,15.2,18.2,The Athletic chart
+Kansas State,15.0,18.0,The Athletic chart
+Wake Forest,14.7,17.7,The Athletic chart
+Kansas,14.0,17.0,The Athletic chart
+Minnesota,13.5,16.5,The Athletic chart
+Houston,13.0,16.0,The Athletic chart
+UCF,12.2,15.2,The Athletic chart
+Iowa State,11.6,14.6,The Athletic chart
+Arizona,11.1,14.1,The Athletic chart
+Cincinnati,10.9,13.9,The Athletic chart
+Duke,8.8,11.8,The Athletic chart

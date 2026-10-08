@@ -11,7 +11,7 @@ import { loadSeed, mixSeed, Season } from "../src/index.ts";
 const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 // The Athletic's 2026 roster budgets (revenue share and program-controlled NIL), and its 12 biggest.
 const ATHLETIC = new Map(readFileSync(new URL("../../../importer/roster_budgets_2026.csv", import.meta.url), "utf8").split("\n")
-  .filter((l) => l && !l.startsWith("#") && !l.startsWith("school,") && l.includes("The Athletic via"))
+  .filter((l) => l && !l.startsWith("#") && !l.startsWith("school,"))
   .map((l) => { const [school, lo, hi] = l.split(","); return [school, [Number(lo) * 1e6, Number(hi) * 1e6]] as const; }));
 const REAL_TOP = [...ATHLETIC].sort((a, b) => b[1][0] + b[1][1] - a[1][0] - a[1][1]).slice(0, 12).map(([s]) => s);
 const CONF_AVG: Record<string, number> = { SEC: 35.5e6, "Big Ten": 29e6, ACC: 23e6, "Big 12": 20e6 };
@@ -63,8 +63,8 @@ rows.push(["Payrolls: within 10% of The Athletic's range", `${inRange / seasons}
 const confOff = Object.entries(CONF_AVG).map(([c, v]) => avg(confSpend.get(c)!) / v - 1);
 rows.push(["Payrolls: power conferences vs The Athletic's averages", confOff.map((x) => `${x >= 0 ? "+" : ""}${Math.round(100 * x)}%`).join(" "), "each within 10%", confOff.every((x) => Math.abs(x) <= 0.1)]);
 rows.push(["Payrolls: top 10 spenders among the reported top 12", `${(topHits / seasons).toFixed(1)} of 10`, "6+", topHits / seasons >= 6]);
-rows.push(["Fair value: AI deals cut back", `${(100 * cuts / deals).toFixed(1)}%`, "under 5%", cuts / deals < 0.05]);
-rows.push(["Fair value: cuts at the top of the market", `median $${(median(cutVals) / 1000).toFixed(0)}K vs $${(median(dealVals) / 1000).toFixed(0)}K`, "2x the median deal", median(cutVals) >= 2 * median(dealVals)]);
+rows.push(["Fair value: AI deals cut back (egregious only)", `${(100 * cuts / deals).toFixed(1)}%`, "under 1%", cuts / deals < 0.01]);
+rows.push(["Fair value: any cuts at the top of the market", cuts ? `median $${(median(cutVals) / 1000).toFixed(0)}K vs $${(median(dealVals) / 1000).toFixed(0)}K` : "none cut", "2x the median deal", !cuts || median(cutVals) >= 2 * median(dealVals)]);
 
 // Morale: stop paying one team's starters and compare its chemistry with the same season paid.
 const unpaid = (cut: boolean) => {

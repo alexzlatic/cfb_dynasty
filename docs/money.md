@@ -16,18 +16,16 @@ Two kinds of money reach players, and you spend both as **one roster pool**.
   beyond expectations and less after losses.
 - **Your pool.** Revenue share plus the collective's money is your roster budget, and you decide who gets
   it (`sign_contract`: dollars a year, seasons up to his eligibility; 0 ends his deal). A deal is paid
-  from revenue share first, then the collective; the collective's part is a yearly NIL deal and has to
-  pass the **fair-market-value review** (like the College Sports Commission's NIL Go): an NIL part above
-  1.6 times his value plus $25K is refused. Your collective never makes deals on its own.
+  from revenue share first, then the collective; the collective's part is a yearly NIL deal. The
+  **fair-market-value review** (like the College Sports Commission's NIL Go) only stops egregious ones:
+  an NIL part above four times his value plus $500K. Real reviews almost never stop a deal. Your collective never makes deals on its own.
 - **AI schools.** Each AD signs its roster at the start (`aiContracts`: every player the same share of
   his value, never more than his value), and each collective fills gaps to value (starters first), then
-  pays its top 20 players with what's left, holding 15% back for monthly deals in the season. About 1% of
-  its deals are cut back by the review, all at the top of the market.
-- **How much.** Power-conference and Notre Dame roster budgets come from The Athletic's 2026 estimates
-  (`importer/roster_budgets_2026.csv`: 21 published ranges, the rest of the Big Ten from its published
-  order, and the other schools from their conference's average spread by prestige), scaled 0.8 for 2025
-  and +4% a year after 2026. The collective is that budget less football's revenue share. Group of Five
-  collectives are estimated (a million or two). The full table needs www.nytimes.com allowed.
+  pays its top 20 players with what's left, holding 15% back for monthly deals in the season.
+- **How much.** All 68 power-conference and Notre Dame roster budgets come from The Athletic's 2026
+  estimates (`importer/roster_budgets_2026.csv`: 21 published ranges, the rest read from its chart),
+  scaled 0.8 for 2025 and +4% a year after 2026. The collective is that budget less football's revenue
+  share. Group of Five collectives are estimated (a million or two).
 
 ## Protect College Sports Act (setting)
 
@@ -39,8 +37,8 @@ Settings (`pcsa`) before the season's first game; switching re-signs every roste
   through its collective (up to 60% of it), so the total roster budget barely moves but more of it is
   the school's, and only returning players can get it. Until the portal arrives, "returning" means any
   player past his first year.
-- **Stricter fair-market value:** NIL deals must pay what a business would pay him, so the review's
-  ceiling drops to 1.25 times his value plus $10K.
+- **Tighter fair-market value:** NIL deals must pay what a business would pay him, so the review's
+  ceiling drops to two and a half times his value plus $250K.
 - **Later:** one free transfer, five years to play (from 19 or high school graduation), no head coach
   leaving for another school mid-season, conferences capped at 20 teams and a 5% agent fee cap come with
   the transfer portal and career moves (M3).

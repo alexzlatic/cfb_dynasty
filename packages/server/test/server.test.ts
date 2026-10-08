@@ -349,11 +349,10 @@ describe("money", () => {
     const baseRoom = pr.pool.revenue_share - pr.players.reduce((a: number, p: any) => a + (p.contract?.amount ?? 0), 0);
     // A deal beyond the revenue share comes from the collective, and its part has to pass the review.
     const q = pr.players.filter((p: any) => p.value > 0 && !p.nil).sort((a: any, b: any) => a.value - b.value)[0];
-    const school = baseRoom + (q.contract?.amount ?? 0);
-    expect((await act({ pid: q.pid, amount: school + q.ceiling + 50_000, years: 1 })).error).toMatch(/fair-market-value/);
-    expect((await act({ pid: q.pid, amount: school + q.ceiling, years: 1 })).ok).toBe(true);
+    const school = baseRoom + (q.contract?.amount ?? 0), extra = 100_000;
+    expect((await act({ pid: q.pid, amount: school + extra, years: 1 })).ok).toBe(true);
     expect(lg.season.state.contracts![q.pid].amount).toBe(school);
-    expect(lg.season.state.nil![q.pid].amount).toBe(q.ceiling);
+    expect(lg.season.state.nil![q.pid].amount).toBe(extra);
     expect(lg.season.payroll(2509)).toBe(pr.pool.revenue_share);
     expect((await act({ pid: q.pid, amount: 0 })).ok).toBe(true);
     expect(lg.season.state.contracts![q.pid]).toBeUndefined();
@@ -412,6 +411,18 @@ describe("money", () => {
     expect(again.season.budget(2509)).toEqual(lg.season.budget(2509));
     again.close();
   }, 120_000);
+
+  it("refuses only egregious NIL offers", async () => {
+    const lg = manager.create({ name: "Rich collective", user_team_id: 194, seed: 3 });
+    const S = lg.season, c = S.state.collectives![194];
+    const q = S.roster(194).filter((p) => S.value(p.id) > 0).sort((a, b) => S.value(a.id) - S.value(b.id))[0];
+    const school = S.state.pools![194] - S.payroll(194) + (S.state.contracts![q.id]?.amount ?? 0);
+    expect(c.reserve).toBeGreaterThan(2_000_000);
+    const top = 4 * S.value(q.id) + 500_000;
+    expect(() => lg.apply({ type: "sign_contract", payload: { pid: q.id, amount: school + top + 100_000, years: 1 } })).toThrow(/fair-market-value/);
+    lg.apply({ type: "sign_contract", payload: { pid: q.id, amount: school + 3 * S.value(q.id) + 50_000, years: 1 } });
+    expect(S.state.nil![q.id].status).toBe("approved");
+  }, 60_000);
 
   it("adopts the Protect College Sports Act's retention fund before the season's first game", async () => {
     const lg = manager.create({ name: "PCSA", user_team_id: 2509, seed: 9 });
