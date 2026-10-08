@@ -97,7 +97,7 @@ function Negotiation({ f }: { f: FutureData }) {
 
 /** The player page's Future tab (your players): will he be back, why not, and what it takes. */
 export function FutureTab({ f }: { f: FutureData }) {
-  const { id, team } = useLeague();
+  const { id, team, state } = useLeague();
   const { busy, err, act } = useAct();
   const w = f.watch;
   const promised = w.promise && !w.promise.broken;
@@ -132,7 +132,7 @@ export function FutureTab({ f }: { f: FutureData }) {
       <div>
         <Panel title="Renewal talks" right={<a href={`#/l/${id}/retention`}>All players</a>}>
           {f.talks_open && f.talk ? <Negotiation key={`${f.talk.offer?.made}-${f.talk.counter}`} f={f} /> : (
-            <p className="muted">Talks open {f.dates.talks ? shortDate(f.dates.talks) : "after the conference championships"} and run until January 1; the portal opens {f.dates.portal ? shortDate(f.dates.portal) : "January 2"}.
+            <p className="muted">{!f.dates.talks || f.dates.talks > state.date ? <>Talks open {f.dates.talks ? shortDate(f.dates.talks) : "after the conference championships"} and run until January 1; the portal opens {f.dates.portal ? shortDate(f.dates.portal) : "January 2"}.</> : "This winter's talks are over."}
               {f.next_deal ? ` He's signed for next season at ${money(f.next_deal.amount)}.` : ""}</p>
           )}
         </Panel>

@@ -121,7 +121,7 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
             {p.stars ? <span className="chip">{"★".repeat(p.stars)} recruit{p.natl_rank ? `, No. ${p.natl_rank}` : ""}</span> : null}
             {injury && <span className="chip bad">Injured: {injury.type}, {outUntil(injury)}</span>}
             {data.awards.some((a) => a.type === "heisman") && <span className="chip gold">Heisman winner</span>}
-            {data.future && !data.future.watch.leaving && <a href={`#/l/${id}/player/${p.id}/future`} onClick={() => setTab("future")}><WatchChip w={data.future.watch} hero /></a>}
+            {data.future && !data.portal && !data.future.watch.leaving && <a href={`#/l/${id}/player/${p.id}/future`} onClick={() => setTab("future")}><WatchChip w={data.future.watch} hero /></a>}
             {data.portal && <span className="chip bad">{data.portal.status === "open" ? "In the transfer portal" : data.portal.status === "committed" ? "Transferring" : "Left the portal unsigned"}</span>}
           </div>
         </div>
@@ -134,8 +134,8 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
         <button className={tab === "ratings" ? "on" : ""} onClick={() => setTab("ratings")}>Ratings</button>
         <button className={tab === "stats" ? "on" : ""} onClick={() => setTab("stats")}>Stats ({log.length} games)</button>
         <button className={tab === "bio" ? "on" : ""} onClick={() => setTab("bio")}>Background</button>
-        {data.future && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Future {data.future.watch.watch !== "settled" && !data.future.watch.leaving ? <span className={`dot w-${data.future.watch.watch}`} /> : null}</button>}
-        {data.portal && !data.future && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Portal</button>}
+        {data.future && !data.portal && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Future {data.future.watch.watch !== "settled" && !data.future.watch.leaving ? <span className={`dot w-${data.future.watch.watch}`} /> : null}</button>}
+        {data.portal && <button className={tab === "future" ? "on" : ""} onClick={() => setTab("future")}>Portal</button>}
       </div>
       {tab === "ratings" && (
         <div className="cols">
@@ -170,8 +170,7 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
         </div>
       )}
       {tab === "stats" && <GameLog log={log} />}
-      {tab === "future" && data.future && <FutureTab f={data.future} />}
-      {tab === "future" && !data.future && data.portal && <PortalCard row={data.portal} />}
+      {tab === "future" && (data.portal ? <PortalCard row={data.portal} /> : data.future && <FutureTab f={data.future} />)}
       {tab === "bio" && (
         <div className="cols even">
           <Panel title="Background">

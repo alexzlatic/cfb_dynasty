@@ -35,13 +35,13 @@ Settings (`pcsa`) before the season's first game; switching re-signs every roste
 - **Retention fund:** each school may pay up to $22.5M a year above the cap to players who have completed a
   season there (football gets 75%, as of the cap). A school funds it with booster money that used to go
   through its collective (up to 60% of it), so the total roster budget barely moves but more of it is
-  the school's, and only returning players can get it. Until the portal arrives, "returning" means any
-  player past his first year.
+  the school's, and only returning players can get it: players who have completed a season at the school
+  (not transfers who just arrived).
 - **Tighter fair-market value:** NIL deals must pay what a business would pay him, so the review's
   ceiling drops to two and a half times his value plus $250K.
-- **Later:** one free transfer, five years to play (from 19 or high school graduation), no head coach
-  leaving for another school mid-season, conferences capped at 20 teams and a 5% agent fee cap come with
-  the transfer portal and career moves (M3).
+- **Transfers and eligibility:** one free transfer (a second costs a season) and five seasons in five
+  years; see [portal.md](portal.md). The ban on head coaches leaving mid-season comes with career moves
+  (M4); the 20-team conference cap and 5% agent fee cap don't affect play.
 
 A player's **value** (`playerValue` in `money.ts`) is what the national market pays a player like him in a
 year, revenue share and NIL together. It depends on position and overall rating, with a soft ceiling (a
@@ -53,8 +53,8 @@ recruiting hype, which fades over two years.
 Each Monday every player weighs his pay against what his school pays for value across its roster, and his
 playing time against his worth (`morale.ts`). Three things hurt: a starter paid well below that, a player
 whose value says he should start sitting on the bench, and a backup paid more than the starters at his
-position. Morale moves 30% of the way toward how he feels each week, and it is saved for the transfer
-portal in M3. A unit's starters' morale moves its chemistry, measured against the rest of the country so the
+position. Morale moves 30% of the way toward how he feels each week, and it weighs on whether he enters
+the transfer portal (portal.md). A unit's starters' morale moves its chemistry, measured against the rest of the country so the
 scouted view stays unbiased. An entirely unpaid starting lineup costs about 0.8 points a game.
 
 ## Budget, game day and facilities

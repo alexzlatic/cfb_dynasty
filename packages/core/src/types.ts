@@ -129,7 +129,8 @@ export interface Settings {
    * Play under the Protect College Sports Act (passed by the Senate in September 2026, awaiting the House):
    * a retention fund above the revenue-share cap for players who have completed a season at the school,
    * paid from booster money that used to go through collectives, and a tighter fair-market-value test for
-   * NIL deals. Its transfer, eligibility and coaching rules arrive with the portal and career moves.
+   * NIL deals, one free transfer (a second costs a season) and five seasons in five years. Its coaching
+   * rule arrives with career moves.
    */
   pcsa: boolean;
 }

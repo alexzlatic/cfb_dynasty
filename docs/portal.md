@@ -39,21 +39,25 @@ His chance to enter is the logistic of minus the total.
 The level he'd land at is the best of power, Group of Five and FCS among the levels that would want him
 (where he's within reach of their starters).
 
+Money counts double the recruits' weight: pay is the one lever you control directly, so a player who's
+only underpaid can be kept by paying him.
+
 **Reasons** are the factors pulling him away by a meaningful amount, worst first. **What keeps him** is
-`payFor`: the pay that brings his chance below 12% (Settled), or "money won't fix it" when even two and a
-half times his value doesn't.
+`payFor`: the pay that brings his chance down to 25% (`COMMIT`, the least he'll commit to stay for), or
+"money won't fix it" when even two and a half times his value doesn't ("not money alone" when pay is one
+of several reasons). A player who has committed shows as Committed.
 
 **Watch levels:** under 12% Settled, under 30% Restless, under 60% Shopping, otherwise Likely gone.
 
 **What you know:** until you talk with him, your staff reads him as a typical personality, so his reasons
-and number are estimates (shown as a wider range). A talk (five a week) reveals his real personality and
-lifts his morale a little.
+and number are estimates (shown as a wider range), and it only half sees his own pull this year. A talk
+(five a week) reveals his real personality and lifts his morale a little.
 
 ## Renewal talks (no arbitration)
 
 When talks open every player you have posts a status:
 
-- **Staying:** settled at what staying pays him now; he'll commit at that.
+- **Staying:** what staying pays him now is enough; he'll commit at that.
 - **Wants a raise:** money would settle him; he asks his number plus a margin (money-first players push hardest).
 - **Testing the market / Leaving:** money won't fix it (playing time, fit, home, winning or unhappiness).
 - **Weighing the NFL / Out of eligibility:** not part of the talks.
@@ -61,16 +65,17 @@ When talks open every player you have posts a status:
 Players under a multi-year deal renegotiate too: every player is effectively a free agent each winter.
 
 **Negotiating.** You offer an amount and a length. He answers in one or two days: at or above the least he'll
-commit for (the pay that settles him), he commits to stay. Below it he declines and names a number part of
-the way down from his last, never below that least amount. Each decline costs a round of patience (two
-for steady players, four... see `patienceOf`: mercenaries 2, steady 4, others 3); an offer under 70% of his
-number insults him (two rounds and a morale hit). Out of patience, he stops talking and enters the portal.
-There is no arbitration: with no deal by December 31, a player who wanted one enters on January 2.
+commit for, he commits to stay. Below it he declines and names a number part of the way down from his
+last, never below that least amount. Each decline costs a round of patience (mercenaries have 2, steady
+players 4, everyone else 3); an offer under 70% of his number insults him (two rounds and a morale hit).
+Out of patience, he stops talking and enters the portal. There is no arbitration: with no deal by
+December 31, a player who wanted one enters on January 2.
 
 **Your standing rule** keeps you from negotiating with a hundred players: re-sign everyone asking up to
 110% of value; for the rest the staff offers up to 100%; let reserves go when they ask more than $25K and
 won't start; keep renewals under 80% of next season's budget. Your top 30 players by value always come
-to you ("Needs you"). Tick "I'll decide" on a player to keep the staff's December 31 plan off him.
+to you ("Needs you"); any you don't get to get the standard offer on December 31. Tick "I'll decide" on a
+player to keep the staff's December 31 plan off him (then no deal means the portal).
 
 **Promises.** You can promise a starting job next season, one per starting spot at a position. It counts as
 starting in his score. If he isn't starting by your fourth game, the promise is broken: morale drops hard.
@@ -80,12 +85,12 @@ starting in his score. If he isn't starting by your fourth game, the promise is 
 Each day every AI school works out what it still needs at each position next season: open spots on a full
 roster (counting returning players, its signed recruits and transfers already in), starting jobs no
 returning player can hold, and upgrades on its two-deep. It offers to the best fits in reach of its level
-(a school doesn't chase players far above its starters, and moves on from players already holding a
-crowd of offers), paying his value at its own pay rate, from its style's share of next season's budget
+(only the most prestigious programs chase anyone; others stay within reach of their starters; everyone
+moves on from players already holding a crowd of offers), paying his value at its own pay rate, from its style's share of next season's budget
 (portal and win-now schools 40%, balanced 30%, developers 20%). Out of money it can still offer a
 scholarship to players with no market value.
 
-Players holding offers commit with a daily chance that grows through the window, picking by the recruits'
+Nobody commits the day he enters. After that, players holding offers commit with a daily chance that grows through the window, picking by the recruits'
 choice model (money against his value, playing time, development, prestige and record, distance, his old
 school) plus your pitch calls (six a day; each builds interest, up to four). Most FBS players whose best road
 leads down to FCS stop playing instead.
@@ -112,15 +117,32 @@ From the January 2026 portal (CFBD's portal list matched to the 2025 rosters,
 
 | | real | winter 1 | winter 2 | winter 3 |
 |---|---|---|---|---|
-| FBS entrants a team | 24.2 | 21.3 | 19.9 | 20.1 |
-| Entry rate, P4 / G5 | 22.1% / 18.4% | 21.1 / 16.1 | 22.1 / 15.9 | 22.8 / 15.7 |
-| P4 entry by seasons in college (0, 1, 2, 3) | 16, 28, 28, 21 | 16.5, 28.2, 26.4, 22.1 | 17.7, 31.3, 29.9, 22.5 | 17.7, 32.6, 31.6, 22.6 |
-| No school, P4 / G5 entrants | 14.8% / 29.8% | 13.7 / 26.3 | 16.9 / 24.5 | 20.7 / 29.4 |
-| G5 to P4 | 482 | 350 | 321 | 248 |
-| P4 to P4 | 873 | 752 | 693 | 628 |
-| P4 to G5 | 545 | 482 | 368 | 300 |
+| FBS entrants a team | 24.2 | 21.4 | 19.2 | 20.6 |
+| Entry rate, P4 / G5 | 22.1% / 18.4% | 20.5 / 16.8 | 20.1 / 16.7 | 22.3 / 17.0 |
+| P4 entry by seasons in college (0, 1, 2, 3) | 16, 28, 28, 21 | 15.8, 26.5, 26.9, 21.7 | 14.6, 27.9, 29.5, 20.2 | 16.3, 31.5, 31.2, 22.7 |
+| No school, P4 / G5 entrants | 14.8% / 29.8% | 11.3 / 22.9 | 14.9 / 25.6 | 17.5 / 27.7 |
+| G5 to P4 | 482 | 441 | 326 | 304 |
+| P4 to P4 | 873 | 766 | 709 | 679 |
+| P4 to G5 | 545 | 497 | 308 | 326 |
 
-Entry rates, the shape by year and the no-school shares hold. Moves between levels run 15-30% light in the
-first winter and drift down after it (power schools fill more of their needs with freshmen once the sim's
-own recruiting classes arrive); worth revisiting with the coaching carousel (M4). A full winter runs in
-about ten seconds headless.
+Entry rates, the shape by year and the no-school shares hold. In the first winter all of the top 100 FBS
+entrants found schools, 96 of them at power programs. Moves between levels run 10-20% light in the first
+winter and drift lower after it, P4 to G5 most (power schools fill more of their needs with freshmen once
+the sim's own recruiting classes arrive); worth revisiting with the coaching carousel (M4). A full winter
+runs in about ten seconds headless.
+
+## Screens
+
+- **My Team > Retention:** the portal watch for every player all season (counts by level, reasons, what
+  keeps him), next season's budget, and in December the talks: your standing rule, each player's status
+  and number, one-click "Pay his number", and a link to his talks.
+- **Player page:** a watch chip in the header and a **Future** tab: the chance he enters with its
+  reasons, what keeps him, talk and promise buttons, the negotiation card (status, his number, market,
+  patience, your offer and when he answers, I'll decide, let him go) and five players like him with their
+  pay. Players in the portal show a **Portal** tab instead (why he left, his ask, where he's leaning,
+  your bid, or "bring him back" for your own).
+- **Recruiting > Transfer portal:** your needs by position (click to filter), your money left after
+  offers, and every entrant with his reasons, ask, offers, where he's leaning, your bid and pitch.
+- **Home:** a "Needs you" card: players in talks waiting on you, answers due, key players shopping, the
+  portal open.
+- The calendar's "To next event" stops when talks open and when the portal opens.

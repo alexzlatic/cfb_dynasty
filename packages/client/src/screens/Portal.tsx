@@ -58,7 +58,7 @@ export function PortalCard({ row: r }: { row: PortalRow }) {
           <tr><td>Offers</td><td>{r.offers}</td></tr>
           {r.costs_season && <tr><td></td><td className="loss small">A second transfer: he'd lose a season of eligibility.</td></tr>}
         </tbody></table>
-        {state.user_team_id != null && r.status === "open" && <p>Your offer: <Bid r={r} /></p>}
+        {state.user_team_id != null && r.status === "open" && <p>{r.from === state.user_team_id ? "Bring him back: " : "Your offer: "}<Bid r={r} /></p>}
       </Panel>
       <Panel title="Where he's leaning">
         {r.status !== "open" ? <Leaning r={r} /> : r.top.length ? (

@@ -1781,17 +1781,19 @@ export class Season {
     const ctx = this.stayContext(p);
     // Your staff only half sees his own pull this year until you've talked with him.
     if (!this.known(pid)) ctx.noise *= 0.5;
-    const r = stayScore(ctx, w), keep = payFor(ctx, w, COMMIT), walk = keep;
+    // A player who's committed for next season isn't going anywhere.
+    const committed = s.talks?.[pid]?.outcome === "signed";
+    const r0 = stayScore(ctx, w), r = committed ? { ...r0, p: 0 } : r0, keep = payFor(ctx, w, COMMIT), walk = keep;
     const leaving = this.leavingSet().has(pid) || p.years + 1 >= 5;
-    const reasons = reasonsOf(r).map((x) => ({ ...x, label: REASON_WORDS[x.reason] }));
+    const reasons = committed ? [] : reasonsOf(r).map((x) => ({ ...x, label: REASON_WORDS[x.reason] }));
     // The first reason money can't answer.
     const top = reasons.find((x) => x.reason !== "pay")?.reason;
     const why = top === "playing" ? (ctx.start_away > ctx.start_here ? `He wants to start: he's behind ${STARTERS[p.pos] === 1 ? "the starter" : "the starters"} here and would start elsewhere.` : "He wants more playing time.")
       : top === "winning" ? "He wants to play for a winner." : top === "home" ? "He wants to be closer to home." : top === "fit" ? "He doesn't fit your scheme." : top === "development" ? "He doesn't think he's developing here." : top === "unhappy" ? "He's unhappy here." : null;
     return {
-      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
+      p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: committed ? "Committed" : WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
       reasons, leaving, value: ctx.value, pay: ctx.pay, keep, walk_range: walk == null ? null : [roundPay(walk * (this.known(pid) ? 0.95 : 0.8)), roundPay(walk * (this.known(pid) ? 1.05 : 1.25))],
-      fix: leaving ? "He's out of eligibility after this season." : keep == null ? `${reasons[0]?.reason === "pay" ? "Money alone won't settle him." : "Money won't fix this."} ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : `Pay him ${money(keep)} next season and he'll commit to stay.`,
+      fix: leaving ? "He's out of eligibility after this season." : committed ? `He's committed to stay next season (${money(s.next_deals?.[pid]?.amount ?? ctx.pay)}).` : keep == null ? `${reasons[0]?.reason === "pay" ? "Money alone won't settle him." : "Money won't fix this."} ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : this.known(pid) ? `Pay him ${money(keep)} next season and he'll commit to stay.` : `Your staff thinks about ${money(keep)} next season would keep him.`,
       promise: s.promises?.[pid] ?? null,
     };
   }
@@ -2026,6 +2028,8 @@ export class Season {
         const plan = t.plan;
         if (plan?.kind === "renew") s.talks[t.pid] = this.sign(t, plan.amount ?? 0, 1, "staff");
         else if (plan?.kind === "offer" && t.walk != null && t.walk <= (plan.amount ?? 0)) s.talks[t.pid] = this.sign(t, t.walk, 1, "staff");
+        // Players you didn't get to get the rule's standard offer.
+        else if (plan?.kind === "needs_you" && t.walk != null && t.walk <= (s.renewal_rule ?? DEFAULT_RULE).offer_up_to * this.stayContext(this.playerById.get(t.pid)!).value) s.talks[t.pid] = this.sign(t, t.walk, 1, "staff");
         else if (plan?.kind === "let_go") s.talks[t.pid] = { ...t, outcome: "let_go" };
         else if (t.status === "raise") s.talks[t.pid] = { ...t, outcome: "portal" };
       }
@@ -2133,7 +2137,7 @@ export class Season {
         const cands = (byPos.get(pos) ?? []).filter((e) => e.from !== t.id && e.offers.length < CROWD && !e.offers.some((o) => o.team_id === t.id))
           .map((e) => ({ e, p: this.playerById.get(e.pid)! })).map((x) => ({ ...x, o: ovrNext(x.p) }))
           // Someone who'd start, or add real depth; not a player far above what the school can attract.
-          .filter((x) => x.o >= need.floor && x.o <= bar + (nx.prestige >= 70 ? 12 : nx.tier === 0 ? 6 : nx.tier === 1 ? 5 : 4))
+          .filter((x) => x.o >= need.floor && x.o <= bar + (nx.prestige >= 70 ? 40 : nx.tier === 0 ? 12 : nx.tier === 1 ? 5 : 4))
           .map((x) => ({ ...x, sv: schoolValue({ value: Math.max(10_000, playerValue({ pos, ovr: x.o, stars: x.p.stars, years: x.p.years + 1 })), need: need.starter ? 1.4 : 1, fit: 0, style, source: "transfer", years: x.p.years + 1 }) / (1 + 0.3 * x.e.offers.length) + 1000 * hashGauss(t.id, x.e.pid, s.year) }))
           .sort((a, b2) => b2.sv - a.sv || a.e.pid - b2.e.pid);
         for (const c of cands) {
