@@ -20,7 +20,13 @@ export interface DevelopmentView {
 
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number } | null; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number } | null; nil: NilDeal | null; eligibility: number; starter: boolean; gp: number;
+}
+export interface NilDeal { amount: number; asked?: number; status: "approved" | "cut"; date: string }
+export interface CollectiveView {
+  team_id: number | null; mine: boolean; base: number; reserve: number; focus: string[]; focus_max: number; positions: string[]; spent: number;
+  deals: { pid: number; name: string; pos: string; ovr: number; value: number; ceiling: number; revenue_share: number; deal: NilDeal }[];
+  conference: { team_id: number; base: number; spent: number }[];
 }
 export interface PayrollView {
   team_id: number | null; year: number; cap: number; football_share: number; pool: number; payroll: number; mine: boolean;
@@ -66,6 +72,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),
   development: (id: string) => req<DevelopmentView>(`/api/leagues/${id}/development`),
   leaders: (id: string) => req<Record<string, StatRow[]>>(`/api/leagues/${id}/leaders`),

@@ -20,3 +20,4 @@ export * from "./awards.ts";
 export * from "./career.ts";
 export * from "./hidden.ts";
 export * from "./money.ts";
+export * from "./collective.ts";

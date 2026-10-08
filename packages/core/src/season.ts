@@ -4,12 +4,13 @@ import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday
 import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { POSITIONS, playerName, type RatedPlayer } from "./players.ts";
+import { POSITIONS, playerName, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
+import { FOCUS_MAX, RESERVE, collectiveBase, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
 import { activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
@@ -83,6 +84,9 @@ export interface SeasonState {
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
   contracts?: Record<number, Contract>;
   pools?: Record<number, number>;
+  /** Each school's collective (booster NIL money) and its deals by player id. */
+  collectives?: Record<number, CollectiveState>;
+  nil?: Record<number, NilDeal>;
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -233,6 +237,7 @@ export class Season {
     const season = new Season(state, seed);
     season.startHidden(seed.coaches ?? []);
     season.startMoney();
+    season.startCollectives();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
   }
@@ -287,6 +292,7 @@ export class Season {
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
     this.adMeetings(today, rep);
+    this.collectiveMonth(today);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -377,6 +383,70 @@ export class Season {
     s.contracts = contracts;
   }
 
+  /** Each collective's opening deals: most of its year's money, held back a little for the season. */
+  startCollectives(): void {
+    const s = this.state;
+    s.collectives = {};
+    s.nil = {};
+    for (const t of this.teams) {
+      const base = collectiveBase(t);
+      if (!base) continue;
+      s.collectives[t.id] = { base, reserve: base };
+      this.collectiveRound(t.id, base * (1 - RESERVE), s.date);
+    }
+  }
+
+  /** A player's pay this year: his revenue-share contract and his NIL deal. */
+  pay(pid: number): number {
+    const s = this.state;
+    return (activeContract(s.contracts?.[pid], s.year)?.amount ?? 0) + (s.nil?.[pid]?.amount ?? 0);
+  }
+
+  /** A collective spends up to `budget` of its reserve; every deal goes through the review. */
+  private collectiveRound(teamId: number, budget: number, date: ISODate): void {
+    const s = this.state, c = s.collectives![teamId];
+    const starters = new Set(Object.values(this.depthChart(teamId)).map((ids) => ids[0]));
+    const targets: NilTarget[] = this.roster(teamId).map((p) => ({ id: p.id, pos: p.pos, value: playerValue(p), pay: this.pay(p.id), starter: starters.has(p.id) }));
+    const value = new Map(targets.map((x) => [x.id, x.value]));
+    for (const [pid, extra] of spend(targets, Math.min(budget, c.reserve), c.focus)) {
+      const was = s.nil![pid]?.amount ?? 0;
+      const d = review(was + extra, value.get(pid)!, date);
+      // What the review cut stays with the collective.
+      if (d.amount <= was) continue;
+      c.reserve -= d.amount - was;
+      s.nil![pid] = d;
+    }
+    c.reserve = Math.max(0, Math.round(c.reserve));
+  }
+
+  /** Donors give more when a team wins beyond expectations and less when it loses. */
+  private donors(g: Game, homeChance: number): void {
+    const s = this.state;
+    const homeWon = g.home_score! > g.away_score! ? 1 : 0;
+    for (const [id, d] of [[g.home_id, homeWon - homeChance], [g.away_id, homeChance - homeWon]] as const) {
+      const c = s.collectives?.[id];
+      if (c) c.reserve = Math.max(0, Math.round(c.reserve + 0.04 * c.base * d));
+    }
+  }
+
+  /** On the first of each month in the season every collective spends what it has on hand. */
+  private collectiveMonth(today: ISODate): void {
+    const s = this.state;
+    if (!s.collectives || today.slice(8) !== "01" || !["09", "10", "11", "12"].includes(today.slice(5, 7))) return;
+    for (const t of this.teams) {
+      const c = s.collectives[t.id];
+      if (c && c.reserve >= 0.05 * c.base) this.collectiveRound(t.id, c.reserve - 0.05 * c.base, today);
+    }
+  }
+
+  /** Ask your collective to spend on these positions (at most three; empty for no preference). */
+  setCollectiveFocus(focus: Pos[]): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.collectives?.[me]) throw new Error("your school has no collective");
+    if (focus.length > FOCUS_MAX) throw new Error(`ask for at most ${FOCUS_MAX} positions`);
+    s.collectives = { ...s.collectives, [me]: { ...s.collectives[me], focus: [...new Set(focus)] } };
+  }
+
   /** A player's market value this year. */
   value(pid: number): number {
     const p = this.playerById.get(pid);
@@ -449,6 +519,7 @@ export class Season {
   private updateMorale(g: Game): void {
     const s = this.state;
     const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
+    this.donors(g, p);
     const homeWon = g.home_score! > g.away_score! ? 1 : 0;
     for (const [id, d] of [[g.home_id, homeWon - p], [g.away_id, p - homeWon]] as const) {
       s.morale![id] = Math.round(Math.max(-1.5, Math.min(1.5, (s.morale![id] ?? 0) * 0.9 + 0.3 * d)) * 100) / 100 + 0; // + 0: no -0, which a save turns into 0

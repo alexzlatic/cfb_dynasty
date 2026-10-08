@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { AWARD_NAMES, activeContract, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { AWARD_NAMES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -117,12 +117,26 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!t) return { team_id: null };
         const starters = new Set(Object.values(S.depthChart(team)).map((ids) => ids[0]).filter((x) => x != null));
         const players = S.roster(team).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr,
-          value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
+          value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
           gp: s.player_stats?.[pl.id]?.gp ?? 0 }));
         const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === t.conference).map((x) => ({ team_id: x.id, pool: s.pools?.[x.id] ?? 0, payroll: S.payroll(x.id) }))
           .sort((a, b) => b.payroll - a.payroll);
         return { team_id: team, year: s.year, cap: revenueCap(s.year), football_share: FOOTBALL_SHARE, pool: s.pools?.[team] ?? 0, payroll: S.payroll(team),
           mine: team === s.user_team_id, players, conference };
+      }
+      case route === "collective": {
+        // A school's collective: its money, its deals and what the review did to them.
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        const c = s.collectives?.[team];
+        if (!c) return { team_id: null };
+        const deals = S.roster(team).filter((pl) => s.nil?.[pl.id]).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, ovr: pl.ovr,
+          value: S.value(pl.id), ceiling: fmvCeiling(S.value(pl.id)), revenue_share: activeContract(s.contracts?.[pl.id], s.year)?.amount ?? 0, deal: s.nil![pl.id] }))
+          .sort((a, b) => b.deal.amount - a.deal.amount);
+        const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === S.teamById.get(team)!.conference && s.collectives?.[x.id])
+          .map((x) => ({ team_id: x.id, base: s.collectives![x.id].base, spent: S.roster(x.id).reduce((a, pl) => a + (s.nil?.[pl.id]?.amount ?? 0), 0) }))
+          .sort((a, b) => b.spent - a.spent);
+        return { team_id: team, mine: team === s.user_team_id, base: c.base, reserve: c.reserve, focus: c.focus ?? [], focus_max: FOCUS_MAX, positions: POSITIONS,
+          spent: deals.reduce((a, d) => a + d.deal.amount, 0), deals, conference };
       }
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {

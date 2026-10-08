@@ -357,21 +357,38 @@ describe("money", () => {
     const other = await getR(`/api/leagues/${id}/payroll?team=135`);
     expect(other.mine).toBe(false);
 
+    // The collective: deals under review, your focus, and donors who follow the results.
+    const col = await getR(`/api/leagues/${id}/collective`);
+    expect(col.mine).toBe(true);
+    expect(col.deals.length).toBeGreaterThan(20);
+    for (const d of col.deals) expect(d.deal.amount).toBeLessThanOrEqual(d.ceiling);
+    const focus = (f: unknown) => postR(`/api/leagues/${id}/actions`, { type: "set_collective_focus", payload: { focus: f } });
+    expect((await focus(["QB", "OL", "CB", "S"])).error).toMatch(/at most 3/);
+    expect((await focus(["XX"])).error).toMatch(/positions/);
+    expect((await focus(["OL", "CB"])).ok).toBe(true);
+    const before = lg.season.state.collectives![2509].reserve;
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-02" } });
+    expect(lg.season.state.collectives![2509].reserve).toBeLessThan(before);
+
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);
     const { League } = await import("../src/league.ts");
     const again = League.open("money-check", manager.path(id));
     expect(again.season.state.contracts).toEqual(lg.season.state.contracts);
+    expect(again.season.state.nil).toEqual(lg.season.state.nil);
+    expect(again.season.state.collectives).toEqual(lg.season.state.collectives);
     again.close();
-  }, 60_000);
+  }, 120_000);
 
   it("a league saved before money gets its contracts when opened", async () => {
     const lg = manager.create({ name: "Pre-money save", user_team_id: 2509, seed: 5 });
     const want = lg.season.state.contracts;
-    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools')");
+    const nil = lg.season.state.nil;
+    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'collectives', 'nil')");
     const { League } = await import("../src/league.ts");
     const again = League.open("pre-money", manager.path(lg.id));
     expect(again.season.state.contracts).toEqual(want);
+    expect(again.season.state.nil).toEqual(nil);
     again.close();
   }, 60_000);
 });

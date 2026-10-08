@@ -15,7 +15,7 @@ export function PayrollScreen({ tid }: { tid?: number }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const rows = useMemo(() => {
-    const pay = (p: PayrollPlayer) => p.contract?.amount ?? 0;
+    const pay = (p: PayrollPlayer) => (p.contract?.amount ?? 0) + (p.nil?.amount ?? 0);
     return [...(data?.players ?? [])].sort((a, b) => sort === "pay" ? pay(b) - pay(a) || b.value - a.value : sort === "pos" ? a.pos.localeCompare(b.pos) || b.value - a.value
       : sort === "gap" ? (pay(a) - a.value) - (pay(b) - b.value) : b.value - a.value || b.ovr - a.ovr);
   }, [data, sort]);
@@ -64,17 +64,17 @@ export function PayrollScreen({ tid }: { tid?: number }) {
         </Panel>
       </div>
       <Panel title="Players" right={<span className="seg small">
-        {(["value", "pay", "gap", "pos"] as const).map((k) => <button key={k} className={sort === k ? "on" : ""} onClick={() => setSort(k)}>{k === "value" ? "Value" : k === "pay" ? "Pay" : k === "gap" ? "Most underpaid" : "Position"}</button>)}</span>}>
+        {(["value", "pay", "gap", "pos"] as const).map((k) => <button key={k} className={sort === k ? "on" : ""} onClick={() => setSort(k)}>{k === "value" ? "Value" : k === "pay" ? "Paid most" : k === "gap" ? "Most underpaid" : "Position"}</button>)}</span>}>
         {err && <p className="error small">{err}</p>}
         <table className="grid tight">
-          <thead><tr><th>Player</th><th>Class</th><th className="num">Ovr</th><th className="num">GP</th><th className="num">Value</th><th className="num">Pay</th><th className="num" title="Pay as a share of his value">Of value</th><th>Through</th>{data.mine && <th></th>}</tr></thead>
+          <thead><tr><th>Player</th><th>Class</th><th className="num">Ovr</th><th className="num">GP</th><th className="num">Value</th><th className="num">Revenue share</th><th className="num" title="His collective deal">NIL</th><th className="num" title="Revenue share and NIL as a share of his value">Of value</th><th>Through</th>{data.mine && <th></th>}</tr></thead>
           <tbody>{rows.map((p) => {
-            const pay = p.contract?.amount ?? 0, pct = p.value ? pay / p.value : null;
+            const pay = p.contract?.amount ?? 0, nil = p.nil?.amount ?? 0, pct = p.value ? (pay + nil) / p.value : null;
             return (
               <tr key={p.pid}>
                 <td><a href={`#/l/${id}/player/${p.pid}`}>{p.name}</a> <span className="muted small">{p.pos}{p.starter ? "" : " (backup)"}</span></td>
                 <td className="muted">{p.class}</td><td className="num">{p.ovr}</td><td className="num muted">{p.gp}</td>
-                <td className="num">{money(p.value)}</td><td className="num">{pay ? money(pay) : <span className="muted">none</span>}</td>
+                <td className="num">{money(p.value)}</td><td className="num">{pay ? money(pay) : <span className="muted">none</span>}</td><td className="num muted">{nil ? money(nil) : ""}</td>
                 <td className={"num " + (pct == null ? "" : pct < 0.5 && p.starter ? "loss" : pct > 1.2 ? "win" : "muted")}>{pct == null ? "" : `${Math.round(pct * 100)}%`}</td>
                 <td className="muted small">{p.contract ? `${p.contract.start + p.contract.years - 1}-${String(p.contract.start + p.contract.years).slice(2)}` : ""}</td>
                 {data.mine && <td>{editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay || p.value) / 1000)), years: Math.min(p.eligibility, p.contract?.years ?? 1) })}>{pay ? "Change" : "Offer"}</button>}</td>}
