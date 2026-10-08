@@ -240,6 +240,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return S.classRankings(Number(url.searchParams.get("cls") ?? s.year + 1)).slice(0, Number(url.searchParams.get("limit") ?? 50));
       }
       case route === "draft": return S.draftView();
+      case route === "retention": return S.retentionView();
+      case route === "portal": return S.portalView();
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {
         const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));
@@ -323,7 +325,10 @@ export function startServer(opts: ServerOptions, port: number): Server {
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).
-          staff: pl.team_id === s.user_team_id ? { ...S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), plan: s.lab?.[pl.id] ?? null } : null };
+          staff: pl.team_id === s.user_team_id ? { ...S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), plan: s.lab?.[pl.id] ?? null } : null,
+          // His future: your players' portal watch, talks and comparables; anyone's portal entry.
+          future: pl.team_id === s.user_team_id ? S.futureView(pl.id) : null,
+          portal: S.portalEntry(pl.id) };
       }
       case route === "schedule": {
         const team = url.searchParams.get("team"), date = url.searchParams.get("date"), week = url.searchParams.get("week");

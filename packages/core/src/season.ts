@@ -11,7 +11,7 @@ import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
 import {
-  DEFAULT_RULE, PITCHES_PER_DAY, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
+  DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
 } from "./portal.ts";
 import {
@@ -1740,7 +1740,7 @@ export class Season {
       ? homeTerm(miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }), p.home.state === t.venue.state) : homeTerm(250, false);
     const frozen = s.recruiting?.frozen?.year === s.year ? s.recruiting.frozen.schools[t.id] : undefined;
     return {
-      value, pay, ratio_away: away.ratio, demand: 1 + 0.8 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
+      value, pay, ratio_away: away.ratio, demand: 1 + 0.4 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
       start_here, start_away: best.start,
       dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
       fit: Math.max(-1.5, Math.min(1.5, hiddenPlayer(s.seed, s.year, p).fit)),
@@ -1779,16 +1779,19 @@ export class Season {
     if (!p) return null;
     const w = this.personaOf(pid, this.known(pid));
     const ctx = this.stayContext(p);
-    const r = stayScore(ctx, w), keep = payFor(ctx, w, 0.12), walk = payFor(ctx, w, 0.3);
+    // Your staff only half sees his own pull this year until you've talked with him.
+    if (!this.known(pid)) ctx.noise *= 0.5;
+    const r = stayScore(ctx, w), keep = payFor(ctx, w, COMMIT), walk = keep;
     const leaving = this.leavingSet().has(pid) || p.years + 1 >= 5;
     const reasons = reasonsOf(r).map((x) => ({ ...x, label: REASON_WORDS[x.reason] }));
-    const top = reasons[0]?.reason;
+    // The first reason money can't answer.
+    const top = reasons.find((x) => x.reason !== "pay")?.reason;
     const why = top === "playing" ? (ctx.start_away > ctx.start_here ? `He wants to start: he's behind ${STARTERS[p.pos] === 1 ? "the starter" : "the starters"} here and would start elsewhere.` : "He wants more playing time.")
       : top === "winning" ? "He wants to play for a winner." : top === "home" ? "He wants to be closer to home." : top === "fit" ? "He doesn't fit your scheme." : top === "development" ? "He doesn't think he's developing here." : top === "unhappy" ? "He's unhappy here." : null;
     return {
       p: Math.round(r.p * 1000) / 1000, watch: watchOf(r.p), label: WATCH_WORDS[watchOf(r.p)], known: this.known(pid), persona: this.known(pid) ? persona(s.seed, pid).kind : null,
       reasons, leaving, value: ctx.value, pay: ctx.pay, keep, walk_range: walk == null ? null : [roundPay(walk * (this.known(pid) ? 0.95 : 0.8)), roundPay(walk * (this.known(pid) ? 1.05 : 1.25))],
-      fix: leaving ? "He's out of eligibility after this season." : keep == null ? `Money won't fix this. ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : `Pay him ${money(keep)} next season and he's settled.`,
+      fix: leaving ? "He's out of eligibility after this season." : keep == null ? `${reasons[0]?.reason === "pay" ? "Money alone won't settle him." : "Money won't fix this."} ${why ?? ""}`.trim() : keep <= ctx.pay ? "He's happy with what he has." : `Pay him ${money(keep)} next season and he'll commit to stay.`,
       promise: s.promises?.[pid] ?? null,
     };
   }
@@ -1857,7 +1860,7 @@ export class Season {
       let status: TalkStatus;
       if (p.years + 1 >= 5) status = "graduating";
       else if (leaving.has(p.id) || (p.years >= 2 && (nfl.get(p.id) ?? 999) <= 100)) status = "nfl";
-      else if (activeContract(s.contracts?.[p.id], s.year + 1)) status = "contract";
+      // (Deals run a season at a time in practice: a player under a multi-year deal still renegotiates.)
       else status = "staying";
       talks[p.id] = this.planTalk({ pid: p.id, status, ask: null, walk: null, patience: patienceOf(persona(s.seed, p.id)) }, true);
     }
@@ -1874,7 +1877,8 @@ export class Season {
     const s = this.state, p = this.playerById.get(t.pid)!, w = persona(s.seed, t.pid), rule = s.renewal_rule ?? DEFAULT_RULE;
     if (t.status === "graduating" || t.status === "nfl" || t.status === "contract" || t.outcome) return t;
     const now = this.nextPay(p), ctx = this.stayContext(p, now);
-    const walk = payFor(ctx, w, 0.3), r = stayScore(ctx, w);
+    // The least he'd commit for.
+    const walk = payFor(ctx, w, COMMIT), r = stayScore(ctx, w);
     if (walk == null) t.status = r.p > 0.85 ? "leaving" : "testing";
     else t.status = walk <= now || ctx.value === 0 ? "staying" : "raise";
     t.walk = walk;
@@ -1885,8 +1889,8 @@ export class Season {
     if (t.status === "staying" && v === 0) t.plan = { kind: "renew", amount: 0 };
     else if (t.ask != null && t.ask <= rule.auto_up_to * v) t.plan = { kind: "renew", amount: t.ask };
     else if (t.ask != null && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
-    else if (t.walk != null && t.walk <= rule.offer_up_to * v && !important) t.plan = { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
-    else t.plan = important ? { kind: "needs_you" } : t.walk == null ? { kind: "let_go" } : { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
+    // Otherwise the staff offers up to the rule's share of his value; if money won't keep him, he decides for himself in January.
+    else t.plan = important ? { kind: "needs_you" } : { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
     return t;
   }
 
@@ -1922,9 +1926,10 @@ export class Season {
     const order = Object.values(talks).filter((t) => !t.outcome && !t.mine && t.plan?.kind === "renew")
       .sort((a, b2) => this.value(b2.pid) - this.value(a.pid) || a.pid - b2.pid);
     for (const t of order) {
-      const amount = t.plan!.amount ?? 0;
-      if (amount > room) continue;
-      room -= amount;
+      // (A player re-signed over a multi-year deal only costs the raise: his deal is already counted.)
+      const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : activeContract(s.contracts?.[t.pid], s.year + 1)?.amount ?? 0);
+      if (cost > room) continue;
+      room -= cost;
       talks[t.pid] = this.sign({ ...t }, amount, Math.min(2, eligibilityLeft({ years: this.playerById.get(t.pid)!.years + 1 })), "rule");
     }
     s.talks = talks;
@@ -2057,7 +2062,7 @@ export class Season {
     s.portal = { year: s.year, entries };
     this.portalCache = null;
     const fbs = entries.filter((e) => this.team(e.from).level === "fbs").length;
-    const big = entries.map((e) => this.playerById.get(e.pid)!).sort((a, b) => b.ovr - a.ovr).slice(0, 6);
+    const big = entries.map((e) => this.playerById.get(e.pid)!).sort((a, b) => this.value(b.id) - this.value(a.id) || b.ovr - a.ovr).slice(0, 6);
     rep.news.push(this.news(date, "portal", `The transfer portal opens: ${entries.length} players enter`,
       `${fbs} from FBS. Biggest names: ${big.map((p) => `${p.pos} ${playerName(p)} (${this.team(p.team_id).school})`).join(", ")}.`, big.map((p) => p.team_id)));
     if (me != null) {
@@ -2147,8 +2152,9 @@ export class Season {
     for (const e of open) {
       const u = rng.random(), v = rng.random();
       if (!e.offers.length) continue;
+      // (Nobody commits the day he enters: every school gets a day to call.)
       const days = daysBetween(e.entered, date);
-      if (u >= transferHazard(days, 0)) continue;
+      if (days < 1 || u >= transferHazard(days, 0)) continue;
       const p = this.playerById.get(e.pid)!;
       const scored = this.scoreOffers(e, p);
       const best = Math.max(...scored.map((x) => x.score));
@@ -2246,8 +2252,23 @@ export class Season {
   /** The portal as you see it: entrants with their asks, offers and top schools, and your needs and budget. */
   portalView() {
     const s = this.state, me = s.user_team_id, pt = s.portal;
-    const entries = (pt?.entries ?? []).filter((e) => e.entered <= s.date).map((e) => {
-      const p = this.playerById.get(e.pid)!;
+    const entries = (pt?.entries ?? []).filter((e) => e.entered <= s.date).map((e) => this.portalRow(e));
+    return {
+      year: pt?.year ?? null, open: !!pt && pt.year === s.year, window: s.events.find((e) => e.type === "portal_window")?.date ?? null,
+      entries, needs: me != null ? this.needsOf(me) : {}, budget: me != null ? this.nextBudget(me) : null,
+      offered: me != null ? (pt?.entries ?? []).filter((e) => e.status === "open").reduce((a, e) => a + (e.offers.find((o) => o.team_id === me)?.amount ?? 0), 0) : 0,
+      pitches_left: PITCHES_PER_DAY - (pt?.entries ?? []).filter((x) => (x as PortalEntry & { pitched?: string }).pitched === s.date).length,
+    };
+  }
+
+  /** One player's portal entry as you see it (null when he isn't in this winter's portal). */
+  portalEntry(pid: number) {
+    const s = this.state, e = s.portal?.year === s.year ? s.portal.entries.find((x) => x.pid === pid && x.entered <= s.date) : undefined;
+    return e ? this.portalRow(e) : null;
+  }
+
+  private portalRow(e: PortalEntry) {
+      const s = this.state, me = s.user_team_id, p = this.playerById.get(e.pid)!;
       const scored = e.status === "open" && e.offers.length ? this.scoreOffers(e, p) : [];
       const chances = scored.length ? softmax(scored.map((x) => x.score)) : [];
       const top = scored.map((x, i) => ({ team_id: x.team_id, share: Math.round(chances[i] * 100) })).sort((a, b) => b.share - a.share).slice(0, 5);
@@ -2257,12 +2278,22 @@ export class Season {
         from: e.from, entered: e.entered, reasons: e.reasons, ask: e.ask, offers: e.offers.length, status: e.status, to: e.to ?? null,
         top, mine: mine ? { amount: mine.amount, years: mine.years } : null, pitches: e.pitches ?? 0,
         costs_season: !!s.settings.pcsa && (s.moves?.[e.pid] ?? 0) >= 1,
+        offers_list: e.offers.map((o) => ({ team_id: o.team_id, amount: o.team_id === me ? o.amount : null, years: o.years, date: o.date })),
+        pitched_today: (e as PortalEntry & { pitched?: string }).pitched === s.date,
       };
-    });
+  }
+
+  /** A player's Future tab: his portal watch, what keeps him, the talks and players like him. Your players only. */
+  futureView(pid: number) {
+    const s = this.state, p = this.playerById.get(pid), me = s.user_team_id;
+    if (!p || me == null || p.team_id !== me) return null;
+    const row = this.retentionRow(p, new Set(Object.values(this.depthChart(me)).map((ids) => ids[0])));
+    const monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
     return {
-      year: pt?.year ?? null, open: !!pt && pt.year === s.year, window: s.events.find((e) => e.type === "portal_window")?.date ?? null,
-      entries, needs: me != null ? this.needsOf(me) : {}, budget: me != null ? this.nextBudget(me) : null,
-      offered: me != null ? (pt?.entries ?? []).filter((e) => e.status === "open").reduce((a, e) => a + (e.offers.find((o) => o.team_id === me)?.amount ?? 0), 0) : 0,
+      ...row, comparables: this.comparables(p), budget: this.nextBudget(me), rule: s.renewal_rule ?? DEFAULT_RULE,
+      talks_open: !!s.talks && !s.portal, talked: s.talked?.[pid] ?? null, eligibility: eligibilityLeft({ years: p.years + 1 }),
+      talks_left: TALKS_PER_WEEK - Object.values(s.talked ?? {}).filter((d) => d >= monday && d <= s.date).length,
+      dates: { talks: s.events.find((e) => e.type === "renewal_talks")?.date ?? null, portal: s.events.find((e) => e.type === "portal_window")?.date ?? null },
     };
   }
 
@@ -2271,20 +2302,23 @@ export class Season {
     const s = this.state, me = s.user_team_id;
     if (me == null) return null;
     const starters = new Set(Object.values(this.depthChart(me)).map((ids) => ids[0]));
-    const rows = this.roster(me).map((p) => {
-      const w = this.watchView(p.id)!, t = s.talks?.[p.id];
-      return {
-        pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
-        watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
-          deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null } : null,
-        pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
-      };
-    });
+    const rows = this.roster(me).map((p) => this.retentionRow(p, starters));
     const monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
     return {
-      talks_open: !!s.talks && !s.portal, rule: s.renewal_rule ?? DEFAULT_RULE, budget: this.nextBudget(me), rows,
+      talks_open: !!s.talks && !s.portal, portal_open: s.portal?.year === s.year && s.portal.entries.some((e) => e.status === "open"),
+      rule: s.renewal_rule ?? DEFAULT_RULE, budget: this.nextBudget(me), rows,
       talks_left: TALKS_PER_WEEK - Object.values(s.talked ?? {}).filter((d) => d >= monday && d <= s.date).length,
       dates: { talks: s.events.find((e) => e.type === "renewal_talks")?.date ?? null, portal: s.events.find((e) => e.type === "portal_window")?.date ?? null },
+    };
+  }
+
+  private retentionRow(p: RatedPlayer, starters: Set<number>) {
+    const s = this.state, w = this.watchView(p.id)!, t = s.talks?.[p.id];
+    return {
+      pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
+      watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
+        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null } : null,
+      pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
     };
   }
 

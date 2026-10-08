@@ -21,14 +21,18 @@ export const REASON_WORDS: Record<Reason, string> = {
 /** How likely a player looks to leave: the portal watch. */
 export type Watch = "settled" | "restless" | "shopping" | "gone";
 export const WATCH_WORDS: Record<Watch, string> = { settled: "Settled", restless: "Restless", shopping: "Shopping", gone: "Likely gone" };
-export const watchOf = (p: number): Watch => (p < 0.12 ? "settled" : p < 0.3 ? "restless" : p < 0.6 ? "shopping" : "gone");
+export const watchOf = (p: number): Watch => (p < SETTLED ? "settled" : p < 0.3 ? "restless" : p < 0.6 ? "shopping" : "gone");
+/** A player this unlikely to enter is settled. */
+export const SETTLED = 0.12;
+/** In the talks he commits to stay for the pay that brings his chance to enter this low (his walk-away number). */
+export const COMMIT = 0.25;
 
 /** Everything a player weighs about staying against leaving (built by the season from rosters, schools and money). */
 export interface StayContext {
   /** His market value next season (dollars a year) and what staying pays him next season. */
   value: number;
   pay: number;
-  /** What schools at the level he would land at pay for value (their pay over their roster's value), and how many would want him (1 to 1.8). */
+  /** What schools at the level he would land at pay for value (their pay over their roster's value), and how many would want him (1 to 1.4). */
   ratio_away: number;
   demand: number;
   /** His chance to start next season here, and at the level he would land at (0-1). */
@@ -62,15 +66,15 @@ export interface StayContext {
 }
 
 /** Score weights for college players (recruits' weights where the factor is shared; valuation.ts). */
-export const STAY_W = { money: 1.0, playing: 1.6, development: 0.6, fit: 0.35, winning: 0.6, home: 0.35, loyalty: 0.8 };
+export const STAY_W = { money: 2.0, playing: 1.6, development: 0.6, fit: 0.35, winning: 0.6, home: 0.35, loyalty: 0.8 };
 /**
  * What keeps a player put whatever the rest says (the hassle and risk of a move), by seasons in college.
  * Calibrated to the January 2026 portal (scripts/portal-real.ts): 16% of first-year power-conference
  * players entered, 28% of second- and third-year players, 21% of fourth-year players.
  */
-export const FRICTION = [-0.35, -1.2, -0.7, -0.2, 0.25];
+export const FRICTION = [0.3, -0.62, -0.05, 0.58, 0.95];
 /** Group of Five and FCS players enter a little less (18% against 22%): fewer places to go up to. */
-export const TIER_FRICTION = [0, 1.4, 1.9];
+export const TIER_FRICTION = [0, 1.3, 1.3];
 /** A player with nowhere better to play (little chance to start at the level he'd land at) mostly stays put. */
 export const NOWHERE = 0.8;
 /** Dropping a level (the exposure, the life and the money of a power program) holds players back, per level. */
@@ -115,7 +119,7 @@ export function stayScore(c: StayContext, w: Pick<Persona, "money" | "playing" |
 
 /**
  * The pay next season at which his chance to enter falls to `p` (null when no pay up to MONEY_CAP times his
- * value gets there: money won't fix it). Walk-away is p = 0.3; settled is p = 0.12.
+ * value gets there: money won't fix it). The talks use p = COMMIT: the least he'll commit to stay for.
  */
 export function payFor(c: StayContext, w: Persona, p: number): number | null {
   if (c.value <= 0) return stayScore(c, w).p <= p ? 0 : null;
@@ -183,7 +187,7 @@ export const patienceOf = (w: Persona) => (w.kind === "mercenary" ? 2 : w.kind =
 
 /** His opening ask from his walk-away number: money-first players push hardest. */
 export function openingAsk(walk: number, w: Persona): number {
-  return roundPay(walk * Math.max(1.03, 1.1 + 0.15 * (w.money - 1)));
+  return roundPay(walk * Math.min(1.3, Math.max(1.03, 1.1 + 0.15 * (w.money - 1))));
 }
 
 /** His answer to an offer: he stays at or above his walk-away number; else he declines and names his number (part of the way down), losing patience (more for a lowball). */

@@ -382,3 +382,50 @@ span.offered .logo { outline: 2px solid #e0b43a; border-radius: 50%; }
 .skill { display: flex; justify-content: space-between; align-items: center; background: var(--head); border-radius: 8px; padding: 6px 10px; }
 .skill b { font-family: var(--display); font-size: 22px; }
 table.draft td.nfl { font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+
+/* ---- keeping players and the portal ---- */
+:root { --w-settled: #1d8a3a; --w-restless: #c9a227; --w-shopping: #e07a1f; --w-gone: #c0392b; }
+.chip.watch { font-weight: 700; color: #fff; border-color: transparent; }
+.chip.watch.flat { padding: 0 8px; font-size: 11px; }
+.chip.watch.w-settled, .w-settled.dot { background: var(--w-settled); }
+.chip.watch.w-restless, .w-restless.dot { background: var(--w-restless); color: #2a1f00; }
+.chip.watch.w-shopping, .w-shopping.dot { background: var(--w-shopping); }
+.chip.watch.w-gone, .w-gone.dot { background: var(--w-gone); }
+.hero a .chip.watch { box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.pagetabs .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 4px; vertical-align: middle; }
+.meter { height: 10px; background: var(--head); border-radius: 99px; overflow: hidden; margin: 4px 0 6px; }
+.meter span { display: block; height: 100%; border-radius: 99px; }
+.meter .w-settled { background: var(--w-settled); } .meter .w-restless { background: var(--w-restless); } .meter .w-shopping { background: var(--w-shopping); } .meter .w-gone { background: var(--w-gone); }
+.reasons { display: grid; gap: 5px; margin-bottom: 6px; }
+.reason { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 8px; font-size: 13px; }
+.reason .track { height: 8px; background: var(--head); border-radius: 99px; overflow: hidden; }
+.reason .fill { display: block; height: 100%; background: var(--w-shopping); border-radius: 99px; }
+.reason .fill.money { background: var(--accent); }
+p.fixable { font-weight: 600; color: var(--accent); }
+.row-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+button.danger, .link.danger { color: var(--down); }
+.nego-head { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: var(--head); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+.nego-head b { font-size: 16px; }
+.dots { letter-spacing: 2px; color: var(--accent); }
+.offer-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.watchcounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.watchcounts div { border-radius: 8px; padding: 8px; color: #fff; display: flex; flex-direction: column; }
+.watchcounts div b { font-size: 26px; font-family: var(--display); line-height: 1; }
+.watchcounts .w-settled { background: var(--w-settled); } .watchcounts .w-restless { background: var(--w-restless); color: #2a1f00; }
+.watchcounts .w-shopping { background: var(--w-shopping); } .watchcounts .w-gone { background: var(--w-gone); }
+.budgetbar { height: 12px; background: var(--head); border-radius: 99px; overflow: hidden; margin-bottom: 8px; }
+.budgetbar span { display: block; height: 100%; background: var(--team); }
+p.rule input { margin: 0 2px; }
+b.needs { color: var(--down); }
+.needs-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.needs-grid .need { display: flex; flex-direction: column; align-items: center; min-width: 64px; padding: 6px 8px; }
+.needs-grid .need span { font-size: 11px; color: var(--muted); }
+.needs-grid .need.starter { border-color: var(--down); }
+.needs-grid .need.starter span { color: var(--down); font-weight: 600; }
+.needs-grid .need.on { background: var(--accent); color: #fff; } .needs-grid .need.on span { color: #fff; }
+.leaning { display: inline-flex; gap: 8px; }
+.leaning .mine { font-weight: 700; background: var(--mine); border-radius: 4px; padding: 0 3px; }
+.needsyou { background: var(--panel); border: 2px solid var(--down); border-radius: 8px; padding: 8px 14px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.needsyou h3 { margin: 0 0 4px; font-family: var(--display); text-transform: uppercase; color: var(--down); font-size: 18px; }
+.needsyou ul { margin: 0; padding-left: 18px; }
+.needsyou li { margin: 3px 0; }
