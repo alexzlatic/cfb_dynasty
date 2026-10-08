@@ -219,7 +219,7 @@ export function compileTeam(base: TeamRatings, l: Lineup, scheme: SchemeOffsets,
     rushers: shares(l, CARRY_SHARE, "carry", runTilt, 0.1, (x) => ({
       catch_mult: 1, ypc_mult: Math.exp(x.pos === "QB" ? 0.05 * at(x, "speed") : 0.05 * at(x, "vision") + 0.03 * at(x, "power") + 0.04 * at(x, "speed")),
     })),
-    receivers: shares(l, TARGET_SHARE, "target", recvTilt, 0.2, (x) => ({
+    receivers: shares(l, TARGET_SHARE, "target", recvTilt, 0.24, (x) => ({
       catch_mult: Math.exp(0.05 * at(x, "hands") + 0.04 * at(x, "route")),
       ypc_mult: Math.exp(0.06 * at(x, "speed") + 0.04 * at(x, "rac") + (x.pos === "WR" ? 0.08 : x.pos === "TE" ? -0.05 : -0.3)),
     })),
