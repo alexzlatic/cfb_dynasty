@@ -8,6 +8,8 @@ export * from "./controls.ts";
 export * from "./seed.ts";
 export * from "./polls.ts";
 export * from "./playoff.ts";
+export * from "./calls.ts";
+export * from "./live.ts";
 export * from "./writers.ts";
 export * from "./players.ts";
 export * from "./compiler.ts";

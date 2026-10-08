@@ -1,4 +1,6 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall } from "@cfb/core";
+export type { LiveView, LiveMode, UserCall };
+export type LiveResult = LiveView & { since: number; result?: Game };
 
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
@@ -47,6 +49,11 @@ export const api = {
   writer: (id: string, wid: number) => req<{ writer: WriterProfile; ballots: { date: string; team_ids: number[] }[]; stories: NewsItem[] }>(`/api/leagues/${id}/writers/${wid}`),
   ballots: (id: string, date: string) => req<{ writer_id: number; team_ids: number[] }[]>(`/api/leagues/${id}/ballots/${date}`),
   calendar: (id: string, from: string, to: string) => req<{ date: string; events: CalEvent[] }>(`/api/leagues/${id}/calendar?from=${from}&to=${to}`),
+  live: (id: string, since = 0) => req<LiveResult | null>(`/api/leagues/${id}/live?since=${since}`),
+  liveStart: (id: string, mode: Partial<LiveMode> = {}) => req<LiveResult>(`/api/leagues/${id}/live/start`, { method: "POST", body: JSON.stringify({ mode }) }),
+  liveCall: (id: string, call: UserCall, since: number, to_end = false) => req<LiveResult>(`/api/leagues/${id}/live/call`, { method: "POST", body: JSON.stringify({ call, since, to_end }) }),
+  liveMode: (id: string, mode: Partial<LiveMode>) => req<LiveResult>(`/api/leagues/${id}/live/mode`, { method: "POST", body: JSON.stringify({ mode }) }),
+  liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),
   act: (id: string, type: string, payload: unknown) => req<{ ok: boolean; date: string; days: number; played: number; stop: string | null }>(`/api/leagues/${id}/actions`, { method: "POST", body: JSON.stringify({ type, payload }) }),
 };
 

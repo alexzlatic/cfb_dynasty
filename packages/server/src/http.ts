@@ -89,6 +89,14 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return { ok: true, date: s.date, days: reps.length, played: reps.reduce((n, r) => n + r.played.length, 0), stop: reps.at(-1)?.stop ?? null };
       }
       case route === "actions": return lg.actions();
+      case route === "live" && req.method === "GET": return lg.live ? lg.live.view(Number(url.searchParams.get("since") ?? 0)) : null;
+      case route === "live/start" && req.method === "POST": return lg.startLive((await body(req)).mode ?? {});
+      case route === "live/call" && req.method === "POST": {
+        const b = await body(req);
+        return lg.liveCall(b.call ?? null, !!b.to_end, Number(b.since ?? 0));
+      }
+      case route === "live/mode" && req.method === "POST": return lg.liveMode((await body(req)).mode ?? {});
+      case route === "live/leave" && req.method === "POST": lg.live = null; return { ok: true };
       case route === "teams": return S.teams;
       case p[2] === "teams" && p.length === 4: {
         const id = Number(p[3]);

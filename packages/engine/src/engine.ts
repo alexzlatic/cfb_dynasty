@@ -141,6 +141,18 @@ function sampleCompletionYards(rng: Rng, mean: number): number {
 
 interface Player { name: string; pos: string; share: number; catch_mult: number; ypc_mult: number }
 
+/**
+ * A play call's effect on one scrimmage snap: shifts on the offense's matchup (log-odds for rates,
+ * log for yards) and, optionally, who can get the ball. It changes odds only, never the number of
+ * random draws, so a game without one is the calibrated engine draw for draw.
+ */
+export interface SnapMod {
+  comp?: number; ypcomp?: number; sack?: number; int?: number; scramble?: number;
+  ypc?: number; stuff?: number; explosive?: number;
+  /** Only these positions carry (e.g. ["QB"] for a designed QB run) or are targeted (["RB", "TE"] for a screen). */
+  rushers?: string[]; receivers?: string[];
+}
+
 const prep = (r: TeamRatings) => ({ ...r, rushers: normalizePlayers(r.rushers || []), receivers: normalizePlayers(r.receivers || []) });
 
 /** Rescale player multipliers so the share-weighted mean is 1, keeping team rates intact. */
@@ -275,6 +287,8 @@ export class GameSim {
   private secondHalfKicker!: Side;
   /** Who had the ball on the last scrimmage play (runner, sacked or scrambling QB, or the receiver who caught it). */
   lastTouch: { name: string; side: "home" | "away" } | null = null;
+  /** The play call's effect on the next scrimmage snap; set by a decision provider, cleared after the snap. */
+  snapMod: SnapMod | null = null;
 
   constructor(home: TeamRatings, away: TeamRatings, opts: GameOptions = {}) {
     this.rng = opts.rng ?? new Rng(opts.seed ?? 0);
@@ -371,6 +385,27 @@ export class GameSim {
   get defense(): Side { return this.offense === this.home ? this.away : this.home; }
   other(side: Side): Side { return side === this.home ? this.away : this.home; }
   private get mu(): Matchup { return this.offense === this.home ? this.homeMu : this.awayMu; }
+
+  /** The matchup and rush model for this snap, with any play-call effect on top. */
+  private snapRates(): { m: Matchup; rush: RushModel } {
+    const m = this.mu, d = this.snapMod;
+    if (!d) return { m, rush: this.rushModel(this.offense) };
+    const lg = (p: number, x = 0) => { p = Math.min(Math.max(p, 1e-4), 1 - 1e-4); return 1 / (1 + Math.exp(-(Math.log(p / (1 - p)) + x))); };
+    const mm: Matchup = {
+      ...m,
+      comp_pct: Math.min(0.92, lg(m.comp_pct, d.comp ?? 0)), yds_per_comp: m.yds_per_comp * Math.exp(d.ypcomp ?? 0),
+      sack_rate: lg(m.sack_rate, d.sack ?? 0), int_rate: lg(m.int_rate, d.int ?? 0),
+      rush_ypc: m.rush_ypc * Math.exp(d.ypc ?? 0), rush_stuff: lg(m.rush_stuff, d.stuff ?? 0), rush_explosive: lg(m.rush_explosive, d.explosive ?? 0),
+    };
+    return { m: mm, rush: fitRushFast(mm.rush_ypc * RUSH_CAL, mm.rush_stuff, mm.rush_explosive) };
+  }
+
+  /** The players who can get the ball on this snap (the call may limit positions; never to nobody). */
+  private eligible(players: Player[], pos: string[] | undefined): Player[] {
+    if (!pos) return players;
+    const only = players.filter((p) => pos.includes(p.pos));
+    return only.length ? only : players;
+  }
   private rushModel(side: Side): RushModel { return side === this.home ? this.homeRush : this.awayRush; }
   margin(side?: Side): number { side = side || this.offense; return side.score - this.other(side).score; }
   gameSecondsLeft(): number { return this.quarter > 4 ? 0 : this.clock + (4 - this.quarter) * QUARTER_SECONDS; }
@@ -728,6 +763,7 @@ export class GameSim {
     const call = yield* this.decide("playCall", draw < this.passProb() ? "pass" : "run");
     const isPass = call === "pass";
     const res = isPass ? this.passPlay() : this.runPlay();
+    this.snapMod = null;
     yield* this.postPlay(res[0], res[1], res[2], res[3], down0, dist0, yl0, q0, c0, isPass ? "PASS" : "RUN");
   }
 
@@ -741,10 +777,17 @@ export class GameSim {
     return players[players.length - 1];
   }
 
+  /** A designed QB run: the quarterback carries (one draw, like any carrier pick). */
+  private qbRunner(off: Side): Player {
+    this.rng.random();
+    const listed = (off.ratings.rushers as Player[]).find((p) => p.pos === "QB" && p.name === off.ratings.qb);
+    return listed ?? { name: off.ratings.qb, pos: "QB", share: 1, ypc_mult: 1, catch_mult: 1 };
+  }
+
   private runPlay(): PlayResult {
-    const off = this.offense, m = this.mu, rng = this.rng;
-    const rusher = this.pickPlayer(off.ratings.rushers, "RB1");
-    let y = sampleRush(this.rushModel(off), rng);
+    const off = this.offense, { m, rush } = this.snapRates(), rng = this.rng;
+    const rusher = this.snapMod?.rushers?.includes("QB") ? this.qbRunner(off) : this.pickPlayer(this.eligible(off.ratings.rushers, this.snapMod?.rushers), "RB1");
+    let y = sampleRush(rush, rng);
     y = y > 0 ? trunc(pyRound(y * rusher.ypc_mult)) : y;
     if (this.down >= 3 && this.distance <= 2 && y < this.distance && rng.random() < STICKS_RUN + m.third_down_bonus)
       y = this.distance;
@@ -766,7 +809,7 @@ export class GameSim {
   }
 
   private passPlay(): PlayResult {
-    const off = this.offense, dfn = this.defense, m = this.mu, rng = this.rng;
+    const off = this.offense, dfn = this.defense, { m } = this.snapRates(), rng = this.rng;
     const qb = off.ratings.qb;
     if (rng.random() < m.sack_rate) {
       const y = -Math.max(1, trunc(rng.gauss(7, 3)));
@@ -779,7 +822,7 @@ export class GameSim {
       }
       return [y, false, `${qb} sacked for a loss of ${-y} yards`, null];
     }
-    if (rng.random() < (off.ratings.scramble_rate || SCRAMBLE_RATE)) {
+    if (rng.random() < (off.ratings.scramble_rate || SCRAMBLE_RATE) * Math.exp(this.snapMod?.scramble ?? 0)) {
       const y = Math.min(this.yl, Math.max(-2, trunc(rng.gammavariate(1.6, off.ratings.scramble_scale || SCRAMBLE_SCALE)) - 1));
       off.stats.rush_att += 1; off.stats.rush_yards += y;
       off.players.rush(qb, y, y === this.yl);
@@ -787,7 +830,7 @@ export class GameSim {
       if (y >= 12) off.stats.explosive += 1;
       return [y, false, `${qb} scrambles for ${y} yards`, null];
     }
-    const tgt = this.pickPlayer(off.ratings.receivers, "WR1");
+    const tgt = this.pickPlayer(this.eligible(off.ratings.receivers, this.snapMod?.receivers), "WR1");
     off.stats.pass_att += 1;
     if (rng.random() < m.int_rate) {
       off.stats.ints_thrown += 1;

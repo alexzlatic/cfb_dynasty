@@ -80,6 +80,12 @@ Open the same league in two windows and sim a day in one: the other updates live
   unit rates, named runners and receivers, scramble rate and kicking. With every player at 75 it returns
   the FBS rates; with each team's seed depth chart it returns that team's preseason ratings exactly, so
   the season plays at the same strength as M0 while injuries and depth-chart changes now matter.
+- **Play calling** (`packages/core/src/calls.ts`, `live.ts`): play your game live from the Game day tab. Call 8
+  offensive plays and 7 defenses yourself, or let your coordinators call them and stop you at key moments
+  (4th downs, two-point tries, two-minute drills, late defensive stands, overtime, injuries). Each call
+  against each defense shifts the snap's odds through an engine `SnapMod` that draws nothing extra from
+  the RNG; the coordinators' mix averages out to the calibrated engine (`scripts/calls-check.ts`). Your
+  calls are saved as a `call_game` action, so the season replays the game exactly.
 - **Game day** (`packages/core/src/gameday.ts`): players tire as they play (by position and stamina) and
   recover on the sideline; a tired player plays up to 0.3 SD below his ratings until the coach rotates in
   the next player on the depth chart, so defensive linemen play about 60% of snaps and quarterbacks and

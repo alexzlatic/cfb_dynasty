@@ -20,6 +20,13 @@ export function Home() {
     <div className="cols">
       <div>
         {state.champion != null && <div className="banner"><Logo team={team(state.champion)} size={40} /> {team(state.champion)?.school} are national champions</div>}
+        {my != null && state.my_next_game?.date === state.date && (
+          <div className="banner gameday">
+            Game day: {team(state.my_next_game.away_id)?.school} {state.my_next_game.neutral ? "vs" : "at"} {team(state.my_next_game.home_id)?.school}
+            <a className="button primary" href={`#/l/${id}/live`}>Play it live</a>
+            <span className="small muted">or sim the day and your coordinators play it</span>
+          </div>
+        )}
         {my != null && (
           <Panel title={`${team(my)?.school} (${rec.w}-${rec.l})`} right={<a href={`#/l/${id}/team/${my}`}>Team page</a>}>
             <h4>Up next</h4>
