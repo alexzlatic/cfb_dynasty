@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, LiveGame, POSITIONS, AREAS, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -26,7 +26,11 @@ export type Action =
   /** Sign one of your players to a revenue-share contract: dollars a year and seasons (amount 0 ends it). */
   | { type: "sign_contract"; payload: { pid: number; amount: number; years: number } }
   /** Ask your school's collective to spend on these positions (at most three). */
-  | { type: "set_collective_focus"; payload: { focus: Pos[] } };
+  | { type: "set_collective_focus"; payload: { focus: Pos[] } }
+  /** Your ticket price for one of your home games (null for the usual price). */
+  | { type: "set_ticket_price"; payload: { game_id: number; price: number | null } }
+  /** Ask your athletic director to upgrade a facility one grade. */
+  | { type: "request_project"; payload: { area: Area } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -37,7 +41,8 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "collectives", "nil", "player_morale", "team_mood"] as const;
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "collectives", "nil", "player_morale", "team_mood",
+  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -104,6 +109,8 @@ export class League {
       hidden_ctx: meta.hidden_ctx ?? undefined, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
       contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
       player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
+      budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
+      ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
@@ -127,6 +134,7 @@ export class League {
     if (!meta.contracts) lg.season.startMoney();
     if (!meta.collectives) lg.season.startCollectives();
     if (!meta.team_mood) lg.season.weeklyMorale();
+    if (!meta.budgets) lg.season.startFinance(seed?.finances);
     return lg;
   }
 
@@ -201,6 +209,15 @@ export class League {
       if (!Array.isArray(focus) || focus.some((x) => !POSITIONS.includes(x))) throw new Error("focus must be a list of positions");
       a = { type: a.type, payload: { focus } };
     }
+    if (a.type === "set_ticket_price") {
+      const price = a.payload?.price == null ? null : Math.round(Number(a.payload.price));
+      if (price != null && (!Number.isFinite(price) || price < 5 || price > 500)) throw new Error("a ticket costs $5 to $500");
+      a = { type: a.type, payload: { game_id: Number(a.payload?.game_id), price } };
+    }
+    if (a.type === "request_project") {
+      if (!Object.hasOwn(AREAS, a.payload?.area)) throw new Error(`unknown area ${a.payload?.area}`);
+      a = { type: a.type, payload: { area: a.payload.area } };
+    }
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -229,6 +246,8 @@ export class League {
       if (a.type === "set_lab") this.season.setLab(a.payload.pid, a.payload.area);
       if (a.type === "sign_contract") this.season.setContract(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "set_collective_focus") this.season.setCollectiveFocus(a.payload.focus);
+      if (a.type === "set_ticket_price") this.season.setTicketPrice(a.payload.game_id, a.payload.price);
+      if (a.type === "request_project") this.season.requestProject(a.payload.area);
       if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       this.writeMeta();
       return l;

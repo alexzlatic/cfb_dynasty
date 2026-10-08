@@ -144,6 +144,8 @@ export interface SeedBundle {
   power: Record<string, number>;
   /** Rated players, auto depth charts and scheme offsets by team (players.json); absent in old seeds. */
   players?: Record<string, TeamPlayers>;
+  /** Home crowds last season and any real football finances by team (finances.json); absent in old seeds. */
+  finances?: Record<string, { attendance: number | null; home_games: number; lines: Record<string, number> | null }>;
 }
 
 export interface TeamPlayers {

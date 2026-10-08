@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { AWARD_NAMES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -137,6 +137,28 @@ export function startServer(opts: ServerOptions, port: number): Server {
           .sort((a, b) => b.spent - a.spent);
         return { team_id: team, mine: team === s.user_team_id, base: c.base, reserve: c.reserve, focus: c.focus ?? [], focus_max: FOCUS_MAX, positions: POSITIONS,
           spent: deals.reduce((a, d) => a + d.deal.amount, 0), deals, conference };
+      }
+      case route === "budget": {
+        // A school's budget (yours by default), its home games and facilities, and its conference's budgets.
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        const b = S.budget(team), inputs = s.budgets?.[team];
+        if (!b || !inputs) return { team_id: null };
+        const mine = team === s.user_team_id;
+        const home = s.games.filter((g) => g.home_id === team && !g.neutral && (g.kind === "regular" || g.kind === "playoff")).map((g) => ({
+          game: gameRow(g), price: S.ticketPrice(g), custom: s.ticket_prices?.[g.id] != null,
+          attendance: g.status === "final" ? s.gate?.[g.id]?.attendance ?? null : S.expectedCrowd(g),
+          revenue: g.status === "final" ? s.gate?.[g.id]?.revenue ?? null : S.expectedCrowd(g) * S.ticketPrice(g),
+          // What a few other prices would draw, so you can see the trade-off.
+          options: mine && g.status !== "final" ? [0.8, 1, 1.25, 1.5].map((k) => { const price = Math.round(inputs.price * k); const a = S.expectedCrowd(g, price); return { price, attendance: a, revenue: a * price }; }) : [],
+        }));
+        const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === S.teamById.get(team)!.conference).map((x) => {
+          const v = S.budget(x.id)!;
+          const sum = (o: Record<string, number>) => Object.values(o).reduce((a, y) => a + y, 0);
+          return { team_id: x.id, revenue: sum(v.revenue), expenses: sum(v.expenses), surplus: v.surplus };
+        }).sort((a, b) => b.revenue - a.revenue);
+        return { team_id: team, mine, year: s.year, ...b, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES }, usual_price: inputs.price, capacity: inputs.capacity,
+          home, conference, facilities: s.facilities?.[team] ?? null, areas: AREAS, projects: (s.projects ?? []).filter((p) => p.team_id === team),
+          requests: mine ? (s.requests ?? []).slice(-5).reverse() : [] };
       }
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {

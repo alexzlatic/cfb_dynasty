@@ -379,6 +379,23 @@ describe("money", () => {
     expect(lg.season.state.team_mood![2509].def).toBeLessThan(mood0 - 0.2);
     expect((await getR(`/api/leagues/${id}/payroll`)).players.some((p: any) => p.morale < -0.25)).toBe(true);
 
+    // Budget: ticket prices for home games still to play, crowds at the ones played, and facility requests.
+    const bud = await getR(`/api/leagues/${id}/budget`);
+    expect(bud.mine).toBe(true);
+    const played = bud.home.filter((h: any) => h.game.status === "final");
+    expect(played.length).toBeGreaterThan(0);
+    for (const h of played) expect(h.attendance).toBeLessThanOrEqual(bud.capacity);
+    const next = bud.home.find((h: any) => h.game.status !== "final");
+    const ticket = (payload: unknown) => postR(`/api/leagues/${id}/actions`, { type: "set_ticket_price", payload });
+    expect((await ticket({ game_id: played[0].game.id, price: 80 })).error).toMatch(/still to play/);
+    expect((await ticket({ game_id: next.game.id, price: 9999 })).error).toMatch(/\$5 to \$500/);
+    expect((await ticket({ game_id: next.game.id, price: next.price * 2 })).ok).toBe(true);
+    expect(lg.season.expectedCrowd(lg.season.state.games.find((g) => g.id === next.game.id)!)).toBeLessThan(next.attendance);
+    const area = Object.keys(bud.facilities).find((k) => bud.facilities[k] < 5)!;
+    expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area } })).ok).toBe(true);
+    expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area: "moat" } })).error).toMatch(/unknown area/);
+    expect(lg.season.state.requests!.length).toBe(1);
+
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);
     const { League } = await import("../src/league.ts");
@@ -387,6 +404,7 @@ describe("money", () => {
     expect(again.season.state.nil).toEqual(lg.season.state.nil);
     expect(again.season.state.collectives).toEqual(lg.season.state.collectives);
     expect(again.season.state.team_mood).toEqual(lg.season.state.team_mood);
+    expect(again.season.budget(2509)).toEqual(lg.season.budget(2509));
     again.close();
   }, 120_000);
 
@@ -394,11 +412,13 @@ describe("money", () => {
     const lg = manager.create({ name: "Pre-money save", user_team_id: 2509, seed: 5 });
     const want = lg.season.state.contracts;
     const nil = lg.season.state.nil;
-    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'collectives', 'nil')");
+    const budget = lg.season.budget(2509);
+    lg.db.exec("DELETE FROM meta WHERE key IN ('contracts', 'pools', 'collectives', 'nil', 'player_morale', 'team_mood', 'budgets', 'facilities', 'projects', 'ticket_prices', 'gate', 'requests')");
     const { League } = await import("../src/league.ts");
-    const again = League.open("pre-money", manager.path(lg.id));
+    const again = League.open("pre-money", manager.path(lg.id), manager.seed());
     expect(again.season.state.contracts).toEqual(want);
     expect(again.season.state.nil).toEqual(nil);
+    expect(again.season.budget(2509)).toEqual(budget);
     again.close();
   }, 60_000);
 });

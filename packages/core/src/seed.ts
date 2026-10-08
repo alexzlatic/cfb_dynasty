@@ -25,6 +25,7 @@ export function loadSeed(dir = DEFAULT_SEED_DIR): SeedBundle {
     ratings: read(dir, "team_ratings_all.json").teams,
     power: existsSync(join(dir, "power.json")) ? read(dir, "power.json").teams : {},
     players: existsSync(join(dir, "players.json")) ? unpackPlayers(read(dir, "players.json").teams, rosters) : undefined,
+    finances: existsSync(join(dir, "finances.json")) ? read(dir, "finances.json").teams : undefined,
   };
 }
 

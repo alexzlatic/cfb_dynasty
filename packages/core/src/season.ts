@@ -11,6 +11,7 @@ import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
 import { moods, unitMood } from "./morale.ts";
+import { AREAS, budgetFor, crowd, facilitiesFor, postseasonShare, projectCost, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
 import { FOCUS_MAX, RESERVE, collectiveBase, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
 import { activeContract, aiContracts, eligibilityLeft, footballPool, playerValue, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
@@ -91,6 +92,24 @@ export interface SeasonState {
   /** Each player's morale about pay and playing time (it builds week by week), and what it does to each unit's chemistry. */
   player_morale?: Record<number, number>;
   team_mood?: Record<number, Record<Unit, number>>;
+  /** Each school's budget inputs, facilities and the upgrades its AD is building. */
+  budgets?: Record<number, Budget>;
+  facilities?: Record<number, Facilities>;
+  projects?: Project[];
+  /** Your ticket price for a home game, by game id (absent = the usual price). */
+  ticket_prices?: Record<number, number>;
+  /** Crowds and ticket money at each home game played. */
+  gate?: Record<number, { attendance: number; price: number; revenue: number }>;
+  /** Your requests to the AD for facility upgrades and the answers. */
+  requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
+}
+
+/** One school's budget for the fiscal year: lines so far and projected to June 30. */
+export interface BudgetView {
+  revenue: Record<RevenueLine, number>;
+  expenses: Record<ExpenseLine, number>;
+  surplus: number;
+  source: Budget["source"];
 }
 
 /** Games a redshirted player may play in and keep his redshirt. */
@@ -242,6 +261,7 @@ export class Season {
     season.startHidden(seed.coaches ?? []);
     season.startMoney();
     season.startCollectives();
+    season.startFinance(seed.finances);
     season.weeklyMorale();
     season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
     return season;
@@ -487,6 +507,101 @@ export class Season {
     for (const [id, x] of raw) tm[id] = { off: Math.round((x.off - ao) * 100) / 100 + 0, def: Math.round((x.def - ad) * 100) / 100 + 0 };
     s.player_morale = pm;
     s.team_mood = tm;
+  }
+
+  // ---- budget, game day and facilities ------------------------------------------------------------
+  /** Every FBS school's budget inputs and facilities. */
+  startFinance(fin?: SeedBundle["finances"]): void {
+    const s = this.state;
+    s.budgets = {};
+    s.facilities = {};
+    s.projects ??= [];
+    s.ticket_prices ??= {};
+    s.gate ??= {};
+    for (const t of this.teams) {
+      const b = budgetFor(t, fin?.[t.id]);
+      const f = facilitiesFor(t, s.seed);
+      if (b) s.budgets[t.id] = b;
+      if (f) s.facilities[t.id] = f;
+    }
+  }
+
+  private homeGames(teamId: number): Game[] {
+    return this.state.games.filter((g) => g.home_id === teamId && !g.neutral && (g.kind === "regular" || g.kind === "playoff"));
+  }
+
+  /** A home game's ticket price: yours if you set one, otherwise the school's usual price. */
+  ticketPrice(g: Game): number {
+    return this.state.ticket_prices?.[g.id] ?? this.state.budgets?.[g.home_id]?.price ?? 0;
+  }
+
+  /** The crowd a home game would draw at a price, from how the season is going today. */
+  expectedCrowd(g: Game, price = this.ticketPrice(g)): number {
+    const s = this.state, b = s.budgets?.[g.home_id];
+    if (!b) return 0;
+    const r = records(s.games.filter((x) => x.status === "final"), this.teams).get(g.home_id);
+    const n = r ? r.w + r.l : 0;
+    return crowd(b, { price, winPct: n ? r!.w / n : null, ranked: this.rankOf(g.home_id) != null, oppRanked: this.rankOf(g.away_id) != null,
+      oppFcs: this.teamById.get(g.away_id)?.level === "fcs", prestige: this.team(g.home_id).prestige ?? 0 });
+  }
+
+  /** Set your ticket price for one of your home games not yet played (null for the usual price). */
+  setTicketPrice(gameId: number, price: number | null): void {
+    const s = this.state, g = s.games.find((x) => x.id === gameId);
+    if (!g || g.home_id !== s.user_team_id || g.neutral || g.status === "final") throw new Error("you can only price your own home games still to play");
+    const tp = { ...s.ticket_prices };
+    if (price == null) delete tp[gameId];
+    else tp[gameId] = price;
+    s.ticket_prices = tp;
+  }
+
+  private recordGate(g: Game): void {
+    const s = this.state;
+    if (g.neutral || !s.budgets?.[g.home_id] || (g.kind !== "regular" && g.kind !== "playoff")) return;
+    const price = this.ticketPrice(g), attendance = this.expectedCrowd(g, price);
+    (s.gate ??= {})[g.id] = { attendance, price, revenue: attendance * price };
+  }
+
+  /** A school's budget for this fiscal year: what's come in and gone out, and what's still to come. */
+  budget(teamId: number): BudgetView | null {
+    const s = this.state, b = s.budgets?.[teamId];
+    if (!b) return null;
+    let tickets = 0;
+    for (const g of this.homeGames(teamId)) tickets += g.status === "final" ? s.gate?.[g.id]?.revenue ?? 0 : this.expectedCrowd(g) * this.ticketPrice(g);
+    let postseason = 0;
+    for (const g of s.games) if (g.status === "final" && (g.kind === "bowl" || g.kind === "playoff") && (g.home_id === teamId || g.away_id === teamId)) postseason += postseasonShare(g.kind, !!g.title);
+    const projects = (s.projects ?? []).filter((p) => p.team_id === teamId).reduce((a, p) => a + p.cost / p.years, 0);
+    const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors, support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
+    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations, facilities: Math.round(b.fixed.facilities + projects) };
+    const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
+    return { revenue, expenses, surplus: sum(revenue) - sum(expenses), source: b.source };
+  }
+
+  /**
+   * Ask your athletic director to upgrade a facility one grade. The AD approves when this year's football
+   * surplus covers the first year's payment, and builds it over one to three years.
+   */
+  requestProject(area: Area): { approved: boolean; reason: string } {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.facilities?.[me]) throw new Error("your school has no facilities to upgrade");
+    if (!Object.hasOwn(AREAS, area)) throw new Error(`unknown area ${area}`);
+    if ((s.projects ?? []).some((p) => p.team_id === me && p.area === area)) throw new Error(`the ${AREAS[area].toLowerCase()} is already being upgraded`);
+    const now = s.facilities[me][area];
+    if (now >= 5) throw new Error(`the ${AREAS[area].toLowerCase()} is already among the best in the country`);
+    const t = this.team(me);
+    const { cost, years } = projectCost(area, now + 1, ["SEC", "Big Ten", "ACC", "Big 12"].includes(t.conference) || t.school === "Notre Dame");
+    const surplus = this.budget(me)!.surplus;
+    const c = s.career, ad = c ? `${c.ad.first} ${c.ad.last}` : "Your athletic director";
+    const $ = (x: number) => `$${(x / 1e6).toFixed(1)}M`;
+    if (surplus < cost / years) {
+      const reason = `${ad} turned down the ${AREAS[area].toLowerCase()} upgrade: it costs ${$(cost)} over ${years} year(s), and football's surplus this year is ${$(surplus)}.`;
+      s.requests = [...(s.requests ?? []), { date: s.date, area, approved: false, reason }];
+      return { approved: false, reason };
+    }
+    s.projects = [...(s.projects ?? []), { team_id: me, area, to: now + 1, cost, years, start: s.date, done: `${s.year + years}-08-01` }];
+    const reason = `${ad} approved a ${$(cost)} ${AREAS[area].toLowerCase()} upgrade to grade ${now + 1}, ready by August ${s.year + years}.`;
+    s.requests = [...(s.requests ?? []), { date: s.date, area, approved: true, reason }];
+    return { approved: true, reason };
   }
 
   /** A player's market value this year. */
@@ -995,6 +1110,7 @@ export class Season {
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
+    this.recordGate(g);
     const { sim, gd, sides, caller } = this.gameSetup(g);
     const subs = s.subs?.[g.id] ?? [];
     const userSide = caller?.userSide;

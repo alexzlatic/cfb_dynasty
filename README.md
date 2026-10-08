@@ -127,6 +127,7 @@ Rebuilding the seed needs CFBD access (`CFBD_API_KEY`, or a proxy that injects i
 ```sh
 python3 importer/build_team_ratings.py --cfb-sim <path to cfb-sim> --work /tmp/cutoff
 python3 importer/build_seed.py
+python3 importer/build_finances.py   # home crowds, and Knight-Newhouse football finances if importer/.cache/knight_newhouse.csv exists
 npm run seed:power
 ```
 
@@ -136,6 +137,7 @@ the season passed to each step:
 ```sh
 python3 importer/build_team_ratings.py --cfb-sim <path to cfb-sim> --year 2025 --out data/seed/2025wk1/team_ratings.json
 python3 importer/build_seed.py --season 2025 --replay
+python3 importer/build_finances.py --season 2025
 npm run seed:players -- 2025
 npm run seed:power -- 400 2025
 ```

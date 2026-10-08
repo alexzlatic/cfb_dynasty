@@ -35,6 +35,17 @@ export interface PayrollView {
   mood: { off: number; def: number } | null;
 }
 
+export interface BudgetData {
+  team_id: number | null; mine: boolean; year: number; source: "knight-newhouse" | "estimate";
+  revenue: Record<string, number>; expenses: Record<string, number>; surplus: number;
+  labels: { revenue: Record<string, string>; expenses: Record<string, string> }; usual_price: number; capacity: number;
+  home: { game: GameRow; price: number; custom: boolean; attendance: number | null; revenue: number | null; options: { price: number; attendance: number; revenue: number }[] }[];
+  conference: { team_id: number; revenue: number; expenses: number; surplus: number }[];
+  facilities: Record<string, number> | null; areas: Record<string, string>;
+  projects: { area: string; to: number; cost: number; years: number; start: string; done: string }[];
+  requests: { date: string; area: string; approved: boolean; reason: string }[];
+}
+
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
@@ -74,6 +85,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  budget: (id: string, team?: number) => req<BudgetData>(`/api/leagues/${id}/budget` + (team != null ? `?team=${team}` : "")),
   collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),
   development: (id: string) => req<DevelopmentView>(`/api/leagues/${id}/development`),
