@@ -16,7 +16,7 @@ export function GamePage({ gid }: { gid: number }) {
   const data = useData(() => api.game(id, gid), [gid]);
   const [tab, setTab] = useState<"box" | "drives" | "plays">("box");
   if (!data) return <p className="muted">Loading...</p>;
-  const { game: g, detail: d } = data;
+  const { game: g, detail: d, defenders } = data;
   const H = team(g.home_id)!, A = team(g.away_id)!;
   if (!d) return <p className="muted">This game has not been played yet.</p>;
   const val = (b: any, k: string) =>
@@ -52,7 +52,8 @@ export function GamePage({ gid }: { gid: number }) {
               <tbody>{BOX_ROWS.map(([k, label]) => <tr key={k}><td>{label}</td><td className="num">{val(d.away_box, k)}</td><td className="num">{val(d.home_box, k)}</td></tr>)}</tbody></table>
           </Panel>
           <div>
-            {[[A, d.away_players], [H, d.home_players]].map(([t, pl]: any) => <PlayerBox key={t.id} team={t} players={pl} />)}
+            {[[A, d.away_players], [H, d.home_players]].map(([t, pl]: any) => <PlayerBox key={t.id} team={t} players={pl}
+              defense={Object.entries(d.defense ?? {}).filter(([pid]) => defenders[pid]?.team_id === t.id).map(([pid, l]) => ({ pid: Number(pid), ...defenders[pid]!, ...l }))} />)}
             {!!d.injuries?.length && (
               <Panel title="Injuries">
                 <table className="grid tight"><tbody>{d.injuries.map((x, i) => (
@@ -94,7 +95,11 @@ export function GamePage({ gid }: { gid: number }) {
   );
 }
 
-function PlayerBox({ team, players }: { team: any; players: Record<string, any> }) {
+type DefRow = { pid: number; name: string; pos: string; tkl?: number; tfl?: number; sacks?: number; def_int?: number; pd?: number; ff?: number };
+
+function PlayerBox({ team, players, defense }: { team: any; players: Record<string, any>; defense: DefRow[] }) {
+  const { id } = useLeague();
+  const def = defense.filter((x) => x.tkl || x.sacks || x.def_int || x.ff).sort((a, b) => (b.tkl ?? 0) - (a.tkl ?? 0) || (b.sacks ?? 0) - (a.sacks ?? 0)).slice(0, 6);
   const rows = Object.entries(players);
   const passing = rows.filter(([, p]) => p.att), rushing = rows.filter(([, p]) => p.car).sort((a, b) => b[1].rush_yds - a[1].rush_yds);
   const receiving = rows.filter(([, p]) => p.rec).sort((a, b) => b[1].rec_yds - a[1].rec_yds), kicking = rows.filter(([, p]) => p.fga || p.xpa);
@@ -105,6 +110,8 @@ function PlayerBox({ team, players }: { team: any; players: Record<string, any> 
         {rushing.map(([n, p]) => <tr key={"r" + n}><td>{n}</td><td>{p.car} car, {p.rush_yds} yds{p.rush_td ? `, ${p.rush_td} TD` : ""}, long {p.rush_long}</td></tr>)}
         {receiving.map(([n, p]) => <tr key={"c" + n}><td>{n}</td><td>{p.rec} rec, {p.rec_yds} yds{p.rec_td ? `, ${p.rec_td} TD` : ""} ({p.tgt} tgt)</td></tr>)}
         {kicking.map(([n, p]) => <tr key={"k" + n}><td>{n}</td><td>FG {p.fgm ?? 0}/{p.fga ?? 0}{p.fg_long ? ` (long ${p.fg_long})` : ""}, XP {p.xpm ?? 0}/{p.xpa ?? 0}</td></tr>)}
+        {def.map((x) => <tr key={"d" + x.pid}><td><a href={`#/l/${id}/player/${x.pid}`}>{x.name}</a> <span className="muted small">{x.pos}</span></td>
+          <td>{[`${x.tkl ?? 0} tkl`, x.tfl ? `${x.tfl} TFL` : "", x.sacks ? `${x.sacks} sack${x.sacks > 1 ? "s" : ""}` : "", x.def_int ? `${x.def_int} INT` : "", x.pd ? `${x.pd} PD` : "", x.ff ? `${x.ff} FF` : ""].filter(Boolean).join(", ")}</td></tr>)}
       </tbody></table>
     </Panel>
   );

@@ -85,7 +85,14 @@ export function RosterTable({ players, depth, injuries = [] }: { players: RatedP
 const abbr = (a: string) => ATTR_LABELS[a].split(" ").map((w) => w.slice(0, 3)).join(" ");
 
 const STAT_COLS: [string, string][] = [["att", "Att"], ["cmp", "Cmp"], ["pass_yds", "Pass yds"], ["pass_td", "TD"], ["int", "Int"], ["car", "Car"],
-  ["rush_yds", "Rush yds"], ["rush_td", "TD"], ["rec", "Rec"], ["rec_yds", "Rec yds"], ["rec_td", "TD"], ["fgm", "FGM"], ["fga", "FGA"]];
+  ["rush_yds", "Rush yds"], ["rush_td", "TD"], ["rec", "Rec"], ["rec_yds", "Rec yds"], ["rec_td", "TD"], ["fgm", "FGM"], ["fga", "FGA"],
+  ["tkl", "Tkl"], ["tfl", "TFL"], ["sacks", "Sacks"], ["def_int", "Int"], ["pd", "PD"], ["ff", "FF"]];
+
+const AWARD_LABEL: Record<string, string> = {
+  heisman: "Heisman Trophy winner", heisman_finalist: "Heisman finalist", all_american: "All-American", potw_off: "National offensive player of the week",
+  potw_def: "National defensive player of the week", conf_potw_off: "Offensive player of the week", conf_potw_def: "Defensive player of the week",
+  conf_poy_off: "Offensive player of the year", conf_poy_def: "Defensive player of the year",
+};
 
 export function PlayerPage({ pid }: { pid: number }) {
   const { id } = useLeague();
@@ -102,7 +109,7 @@ export function PlayerPage({ pid }: { pid: number }) {
         <Logo team={t} size={64} />
         <div>
           <h1>{p.jersey != null ? <span className="muted">#{p.jersey} </span> : null}{p.first} {p.last}</h1>
-          <div>{p.pos} · {p.class} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school}</a>{data.slots.length ? ` · ${data.slots.join(", ")} on the depth chart` : ""}</div>
+          <div>{p.pos} · {p.class}{data.redshirt ? <span className="rs">RS</span> : null} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school}</a>{data.slots.length ? ` · ${data.slots.join(", ")} on the depth chart` : ""}</div>
           {injury && <div className="injline">Injured: {injury.type}, {outUntil(injury)}</div>}
           <div className="small">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
         </div>
@@ -129,6 +136,15 @@ export function PlayerPage({ pid }: { pid: number }) {
           </Panel>
         </div>
         <div>
+          {data.awards.length > 0 && (
+            <Panel title="Honors">
+              <table className="grid tight"><tbody>{data.awards.map((a, i) => (
+                <tr key={i}><td className="nowrap">{shortDate(a.date)}</td><td>{AWARD_LABEL[a.type]}{a.conference && a.type.startsWith("conf") ? ` (${a.conference})` : ""}{a.team ? `, ${a.team === 1 ? "first" : "second"} team` : ""}
+                  <div className="small muted">{a.line}</div></td></tr>
+              ))}</tbody></table>
+            </Panel>
+          )}
+          {data.redshirt && <p className="small">Redshirting: {data.season?.gp ?? 0} of {data.redshirt_games} games played.</p>}
           <Panel title="Traits">
             <Bar label="Stamina" v={p.traits.stamina} />
             <Bar label="Toughness" v={p.traits.toughness} />

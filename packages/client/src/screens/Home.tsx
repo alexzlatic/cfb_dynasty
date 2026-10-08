@@ -2,6 +2,7 @@ import { useLeague, useData } from "../App.tsx";
 import { api } from "../api.ts";
 import { Logo, TeamName, fmtDate, shortDate } from "../util.tsx";
 import { GameTable, NewsList, Panel } from "./common.tsx";
+import { CareerCard } from "./Career.tsx";
 
 export function Home() {
   const { id, state, team } = useLeague();
@@ -45,6 +46,7 @@ export function Home() {
         </Panel>
       </div>
       <div>
+        {state.career && <CareerCard c={state.career} />}
         <Panel title="AP Top 25" right={<a href={`#/l/${id}/polls`}>Polls</a>}>
           {state.ap.length ? (
             <table className="grid tight"><tbody>{state.ap.map((r, i) => (

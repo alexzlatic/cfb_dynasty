@@ -18,6 +18,8 @@ import { PlayerPage } from "./screens/Players.tsx";
 import { DepthScreen } from "./screens/Depth.tsx";
 import { LiveScreen } from "./screens/Live.tsx";
 import { PlanScreen } from "./screens/Plan.tsx";
+import { AwardsScreen } from "./screens/Awards.tsx";
+import { CareerScreen } from "./screens/Career.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -54,7 +56,7 @@ export function App() {
 
 const NAV: [string, string][] = [
   ["home", "Home"], ["calendar", "Calendar"], ["schedule", "Schedule"], ["standings", "Standings"], ["polls", "Polls"],
-  ["postseason", "Postseason"], ["writers", "Writers"], ["news", "News"], ["settings", "Settings"],
+  ["postseason", "Postseason"], ["awards", "Awards"], ["writers", "Writers"], ["news", "News"], ["settings", "Settings"],
 ];
 
 function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: string }) {
@@ -121,6 +123,8 @@ function LeagueShell({ id, screen, arg }: { id: string; screen: string; arg?: st
         {screen === "depth" && arg && <DepthScreen tid={Number(arg)} />}
         {screen === "live" && <LiveScreen />}
         {screen === "plan" && <PlanScreen />}
+        {screen === "awards" && <AwardsScreen />}
+        {screen === "career" && <CareerScreen />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>
