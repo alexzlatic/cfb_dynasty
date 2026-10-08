@@ -25,12 +25,14 @@ const sundays = (from: ISODate, to: ISODate) => {
  */
 export const RULES: Rule[] = [
   { type: "ap_poll", label: "AP poll", active: true, dates: (y, c) => sundays(`${y}-08-30`, addDays(c.lastRegular, 8)) },
-  { type: "early_signing", label: "Early signing period", dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
+  { type: "early_signing", label: "Early signing period", active: true, dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
   { type: "conf_championships", label: "Conference championships", active: true, dates: (y) => [{ date: nthWeekday(y, 12, 6, 1) }] },
   { type: "bowls", label: "Bowl season", approx: true, active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 7), end: `${y + 1}-01-02` }] },
   { type: "portal_window", label: "Transfer portal window", dates: (y) => [{ date: `${y + 1}-01-02`, end: `${y + 1}-01-16` }] },
   { type: "draft_deadline", label: "NFL draft declaration deadline", approx: true, dates: (y) => [{ date: `${y + 1}-01-15` }] },
-  { type: "season_end", label: "Season complete", active: true, dates: (y) => [{ date: `${y + 1}-01-26` }] },
+  // National signing day is the first Wednesday of February; the season (and its recruiting cycle) ends the day after.
+  { type: "signing_day", label: "National signing day", active: true, dates: (y) => [{ date: nthWeekday(y + 1, 2, 3, 1) }] },
+  { type: "season_end", label: "Season complete", active: true, dates: (y) => [{ date: addDays(nthWeekday(y + 1, 2, 3, 1), 1) }] },
   { type: "spring_practice", label: "Spring practice", dates: (y) => [{ date: `${y + 1}-03-01`, end: `${y + 1}-04-25` }] },
   { type: "nfl_draft", label: "NFL draft", approx: true, dates: (y) => [{ date: nthWeekday(y + 1, 4, 4, 4), end: addDays(nthWeekday(y + 1, 4, 4, 4), 2) }] },
   { type: "cap_year", label: "Revenue-share cap year begins", dates: (y) => [{ date: `${y + 1}-07-01` }] },

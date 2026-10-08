@@ -21,6 +21,9 @@ const sd = (xs: number[]) => { const m = mean(xs); return Math.sqrt(mean(xs.map(
 let season = Season.create(seed, { seed: leagueSeed, settings: { keep_pbp: "none" } as never });
 const rows: Record<string, number | string>[] = [];
 let prevTop: Set<number> | null = null;
+/** Each season's final power by FBS team, and the champions, for the year-to-year checks below. */
+const finals: Record<number, number>[] = [];
+const champs: string[] = [];
 for (let n = 1; n <= seasons; n++) {
   const t0 = Date.now();
   const s = season.state;
@@ -33,6 +36,8 @@ for (let n = 1; n <= seasons; n++) {
   const turnover = prevTop ? [...top].filter((id) => !prevTop!.has(id)).length : NaN;
   prevTop = top;
   const champ = season.state.champion != null ? season.team(season.state.champion).school : "-";
+  finals.push(Object.fromEntries(fbs.map((t) => [t.id, season.state.power[t.id] ?? 0])));
+  champs.push(champ);
   const { next, left, added } = season.nextSeason(seed.coaches);
   const all = fbs.flatMap((t) => season.roster(t.id));
   rows.push({
@@ -52,3 +57,21 @@ const within = (k: string, base: number) => {
 const turn = mean(rows.slice(1, 4).map((r) => Number(r["top25 new"])));
 const checks = [within("power sd", Number(first["power sd"])), within("P4-G5", Number(first["P4-G5"])), within("top25 new", turn), within("starter ovr", Number(first["starter ovr"]))];
 console.table(checks);
+
+// Year to year, against real SP+ 2005-2025 (importer/.cache, final ratings): correlation 0.81, change SD
+// 8.5 points (7.1 in the top 25), 5.7 of the top 10 still top 10 a year later; 10 champions in 20 years,
+// one school with more than 2.
+const corr = (a: number[], b: number[]) => { const ma = mean(a), mb = mean(b); let n = 0, da = 0, db = 0; a.forEach((x, i) => { n += (x - ma) * (b[i] - mb); da += (x - ma) ** 2; db += (b[i] - mb) ** 2; }); return n / Math.sqrt(da * db); };
+const yy: { corr: number; sd: number; sd25: number; kept10: number }[] = [];
+for (let i = 1; i < finals.length; i++) {
+  const a = finals[i - 1], b = finals[i], ids = fbs.map((t) => t.id);
+  const top = [...ids].sort((x, y) => a[y] - a[x]), next = new Set([...ids].sort((x, y) => b[y] - b[x]).slice(0, 10));
+  yy.push({ corr: corr(ids.map((id) => a[id]), ids.map((id) => b[id])), sd: sd(ids.map((id) => b[id] - a[id])), sd25: sd(top.slice(0, 25).map((id) => b[id] - a[id])), kept10: top.slice(0, 10).filter((id) => next.has(id)).length });
+}
+const titles: Record<string, number> = {};
+for (const c of champs) titles[c] = (titles[c] ?? 0) + 1;
+const counts = Object.values(titles).sort((x, y) => y - x);
+console.log(JSON.stringify({
+  year_to_year: { corr: +mean(yy.map((r) => r.corr)).toFixed(2), change_sd: +mean(yy.map((r) => r.sd)).toFixed(1), change_sd_top25: +mean(yy.map((r) => r.sd25)).toFixed(1), top10_kept: +mean(yy.map((r) => r.kept10)).toFixed(1) },
+  champions: { distinct: counts.length, most: counts[0], top4_share: +(counts.slice(0, 4).reduce((x, y) => x + y, 0) / champs.length).toFixed(2), titles },
+}));

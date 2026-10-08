@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, AREAS, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -30,7 +30,19 @@ export type Action =
   /** Your ticket price for one of your home games (null for the usual price). */
   | { type: "set_ticket_price"; payload: { game_id: number; price: number | null } }
   /** Ask your athletic director to upgrade a facility one grade. */
-  | { type: "request_project"; payload: { area: Area } };
+  | { type: "request_project"; payload: { area: Area } }
+  /** Let your staff run your recruiting board (on), or run it yourself (off). */
+  | { type: "recruit_auto"; payload: { on: boolean } }
+  /** Your contact hours a week on a prospect (0 takes him off your board). */
+  | { type: "recruit_hours"; payload: { pid: number; hours: number } }
+  /** Offer a prospect a scholarship, or pull the offer. */
+  | { type: "recruit_offer"; payload: { pid: number; on: boolean } }
+  /** Send your scouts to evaluate a prospect (each week until taken off the list). */
+  | { type: "scout_prospect"; payload: { pid: number; on: boolean } }
+  /** Hire a regional scout (or let one go). */
+  | { type: "scout_region"; payload: { region: Region; on: boolean } }
+  /** How your staff splits its week between recruiting, scouting and game preparation. */
+  | { type: "staff_time"; payload: StaffTime };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -42,7 +54,7 @@ const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
-  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past"] as const;
+  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -112,6 +124,7 @@ export class League {
       budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
+      recruiting: meta.recruiting ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
       games: all<Game>("SELECT data FROM games WHERE season IS NULL ORDER BY rowid"),
@@ -124,7 +137,7 @@ export class League {
     for (const r of db.prepare("SELECT team_id, data FROM players WHERE status = 'active'").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
     const packed = Object.fromEntries((db.prepare("SELECT team_id, data FROM rated_teams").all() as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]));
     const players = Object.keys(packed).length ? unpackPlayers(packed, rosters) : undefined;
-    lg.season = new Season(state, { teams, ratings, players, finances: seed?.finances } as SeedBundle);
+    lg.season = new Season(state, { teams, ratings, players, finances: seed?.finances, styles: seed?.styles, recruiting: seed?.recruiting, coaches: lg.coaches() } as SeedBundle);
     // Leagues saved before season stats and careers: rebuild stats from the box scores, and start the
     // career the way a new league would (as the school's real head coach).
     if (!("player_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));
@@ -137,6 +150,8 @@ export class League {
     if (!meta.collectives) lg.season.startCollectives();
     if (!meta.team_mood) lg.season.weeklyMorale();
     if (!meta.budgets) lg.season.startFinance(seed?.finances);
+    // Leagues saved before recruiting: the four classes start the way a new league's would.
+    if (!meta.recruiting) lg.season.startRecruiting();
     return lg;
   }
 
@@ -219,6 +234,22 @@ export class League {
       if (!Object.hasOwn(AREAS, a.payload?.area)) throw new Error(`unknown area ${a.payload?.area}`);
       a = { type: a.type, payload: { area: a.payload.area } };
     }
+    if (a.type === "recruit_auto") a = { type: a.type, payload: { on: !!a.payload?.on } };
+    if (a.type === "recruit_hours") {
+      const hours = Math.round(Number(a.payload?.hours));
+      if (!Number.isFinite(hours) || hours < 0 || hours > 40) throw new Error("contact hours are 0 to 40 a week");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), hours } };
+    }
+    if (a.type === "recruit_offer" || a.type === "scout_prospect") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "scout_region") {
+      if (!Object.hasOwn(REGIONS, a.payload?.region)) throw new Error(`unknown region ${a.payload?.region}`);
+      a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
+    }
+    if (a.type === "staff_time") {
+      const t = { recruiting: Number(a.payload?.recruiting), scouting: Number(a.payload?.scouting), prep: Number(a.payload?.prep) };
+      if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep <= 0) throw new Error("staff time is three shares that add up to more than 0");
+      a = { type: a.type, payload: t };
+    }
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -249,6 +280,12 @@ export class League {
       if (a.type === "set_collective_focus") this.season.setCollectiveFocus(a.payload.focus);
       if (a.type === "set_ticket_price") this.season.setTicketPrice(a.payload.game_id, a.payload.price);
       if (a.type === "request_project") this.season.requestProject(a.payload.area);
+      if (a.type === "recruit_auto") this.season.setRecruitAuto(a.payload.on);
+      if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
+      if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);
+      if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on);
+      if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
+      if (a.type === "staff_time") this.season.setStaffTime(a.payload);
       if (a.type === "sim") {
         // A sim after the season has ended starts the next one.
         if (this.season.done) this.nextSeason();
@@ -342,10 +379,19 @@ export class League {
     return { ...v, result: this.season.state.games.find((g) => g.id === live.game.id) };
   }
 
+  /** The season and recruiting revision last saved (recruiting is several megabytes, so it's saved only when it changed). */
+  private savedRecruiting: { season: Season; rev: number } | null = null;
+
   private writeMeta(): void {
     const st = this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
     const s = this.season.state as unknown as Record<string, unknown>;
-    for (const k of META_KEYS) st.run(k, j(s[k] ?? null));
+    for (const k of META_KEYS) {
+      if (k === "recruiting") {
+        if (this.savedRecruiting?.season === this.season && this.savedRecruiting.rev === this.season.recruitRev) continue;
+        this.savedRecruiting = { season: this.season, rev: this.season.recruitRev };
+      }
+      st.run(k, j(s[k] ?? null));
+    }
   }
 
   private persistDay(r: DayReport): void {

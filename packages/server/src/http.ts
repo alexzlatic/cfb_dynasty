@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
+import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, regionOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
@@ -160,6 +161,38 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return { team_id: team, mine, year: s.year, ...b, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES }, usual_price: inputs.price, capacity: inputs.capacity,
           home, conference, facilities: s.facilities?.[team] ?? null, areas: AREAS, projects: (s.projects ?? []).filter((p) => p.team_id === team),
           requests: mine ? (s.requests ?? []).slice(-5).reverse() : [] };
+      }
+      case route === "recruiting": {
+        // Your recruiting board: a class's prospects as your staff sees them, filtered, and your settings.
+        const st = s.recruiting;
+        if (!st) return { available: false };
+        const me = s.user_team_id, u = st.user;
+        const cls = Number(url.searchParams.get("cls") ?? s.year + 1);
+        const pos = url.searchParams.get("pos"), region = url.searchParams.get("region"), view = url.searchParams.get("view") ?? "all";
+        const limit = Math.min(500, Number(url.searchParams.get("limit") ?? 100)), offset = Number(url.searchParams.get("offset") ?? 0);
+        const mine = (p: Prospect) => me != null && (p.offers.includes(me) || p.commit?.team === me || u.hours[p.id] != null || u.scout.includes(p.id) || u.evals[p.id] != null);
+        const ps = st.prospects.filter((p) => p.cls === cls && (!pos || p.pos === pos) && (!region || regionOf(p.home) === region)
+          && (view === "all" || (view === "rated" && p.svc) || (view === "mine" && mine(p)) || (view === "committed" && me != null && p.commit?.team === me)));
+        const rows = ps.map((p) => S.prospectView(p));
+        // Rated prospects by the service's rank, then the rest by your staff's estimate.
+        rows.sort((a, b) => (a.service?.rank ?? Infinity) - (b.service?.rank ?? Infinity) || (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || a.id - b.id);
+        const staff = me != null ? S.staff(me) : [];
+        const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
+        const time = timeSplit(u.time, S.inSeason(s.date));
+        return {
+          available: true, team_id: me, year: s.year, date: s.date, cls, classes: [s.year + 1, s.year + 2, s.year + 3, s.year + 4].map((c) => ({ cls: c, grade: gradeOf({ cls: c }, s.year) })),
+          total: rows.length, prospects: rows.slice(offset, offset + limit),
+          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: u.time, split: time },
+          staff, skills, skill_names: SKILLS, hours: STAFF_HOURS, regions: REGIONS, costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS },
+        };
+      }
+      case route === "recruiting/prospect": {
+        if (!s.recruiting) return null;
+        return S.prospectView(S.prospect(Number(url.searchParams.get("pid"))));
+      }
+      case route === "recruiting/rankings": {
+        if (!s.recruiting) return [];
+        return S.classRankings(Number(url.searchParams.get("cls") ?? s.year + 1)).slice(0, Number(url.searchParams.get("limit") ?? 50));
       }
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {
