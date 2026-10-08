@@ -47,7 +47,7 @@ export function CoachesScreen() {
   ];
   const openings = [...data.openings].sort((a, b) => (a.role === "HC" ? 0 : 1) - (b.role === "HC" ? 0 : 1) || a.opened.localeCompare(b.opened));
   return (
-    <div className="cols">
+    <div>
       <div>
         <Panel title={`Coaching carousel ${data.year}`} right={<span className="small muted">{data.open ? `Open until ${shortDate(data.close)}` : state.date < `${state.year}-11-20` ? "Opens the Sunday after the last full Saturday of November" : "Closed"}</span>}>
           <p className="small muted">Athletic directors let coaches go the day after the last full Saturday of November; each opening is filled over the next weeks, best jobs first. Successful Group of Five head coaches and power-conference coordinators are first in line; coaches who are let go take a step down or drop out.</p>
@@ -101,7 +101,7 @@ export function CoachPage({ cid }: { cid: number }) {
             <tr><td>Reputation</td><td>{c.rep} <span className="muted small">of 100</span></td></tr>
             <tr><td>Came up on</td><td>{c.side === "off" ? "Offense" : "Defense"}: {schemeOf(c, c.side === "off" ? "OC" : "DC")}</td></tr>
             {c.role && <tr><td>Contract</td><td>{money(c.salary)} a year through {c.through}</td></tr>}
-            {(c.hc_record.w + c.hc_record.l > 0) && <tr><td>Head coaching record</td><td>{c.hc_record.w}-{c.hc_record.l}{c.prior ? <span className="muted small"> ({c.prior.w}-{c.prior.l} in {c.prior.years} seasons before the dynasty)</span> : null}</td></tr>}
+            {(c.hc_record.w + c.hc_record.l > 0) && <tr><td>Head coaching record</td><td>{c.hc_record.w}-{c.hc_record.l}{c.prior ? <span className="muted small"> ({c.prior.w}-{c.prior.l} in {c.prior.years} season{c.prior.years === 1 ? "" : "s"} before the dynasty)</span> : null}</td></tr>}
           </tbody></table>
           <h4>{mine ? "Skills" : "Skills (your staff's read)"}</h4>
           <table className="grid tight"><tbody>{(Object.keys(SKILL_NAMES) as SkillKey[]).map((k) => (

@@ -314,7 +314,7 @@ export function willing(c: CoachRec, job: Job, role: Role, jobs: Map<number, Job
   if (!here || !c.role) return false;
   const tenure = year - c.since + 1;
   if (role === "HC") {
-    if (c.role === "HC") return tenure >= 2 && job.appeal >= here.appeal + (here.level === "p4" ? 22 : 15);
+    if (c.role === "HC") return tenure >= 2 && job.appeal >= here.appeal + (here.level === "p4" ? 22 : 20);
     if (c.role === "STC") return job.level === "fcs";
     return here.level !== "fcs" && job.appeal >= here.appeal - 45 && c.rep >= 40;
   }

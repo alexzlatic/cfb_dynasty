@@ -169,9 +169,10 @@ export function writeStory(w: Writer, c: StoryContext): Story {
     return { headline, body: `By ${byline}. ` + parts.join(" "), team_ids: [t.id] };
   }
 
-  if (w.beat.kind === "conference") {
+  // A conference that realignment dissolved leaves its beat writer covering the national scene.
+  const members = w.beat.kind === "conference" ? [...c.teams.values()].filter((t) => t.level === "fbs" && t.conference === (w.beat as { conference: string }).conference) : [];
+  if (w.beat.kind === "conference" && members.length) {
     const conf = w.beat.conference;
-    const members = [...c.teams.values()].filter((t) => t.level === "fbs" && t.conference === conf);
     const ids = new Set(members.map((t) => t.id));
     const results = c.games.filter((g) => g.status === "final" && weekAgo(g.date) && (ids.has(g.home_id) || ids.has(g.away_id)));
     const leader = [...members].sort((a, b) => {
