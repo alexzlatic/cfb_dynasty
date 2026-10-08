@@ -14,6 +14,9 @@ let base = "";
 beforeAll(() => {
   manager = new LeagueManager(mkdtempSync(join(tmpdir(), "cfb-test-")));
   server = startServer({ manager }, 0);
+  // Tests run long synchronous sims between requests; keep idle sockets open longer than that so fetch
+  // never reuses one the server has just closed (ECONNRESET).
+  server.keepAliveTimeout = 300_000;
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 afterAll(() => { server.close(); manager.closeAll(); });
