@@ -53,10 +53,11 @@ export interface BudgetData {
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
-  playoff: PlayoffState | null; news: NewsItem[]; career: CareerView | null;
+  playoff: PlayoffState | null; news: NewsItem[]; career: CareerView | null; past: SeasonSummary[];
 }
 
-export type { RatedPlayer } from "@cfb/core";
+export type { RatedPlayer, SeasonSummary } from "@cfb/core";
+import type { SeasonSummary } from "@cfb/core";
 import type { RatedPlayer } from "@cfb/core";
 export type DepthChart = Record<string, number[]>;
 export type { Injury } from "@cfb/core";

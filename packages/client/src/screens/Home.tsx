@@ -54,6 +54,17 @@ export function Home() {
             ))}</tbody></table>
           ) : <p className="muted">The preseason poll comes out on the first day.</p>}
         </Panel>
+        {state.past.length > 0 && (
+          <Panel title="Past seasons">
+            <table className="grid tight"><tbody>{[...state.past].reverse().map((y) => (
+              <tr key={y.year}>
+                <td className="num">{y.year}</td>
+                <td>{y.champion != null ? <><Logo team={team(y.champion)} size={18} /> {team(y.champion)?.school}</> : "-"}</td>
+                <td className="muted">{y.user ? `You: ${y.user.w}-${y.user.l}${y.user.rank ? `, No. ${y.user.rank}` : ""}` : ""}</td>
+              </tr>
+            ))}</tbody></table>
+          </Panel>
+        )}
         {myStories && myStories.length > 0 && <Panel title="From your beat writer"><NewsList items={myStories} /></Panel>}
         <Panel title="Headlines" right={<a href={`#/l/${id}/news`}>All news</a>}>{headlines && <NewsList items={headlines} compact />}</Panel>
       </div>
