@@ -429,6 +429,7 @@ b.needs { color: var(--down); }
 .needsyou h3 { margin: 0 0 4px; font-family: var(--display); text-transform: uppercase; color: var(--down); font-size: 18px; }
 .needsyou ul { margin: 0; padding-left: 18px; }
 .needsyou li { margin: 3px 0; }
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 
 /* Conferences: the new-league editor and League > Conferences */
 .confedit .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }

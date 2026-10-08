@@ -38,7 +38,7 @@ export function PayrollScreen({ tid }: { tid?: number }) {
       <span className="nowrap">
         $<input className="num" style={{ width: "6em" }} value={edit.amount} onChange={(e) => setEdit({ ...edit, amount: e.target.value })} />K a year for{" "}
         <select value={edit.years} onChange={(e) => setEdit({ ...edit, years: Number(e.target.value) })}>
-          {Array.from({ length: p.eligibility }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} {y === 1 ? "season" : "seasons"}</option>)}
+          {Array.from({ length: p.eligibility }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} {y === 1 ? "season" : "seasons"}{y > 1 ? " (locks him in)" : ""}</option>)}
         </select>{" "}
         <button disabled={busy || !Number.isFinite(amount)} onClick={() => sign(p.pid, amount, edit.years)}>Sign</button>{" "}
         <button className="link small" disabled={busy} onClick={() => sign(p.pid, 0, 1)}>End deal</button>{" "}
@@ -87,9 +87,9 @@ export function PayrollScreen({ tid }: { tid?: number }) {
                 <td className="num">{money(p.value)}</td><td className="num">{pay + nil ? money(pay + nil) : <span className="muted">none</span>}</td>
                 <td className="num muted small">{pay + nil ? `${money(pay)} / ${money(nil)}` : ""}</td>
                 <td className={"num " + (pct == null ? "" : pct < 0.5 && p.starter ? "loss" : pct > 1.2 ? "win" : "muted")}>{pct == null ? "" : `${Math.round(pct * 100)}%`}</td>
-                <td className="muted small">{p.contract ? `${p.contract.start + p.contract.years - 1}-${String(p.contract.start + p.contract.years).slice(2)}` : ""}</td>
+                <td className="muted small">{p.contract ? `${p.contract.start + p.contract.years - 1}-${String(p.contract.start + p.contract.years).slice(2)}` : ""}{p.contract?.locked && <span title="A multi-year deal he agreed to: no renegotiating until it ends"> 🔒</span>}</td>
                 <td className={"small " + (p.morale <= -0.25 ? "loss" : p.morale >= 0.25 ? "win" : "muted")}>{moodWord(p.morale)}</td>
-                {data.mine && <td>{editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay + nil || p.value) / 1000)), years: Math.min(p.eligibility, p.contract?.years ?? 1) })}>{pay + nil ? "Change" : "Offer"}</button>}</td>}
+                {data.mine && <td>{editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay + nil || p.value) / 1000)), years: p.contract?.locked ? Math.min(p.eligibility, p.contract.start + p.contract.years - data.year) : 1 })}>{pay + nil ? "Change" : "Offer"}</button>}</td>}
               </tr>
             );
           })}</tbody>

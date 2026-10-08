@@ -14,7 +14,7 @@ import { isPower } from "./conferences.ts";
  */
 
 export type RevenueLine = "media" | "tickets" | "donors" | "support" | "other" | "postseason";
-export type ExpenseLine = "revenue_share" | "coaches" | "operations" | "facilities";
+export type ExpenseLine = "revenue_share" | "coaches" | "operations" | "facilities" | "one_time";
 export const REVENUE_LINES: Record<RevenueLine, string> = {
   media: "Media rights and conference distributions", tickets: "Tickets and game day", donors: "Donors and booster giving",
   support: "School support and student fees",
@@ -22,6 +22,7 @@ export const REVENUE_LINES: Record<RevenueLine, string> = {
 };
 export const EXPENSE_LINES: Record<ExpenseLine, string> = {
   revenue_share: "Revenue share to players", coaches: "Coaches and staff", operations: "Recruiting, travel and operations", facilities: "Facilities and debt service",
+  one_time: "One-time charges (exit fees and the like)",
 };
 
 /** What a school's budget is built from: the fixed lines for a year, and its game day. */
@@ -35,12 +36,20 @@ export interface Budget {
   source: "knight-newhouse" | "estimate";
 }
 
-/** A football program's own share of its conference's yearly distribution (media rights and bowls), 2025-26. */
+/**
+ * A football program's own share of its conference's yearly distribution (media rights), per member, 2025-26.
+ * Keyed by conference so a custom or realigned conference can set its own payout.
+ */
 export const CONF_MEDIA: Record<string, number> = {
   "Big Ten": 42_000_000, SEC: 38_000_000, ACC: 31_000_000, "Big 12": 28_000_000, "Pac-12": 5_500_000, "American Athletic": 5_000_000,
   "Mountain West": 3_500_000, "Sun Belt": 2_500_000, "Mid-American": 1_500_000, "Conference USA": 1_200_000, "FBS Independents": 2_000_000,
 };
 export const SCHOOL_MEDIA: Record<string, number> = { "Notre Dame": 25_000_000, Army: 4_000_000, Navy: 4_000_000 };
+
+/** A school's media money: its own TV deal (Notre Dame, the academies) or its conference's per-member payout. */
+export function conferenceMedia(conference: string, school?: string): number {
+  return (school ? SCHOOL_MEDIA[school] : undefined) ?? CONF_MEDIA[conference] ?? 2_000_000;
+}
 const r10k = (x: number) => Math.round(x / 10_000) * 10_000;
 
 /** A school's budget inputs: real lines where loaded, estimates for the rest. */
@@ -97,10 +106,8 @@ export function crowd(b: Budget, o: { price: number; winPct: number | null; rank
   return Math.round(Math.max(0, Math.min(b.capacity, d)));
 }
 
-/** A school's share of a postseason game (after the conference keeps its part and travel is paid). */
-export function postseasonShare(kind: "bowl" | "playoff", title: boolean): number {
-  return kind === "bowl" ? 1_500_000 : title ? 6_000_000 : 4_000_000;
-}
+/** A one-time charge to a football budget in a fiscal year (a conference exit fee, say). */
+export interface Charge { team_id: number; year: number; label: string; amount: number }
 
 // ---- facilities ----------------------------------------------------------------------------------
 export type Area = "weight_room" | "medical" | "practice" | "locker_room" | "academics";

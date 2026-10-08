@@ -444,6 +444,8 @@ export interface UserRecruiting {
   found_team?: number;
   /** Your big board: the prospects you're tracking, in your order. */
   board?: number[];
+  /** Your commits already put on your board for you (so one you take off stays off). */
+  board_added?: number[];
 }
 
 export interface RecruitingState {
