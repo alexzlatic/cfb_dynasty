@@ -30,7 +30,7 @@ export class LeagueManager {
     let lg = this.open.get(id);
     if (!lg) {
       if (!existsSync(this.path(id))) throw new Error("no such league");
-      lg = League.open(id, this.path(id));
+      lg = League.open(id, this.path(id), this.seed());
       this.open.set(id, lg);
     }
     return lg;

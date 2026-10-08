@@ -160,3 +160,7 @@ table.depth th:first-child { width: 22%; }
 table.depth select { width: 100%; min-width: 0; text-overflow: ellipsis; }
 .warn { color: #b26a00; }
 @media (max-width: 900px) { .cols.even { grid-template-columns: 1fr; } .attr { grid-template-columns: 110px 1fr 34px; } }
+
+/* Injuries */
+.inj { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 0 4px; border-radius: 3px; background: #c0392b; color: #fff; vertical-align: middle; cursor: help; }
+.injline { display: inline-block; margin: 2px 0; padding: 1px 8px; border-radius: 4px; background: rgba(192, 57, 43, .9); color: #fff; font-size: 13px; }

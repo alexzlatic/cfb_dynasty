@@ -1,6 +1,7 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
-import type { RatedPlayer } from "./players.ts";
+import { GameDay, type SideSetup } from "./gameday.ts";
+import { POSITIONS, type RatedPlayer } from "./players.ts";
 import { addDays, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
@@ -9,7 +10,7 @@ import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } fr
 import { records, updatePower } from "./ranking.ts";
 import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
-  DEFAULT_SETTINGS, type Ballot, type CalEvent, type Game, type GameDetail, type GameKind, type NewsItem, type Poll, type SeedBundle,
+  DEFAULT_SETTINGS, type Ballot, type CalEvent, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team,
 } from "./types.ts";
 
@@ -47,6 +48,8 @@ export interface SeasonState {
   next_game_id: number;
   /** Depth charts changed from the seed's, by team. */
   depth?: Record<number, DepthChart>;
+  /** Every injury that cost a player games, oldest first. */
+  injuries?: Injury[];
 }
 
 export interface DayReport {
@@ -62,6 +65,16 @@ export interface DayReport {
   stop: string | null;
 }
 
+const gameOrder = (a: Game, b: Game) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id);
+
+/** "is out for the season", "will miss about 3 weeks", ... */
+export function injuryOutlook(days: number): string {
+  if (days >= 90) return "is out for the season";
+  if (days < 5) return "is day to day";
+  const weeks = Math.round(days / 7);
+  return weeks <= 1 ? "will miss about a week" : `will miss about ${weeks} weeks`;
+}
+
 const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 const INDEPENDENT = "FBS Independents";
 
@@ -71,15 +84,20 @@ export class Season {
   private ratings: Map<number, TeamRatings>;
   private seed: SeedBundle;
   readonly playerById = new Map<number, RatedPlayer>();
-  private compiled = new Map<number, TeamRatings>();
+  /** Each team's compiled lineup and the injured players it was compiled without. */
+  private compiled = new Map<number, { out: string; r: TeamRatings }>();
 
   constructor(public state: SeasonState, seed: SeedBundle) {
     this.seed = seed;
-    this.teams = seed.teams;
+    // Teams in id order, the order a league file returns them in, so polls draw the same noise after a reopen.
+    this.teams = [...seed.teams].sort((a, b) => a.id - b.id);
     this.teamById = new Map(seed.teams.map((t) => [t.id, t]));
     this.ratings = new Map(Object.entries(seed.ratings).map(([k, v]) => [Number(k), v.ratings]));
     for (const t of Object.values(seed.players ?? {})) for (const p of t.players) this.playerById.set(p.id, p);
     state.depth ??= {};
+    state.injuries ??= [];
+    // One canonical game order (date, then id), so a league reopened from its file plays a day's games in the same order.
+    state.games.sort(gameOrder);
   }
 
   /** A team's rated players (empty with a seed that has none). */
@@ -93,17 +111,36 @@ export class Season {
     this.compiled.delete(teamId);
   }
 
-  /** What the engine plays: the team's lineup compiled into rates, or its team ratings without players. */
+  /** Injuries keeping a team's players out today (or on `date`). */
+  injured(teamId: number, date = this.state.date): Injury[] {
+    return this.state.injuries!.filter((i) => i.team_id === teamId && i.back > date);
+  }
+  injuryOf(pid: number, date = this.state.date): Injury | null {
+    const all = this.state.injuries!;
+    for (let i = all.length - 1; i >= 0; i--) if (all[i].pid === pid && all[i].back > date) return all[i];
+    return null;
+  }
+
+  /** What the engine plays: the team's healthy lineup compiled into rates, or its team ratings without players. */
   teamRatings(teamId: number): TeamRatings | undefined {
     const base = this.ratings.get(teamId);
     const tp = this.seed.players?.[teamId];
     if (!base || !tp) return base;
-    let r = this.compiled.get(teamId);
-    if (!r) {
-      r = compileTeam(base, lineup(this.depthChart(teamId), this.playerById), tp.scheme, tp.kicking);
-      this.compiled.set(teamId, r);
+    const out = new Set(this.injured(teamId).map((i) => i.pid));
+    const key = [...out].sort().join(",");
+    let c = this.compiled.get(teamId);
+    if (!c || c.out !== key) {
+      c = { out: key, r: compileTeam(base, lineup(this.depthChart(teamId), this.playerById, out), tp.scheme, tp.kicking) };
+      this.compiled.set(teamId, c);
     }
-    return r;
+    return c.r;
+  }
+
+  private sideSetup(teamId: number): SideSetup | null {
+    const base = this.ratings.get(teamId);
+    const tp = this.seed.players?.[teamId];
+    if (!base || !tp) return null;
+    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out: new Set(this.injured(teamId).map((i) => i.pid)) };
   }
 
   /** A new league on the seed's start date. */
@@ -276,11 +313,22 @@ export class Season {
 
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
-    const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
-    if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
-    const sim = new GameSim(home, away, { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true }).play();
+    const opts = { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true };
+    const hs = this.sideSetup(g.home_id), as = this.sideSetup(g.away_id);
+    let gd: GameDay | null = null, sim: GameSim;
+    if (hs && as) {
+      // Game day: fatigue, rotation, injuries and blowout subs, on their own random stream.
+      gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")), { injuries: s.settings.injuries ?? 1 });
+      const k = gd.kickoff();
+      sim = new GameSim(k.home, k.away, opts).play(gd.provider());
+    } else {
+      const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
+      if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
+      sim = new GameSim(home, away, opts).play();
+    }
     const r = sim.result();
+    const day = gd?.result();
     g.status = "final";
     g.home_score = r.home.score;
     g.away_score = r.away.score;
@@ -289,7 +337,9 @@ export class Season {
     rep.details.push({
       game_id: g.id, home_box: r.home.box, away_box: r.away.box, home_players: r.home.players, away_players: r.away.players,
       home_q: r.home.qscores, away_q: r.away.qscores, drives: r.drives ?? [], plays: this.keepPlays(g) ? r.plays ?? null : null,
+      injuries: day?.injuries ?? [], snaps: day?.snaps ?? {},
     });
+    if (day) this.recordInjuries(g, day.injuries, [hs!, as!], rep);
     updatePower(s.power, g, s.settings.home_field_points);
     for (const [id, side] of [[g.home_id, r.home], [g.away_id, r.away]] as const) {
       const line = starLine(side.players as Record<string, Record<string, number>>, this.team(id).school);
@@ -300,6 +350,28 @@ export class Season {
       s.champion = g.home_score! > g.away_score! ? g.home_id : g.away_id;
       const c = this.team(s.champion);
       rep.news.push(this.news(g.date, "champion", `${c.school} wins the national championship`, this.scoreLine(g), [c.id]));
+    }
+  }
+
+  /** Injuries that cost games go on the season's list; the notable ones make the news. */
+  private recordInjuries(g: Game, list: GameDetail["injuries"] & {}, sides: SideSetup[], rep: DayReport): void {
+    const s = this.state;
+    for (const x of list) {
+      if (x.days == null) continue;
+      const side = sides.find((d) => d.team_id === x.team_id)!;
+      const starters = lineup(side.depth, this.playerById, side.out).slot;
+      const starter = Object.values(starters).some((p) => p?.id === x.pid);
+      const inj: Injury = { pid: x.pid, team_id: x.team_id, name: x.name, pos: x.pos, game_id: g.id, date: g.date, type: x.type, days: x.days,
+        back: addDays(g.date, Math.max(1, x.days)), starter };
+      s.injuries!.push(inj);
+      const t = this.team(x.team_id);
+      const mine = s.user_team_id === x.team_id;
+      // Around the league only starting quarterbacks and ranked teams' season-ending injuries make the news.
+      const notable = starter && t.level === "fbs" && (x.pos === "QB" ? x.days >= 5 : x.days >= 90 && this.rankOf(t.id) != null);
+      if (x.days >= 5 && (mine || notable)) {
+        rep.news.push(this.news(g.date, "injury", `${t.school} ${POSITIONS.includes(x.pos) ? x.pos : ""} ${x.name} ${injuryOutlook(x.days)}`.replace(/\s+/g, " "),
+          `${x.name} was hurt (${x.type}) against ${this.team(x.team_id === g.home_id ? g.away_id : g.home_id).school}.`, [x.team_id]));
+      }
     }
   }
 
@@ -336,6 +408,7 @@ export class Season {
     const s = this.state;
     const game: Game = { ...g, id: s.next_game_id++, status: "scheduled", home_score: null, away_score: null, overtime: false, kickoff_et: null, week: 0, conference_game: false };
     s.games.push(game);
+    s.games.sort(gameOrder);
     rep.new_games.push(game);
     const evId = `${s.year}:game_day:${game.date}`;
     const ev = s.events.find((e) => e.id === evId);

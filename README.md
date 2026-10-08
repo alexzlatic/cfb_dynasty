@@ -80,7 +80,17 @@ Open the same league in two windows and sim a day in one: the other updates live
   unit rates, named runners and receivers, scramble rate and kicking. With every player at 75 it returns
   the FBS rates; with each team's seed depth chart it returns that team's preseason ratings exactly, so
   the season plays at the same strength as M0 while injuries and depth-chart changes now matter.
-- **Checks**: `npm run check:seasons` sims full seasons and counts FBS players reaching real season marks.
+- **Game day** (`packages/core/src/gameday.ts`): players tire as they play (by position and stamina) and
+  recover on the sideline; a tired player plays up to 0.3 SD below his ratings until the coach rotates in
+  the next player on the depth chart, so defensive linemen play about 60% of snaps and quarterbacks and
+  linemen nearly all. Players get hurt (by position, with ball carriers most exposed, scaled by injury
+  proneness); the backup takes over, and injuries run from a few snaps to the season, healing faster for
+  tough players. Starters sit in blowouts. Injuries carry across the season, skip the player in every
+  depth chart until he is back, and show on the roster, depth chart, player and game screens. The
+  Injuries setting turns them off or up and down. Injuries draw from their own random stream, so the
+  engine's draws are unchanged.
+- **Checks**: `npm run check:seasons` sims full seasons and counts FBS players reaching real season marks;
+  `npx tsx packages/core/scripts/gameday-check.ts` reports snap shares, injury rates and scoring.
 
 ## Data notes
 

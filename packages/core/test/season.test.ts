@@ -50,7 +50,8 @@ describe("polls", () => {
     runSim(s, { kind: "date", date: "2026-10-12" });
     const ap = s.latestPoll("ap")!;
     expect(ap.voters).toBe(s.state.writers.length);
-    expect(ap.ranks[0].first).toBeLessThan(ap.voters!);
+    // Identical ballots would give the k-th team exactly voters x (26 - k) points.
+    expect(ap.ranks.slice(0, 25).some((r, i) => r.points !== ap.voters! * (25 - i))).toBe(true);
     const byPower = [...ap.ranks.slice(0, 25)].sort((a, b) => s.state.power[b.team_id] - s.state.power[a.team_id]);
     expect(byPower.map((r) => r.team_id)).not.toEqual(ap.ranks.slice(0, 25).map((r) => r.team_id));
     expect(s.state.news.filter((n) => n.kind === "story" && n.date === ap.date)).toHaveLength(s.state.writers.length);

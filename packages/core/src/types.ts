@@ -1,5 +1,6 @@
 import type { DepthChart, SchemeOffsets } from "./compiler.ts";
-import type { RatedPlayer } from "./players.ts";
+import type { Pos, RatedPlayer } from "./players.ts";
+import type { InGameInjury } from "./gameday.ts";
 import type { DriveRecord, PlayRecord, TeamBox, TeamRatings } from "@cfb/engine";
 import type { ISODate } from "./dates.ts";
 
@@ -56,6 +57,15 @@ export interface GameDetail {
   home_q: number[]; away_q: number[];
   drives: DriveRecord[];
   plays: PlayRecord[] | null;
+  /** Everyone hurt in the game, including players who came back; snaps played by player id. */
+  injuries?: InGameInjury[];
+  snaps?: Record<number, number>;
+}
+
+/** A player who misses time. He is back for games on or after `back`. */
+export interface Injury {
+  pid: number; team_id: number; name: string; pos: Pos; game_id: number; date: ISODate;
+  type: string; days: number; back: ISODate; /** Started the game he was hurt in. */ starter: boolean;
 }
 
 export type EventType =
@@ -110,12 +120,14 @@ export interface Settings {
   stop_on: EventType[];
   /** Keep full play-by-play for your games and for games between two ranked teams. */
   keep_pbp: "mine" | "mine_and_ranked" | "all";
+  /** How often players get hurt: 1 = real football, 0 = never. */
+  injuries: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   playoff: { format: "playoff", teams: 12, auto_bids: 5, byes: 4, campus_first_round: true },
   conf_title_games: true, home_field_points: 2.5, poll_bias: 1, poll_noise: 1,
-  stop_on: ["season_end"], keep_pbp: "mine_and_ranked",
+  stop_on: ["season_end"], keep_pbp: "mine_and_ranked", injuries: 1,
 };
 
 export interface SeedBundle {

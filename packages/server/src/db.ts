@@ -42,6 +42,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE news ADD COLUMN author INTEGER;
   CREATE INDEX news_author ON news(author);
   `,
+  // 3: M1 rated players (compact form, by team: scheme, kicking, opening depth chart, ratings)
+  `
+  CREATE TABLE rated_teams (team_id INTEGER PRIMARY KEY, data TEXT NOT NULL);
+  `,
 ];
 
 export function openDb(path: string): DatabaseSync {

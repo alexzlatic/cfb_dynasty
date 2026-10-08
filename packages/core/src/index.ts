@@ -11,3 +11,4 @@ export * from "./playoff.ts";
 export * from "./writers.ts";
 export * from "./players.ts";
 export * from "./compiler.ts";
+export * from "./gameday.ts";

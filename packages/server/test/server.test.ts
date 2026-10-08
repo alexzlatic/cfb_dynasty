@@ -55,6 +55,23 @@ describe("replay gate", () => {
     const { League } = await import("../src/league.ts");
     const again = League.open("reopen-check", manager.path(lg.id));
     expect(again.digest()).toBe(lg.digest());
+    // Players, injuries and lineups come back too, so the next game plays the same either way.
+    expect(again.season.roster(2509).length).toBeGreaterThan(80);
+    expect(lg.season.state.injuries!.length).toBeGreaterThan(20);
+    expect(again.season.state.injuries).toEqual(lg.season.state.injuries);
+    expect(again.season.teamRatings(2509)).toEqual(lg.season.teamRatings(2509));
+    again.apply({ type: "sim", payload: { kind: "date", date: "2026-10-12" } });
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-10-12" } });
+    expect(again.digest()).toBe(lg.digest());
+    again.close();
+  });
+  it("a league saved before players were rated picks them up from the seed", async () => {
+    const lg = manager.create({ name: "Old save", user_team_id: 2509, seed: 6 });
+    lg.db.exec("DELETE FROM rated_teams");
+    const { League } = await import("../src/league.ts");
+    expect(League.open("old-check", manager.path(lg.id)).season.roster(2509)).toHaveLength(0);
+    const again = League.open("old-check", manager.path(lg.id), manager.seed());
+    expect(again.season.roster(2509).length).toBeGreaterThan(80);
     again.close();
   });
 });

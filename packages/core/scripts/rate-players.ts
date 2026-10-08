@@ -25,6 +25,7 @@ import {
 } from "../src/compiler.ts";
 import { ATTRS, fromZ, overall, z as toZ, type Pos, type RatedPlayer } from "../src/players.ts";
 import { mixSeed } from "../src/hash.ts";
+import { packPlayer } from "../src/seed.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const SEED = join(ROOT, "data/seed/2026wk1");
@@ -473,21 +474,8 @@ for (const [tid, list] of Object.entries(rosters)) {
   const compiled = compileTeam(prior, l, scheme, kicking);
   const err = Math.max(...RATES.map((r) => Math.abs(compiled.offense[r] / prior.offense[r] - 1)), ...RATES.map((r) => Math.abs(compiled.defense[r] / prior.defense[r] - 1)));
   if (err > 1e-6) report.push(`${prior.name}: compile differs from prior by ${(err * 100).toFixed(4)}%`);
-  out[tid] = { scheme, kicking, depth, players: ps.map(pack) };
+  out[tid] = { scheme, kicking, depth, players: ps.map(packPlayer) };
   void list;
-}
-
-/**
- * Players are stored compactly; identity (name, jersey, size, hometown) stays in rosters.json and is
- * joined by id when the seed loads.
- */
-function pack(p: RatedPlayer) {
-  const r = (x: number | null) => (x == null ? null : Math.round(x * 10000) / 10000);
-  return {
-    id: p.id, pos: p.pos, years: p.years, stars: p.stars, composite: r(p.composite), natl_rank: p.natl_rank,
-    a: ATTRS[p.pos].map((k) => p.attrs[k]), t: [p.traits.stamina, p.traits.injury, p.traits.toughness, p.traits.discipline],
-    h: [p.hidden.potential, p.hidden.work_ethic], tend: p.tend, b: p.basis === "stats" ? p.sample : -p.sample,
-  };
 }
 
 writeFileSync(join(SEED, "players.json"), JSON.stringify({ as_of: "2026-08-24", format: 1, teams: out }));

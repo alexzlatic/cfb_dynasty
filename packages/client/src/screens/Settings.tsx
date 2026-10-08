@@ -44,6 +44,9 @@ export function SettingsScreen() {
       <section className="panel">
         <h3>Games</h3>
         <label>Home-field points assumed by polls and power ratings <input type="number" step={0.5} value={s.home_field_points} onChange={(e) => setS({ ...s, home_field_points: Number(e.target.value) })} /></label>
+        <label>Injuries <select value={s.injuries ?? 1} onChange={(e) => setS({ ...s, injuries: Number(e.target.value) })}>
+          <option value={0}>Off</option><option value={0.5}>Fewer</option><option value={1}>Realistic</option><option value={1.5}>More</option>
+        </select></label>
         <label>Keep play-by-play for <select value={s.keep_pbp} onChange={(e) => setS({ ...s, keep_pbp: e.target.value as never })}>
           <option value="mine">My games</option><option value="mine_and_ranked">My games, ranked matchups and the postseason</option><option value="all">Every game</option>
         </select></label>

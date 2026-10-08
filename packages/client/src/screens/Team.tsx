@@ -3,7 +3,7 @@ import { useLeague, useData } from "../App.tsx";
 import { api, type Player } from "../api.ts";
 import { Logo, heightStr, onColor } from "../util.tsx";
 import { GameTable, NewsList, Panel } from "./common.tsx";
-import { RosterTable } from "./Players.tsx";
+import { RosterTable, outUntil, playerLink } from "./Players.tsx";
 
 const POS_ORDER = ["QB", "RB", "WR", "TE", "OL", "DL", "EDGE", "LB", "DB", "CB", "S", "K", "P", "LS", "ATH"];
 const ROLE = { HC: "Head coach", OC: "Offensive coordinator", DC: "Defensive coordinator", STC: "Special teams coordinator" } as const;
@@ -43,7 +43,7 @@ export function TeamPage({ tid }: { tid: number }) {
           <Panel title="Schedule"><GameTable games={data.games} showDate /></Panel>
           {data.players.length ? (
             <Panel title={`Roster (${data.players.length})`} right={<a href={`#/l/${id}/depth/${tid}`}>Depth chart</a>}>
-              <RosterTable players={data.players} depth={data.depth} />
+              <RosterTable players={data.players} depth={data.depth} injuries={data.injuries} />
             </Panel>
           ) : (
             <Panel title={`Roster (${data.roster.length})`} right={
@@ -70,6 +70,13 @@ export function TeamPage({ tid }: { tid: number }) {
               );
             })}</tbody></table>
           </Panel>
+          {data.injuries.length > 0 && (
+            <Panel title={`Injuries (${data.injuries.length})`}>
+              <table className="grid tight"><tbody>{data.injuries.map((i) => (
+                <tr key={i.pid}><td>{i.pos}</td><td>{playerLink(id, { id: i.pid, first: i.name, last: "" })}</td><td className="muted small">{i.type}, {outUntil(i)}</td></tr>
+              ))}</tbody></table>
+            </Panel>
+          )}
           <Panel title="Beat coverage">{stories && <NewsList items={stories} />}</Panel>
         </div>
       </div>

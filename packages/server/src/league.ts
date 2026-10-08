@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, runSim, records, SLOT_POS, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, runSim, records, SLOT_POS, packPlayer, unpackPlayers, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -22,7 +22,7 @@ export type Push =
 
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
-  "champion", "next_game_id", "stars", "depth"] as const;
+  "champion", "next_game_id", "stars", "depth", "injuries"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -47,6 +47,7 @@ export class League {
       for (const [tid, roster] of Object.entries(seed.rosters)) for (const p of roster) players.push([String(p.id), Number(tid), p.pos, j(p)]);
       ins("INSERT OR IGNORE INTO players (id, team_id, pos, data) VALUES (?, ?, ?, ?)", players);
       ins("INSERT INTO coaches (team_id, role, data) VALUES (?, ?, ?)", seed.coaches.map((c) => [c.team_id, c.role, j(c)]));
+      writeRated(db, seed);
       ins("INSERT INTO team_strength (team_id, as_of, source, data) VALUES (?, ?, ?, ?)",
         Object.entries(seed.ratings).map(([tid, r]) => [Number(tid), seed.start_date, r.source, j(r.ratings)]));
       lg.writeMeta(); lg.db.prepare("INSERT INTO meta (key, value) VALUES ('name', ?)").run(j(opts.name));
@@ -60,8 +61,11 @@ export class League {
     return lg;
   }
 
-  /** Open an existing league file and rebuild the in-memory season from its tables. */
-  static open(id: string, path: string): League {
+  /**
+   * Open an existing league file and rebuild the in-memory season from its tables. A league saved
+   * before players were rated takes them from `seed`.
+   */
+  static open(id: string, path: string, seed?: SeedBundle): League {
     const db = openDb(path);
     const lg = new League(id, db);
     const meta = Object.fromEntries((db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[]).map((r) => [r.key, JSON.parse(r.value)]));
@@ -75,14 +79,19 @@ export class League {
     const state: SeasonState = {
       year: meta.year, seed: meta.seed, date: meta.date, settings: meta.settings, user_team_id: meta.user_team_id, power: meta.power,
       preseason_power: meta.preseason_power, poll_memory: meta.poll_memory, conf_champs: meta.conf_champs, playoff: meta.playoff,
-      champion: meta.champion, next_game_id: meta.next_game_id, stars: meta.stars ?? {}, depth: meta.depth ?? {},
+      champion: meta.champion, next_game_id: meta.next_game_id, stars: meta.stars ?? {}, depth: meta.depth ?? {}, injuries: meta.injuries ?? [],
       writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
       polls: all("SELECT data FROM polls ORDER BY id"),
       news: all("SELECT data FROM news ORDER BY rowid"),
     };
-    lg.season = new Season(state, { teams, ratings } as SeedBundle);
+    if (seed?.players && !db.prepare("SELECT 1 FROM rated_teams LIMIT 1").get()) tx(db, () => writeRated(db, seed));
+    const rosters: Record<string, Player[]> = {};
+    for (const r of db.prepare("SELECT team_id, data FROM players").all() as { team_id: number; data: string }[]) (rosters[r.team_id] ??= []).push(JSON.parse(r.data));
+    const packed = Object.fromEntries((db.prepare("SELECT team_id, data FROM rated_teams").all() as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]));
+    const players = Object.keys(packed).length ? unpackPlayers(packed, rosters) : undefined;
+    lg.season = new Season(state, { teams, ratings, players } as SeedBundle);
     return lg;
   }
 
@@ -197,6 +206,12 @@ export class League {
       rows: rows.sort((a, b) => pct(b.cw, b.cl) - pct(a.cw, a.cl) || pct(b.w, b.l) - pct(a.w, a.l) || b.cw - a.cw || a.team_id - b.team_id),
     }));
   }
+}
+
+/** The seed's rated players, in compact form, into a league file. */
+function writeRated(db: DatabaseSync, seed: SeedBundle): void {
+  const st = db.prepare("INSERT OR REPLACE INTO rated_teams (team_id, data) VALUES (?, ?)");
+  for (const [tid, tp] of Object.entries(seed.players ?? {})) st.run(Number(tid), j({ ...tp, players: tp.players.map(packPlayer) }));
 }
 
 /** Re-run a league from its action log and seed into a scratch database; returns both digests. */

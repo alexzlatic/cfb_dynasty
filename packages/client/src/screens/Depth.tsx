@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFENSE_SLOTS, OFFENSE_SLOTS, SLOT_LABELS, SLOT_POS, SPECIAL_SLOTS, type Slot } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type RatedPlayer } from "../api.ts";
+import { api, type DepthChart, type Injury, type RatedPlayer } from "../api.ts";
 import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
-import { Rating, playerLink } from "./Players.tsx";
+import { InjuryTag, Rating, outUntil, playerLink } from "./Players.tsx";
 
 const DEEP: Partial<Record<Slot, number>> = { QB: 3, RB1: 3, RB2: 2, DE1: 3, DE2: 3, DT1: 3, DT2: 3, K: 2, P: 2, LS: 2 };
 
@@ -16,6 +16,7 @@ export function DepthScreen({ tid }: { tid: number }) {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setDraft(null); }, [data]);
   const byId = useMemo(() => new Map((data?.players ?? []).map((p) => [p.id, p])), [data]);
+  const hurt = useMemo(() => new Map((data?.injuries ?? []).map((i) => [i.pid, i])), [data]);
   if (!data) return <p className="muted">Loading...</p>;
   const t = team(tid);
   const mine = state.user_team_id === tid;
@@ -43,8 +44,9 @@ export function DepthScreen({ tid }: { tid: number }) {
             <td className="muted">{SLOT_LABELS[s]}</td>
             {Array.from({ length: Math.max(2, ...slots.map((x) => DEEP[x] ?? 2)) }, (_, i) => i < (DEEP[s] ?? 2) ? (
               <td key={i}>
-                {mine ? <PlayerSelect slot={s} value={depth[s]?.[i] ?? null} players={data.players} onChange={(v) => pick(s, i, v)} />
-                  : depth[s]?.[i] != null ? <Cell p={byId.get(depth[s]![i])} /> : <span className="muted">-</span>}
+                {mine ? <PlayerSelect slot={s} value={depth[s]?.[i] ?? null} players={data.players} hurt={hurt} onChange={(v) => pick(s, i, v)} />
+                  : depth[s]?.[i] != null ? <Cell p={byId.get(depth[s]![i])} i={hurt.get(depth[s]![i])} /> : <span className="muted">-</span>}
+                {mine && depth[s]?.[i] != null && <InjuryTag i={hurt.get(depth[s]![i])} />}
                 {i === 0 && (starterCount.get(depth[s]?.[0] ?? -1) ?? 0) > 1 && <span className="warn small"> starts twice; his backup plays here</span>}
               </td>
             ) : <td key={i} />)}
@@ -74,21 +76,21 @@ export function DepthScreen({ tid }: { tid: number }) {
         <div>{group("Offense", OFFENSE_SLOTS)}</div>
         <div>{group("Defense", DEFENSE_SLOTS)}{group("Special teams", SPECIAL_SLOTS)}</div>
       </div>
-      <p className="muted small">Each game uses the first healthy player listed at each slot. A player out of position plays well below a starter.</p>
+      <p className="muted small">Each game starts the first healthy player listed at each slot; tired players rotate out to the next one, and injured players are skipped until they are back. A player out of position plays well below a starter.</p>
     </div>
   );
 }
 
-function Cell({ p }: { p: RatedPlayer | undefined }) {
+function Cell({ p, i }: { p: RatedPlayer | undefined; i?: Injury }) {
   const { id } = useLeague();
   if (!p) return <span className="muted">-</span>;
-  return <span><Rating v={p.ovr} /> {playerLink(id, p)} <span className="muted small">{p.pos} {p.class}</span></span>;
+  return <span><Rating v={p.ovr} /> {playerLink(id, p)} <span className="muted small">{p.pos} {p.class}</span> <InjuryTag i={i} /></span>;
 }
 
-function PlayerSelect({ slot, value, players, onChange }: { slot: Slot; value: number | null; players: RatedPlayer[]; onChange: (v: number | null) => void }) {
+function PlayerSelect({ slot, value, players, hurt, onChange }: { slot: Slot; value: number | null; players: RatedPlayer[]; hurt: Map<number, Injury>; onChange: (v: number | null) => void }) {
   const fits = players.filter((p) => SLOT_POS[slot].includes(p.pos)).sort((a, b) => b.ovr - a.ovr);
   const others = players.filter((p) => !SLOT_POS[slot].includes(p.pos)).sort((a, b) => a.pos.localeCompare(b.pos) || b.ovr - a.ovr);
-  const label = (p: RatedPlayer) => `${p.ovr} ${p.first.slice(0, 1)}. ${p.last} · ${p.pos} ${p.class}`;
+  const label = (p: RatedPlayer) => `${p.ovr} ${p.first.slice(0, 1)}. ${p.last} · ${p.pos} ${p.class}${hurt.has(p.id) ? ` · OUT (${outUntil(hurt.get(p.id)!)})` : ""}`;
   return (
     <select value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
       <option value="">(none)</option>
