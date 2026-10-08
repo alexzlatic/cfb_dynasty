@@ -50,6 +50,21 @@ export interface PortalRow {
 export interface PortalNeed { spots: number; starter: boolean; floor: number }
 export interface PortalData { year: number | null; open: boolean; window: string | null; entries: PortalRow[]; needs: Record<string, PortalNeed>; budget: NextBudget | null; offered: number; pitches_left: number }
 
+export interface Fortune { fans: number; donors: number; ad: number }
+export interface FinanceYear { year: number; w: number; l: number; post: string | null; revenue: number; expenses: number; surplus: number; attendance: number; roster_budget: number; class: string; fortune: Fortune }
+export type SalaryCell = { amount: number; kind: "paid" | "signed" | "locked" | "est" | "gone" };
+export interface FrontOfficeData {
+  team_id: number | null; year: number; mine: boolean; conference: string;
+  class: { now: { key: string; label: string } | null; next: { key: string; label: string } };
+  fortune: { now: Fortune; next: Fortune }; record: { w: number; l: number; exp: number; ratio: number }; postseason: { own: number; pooled: number };
+  years: number[];
+  players: { pid: number; name: string; pos: string; ovr: number; cls: string; years: number; value: number; value_next: number; last: number; nfl: boolean; cells: SalaryCell[] }[];
+  totals: { year: number; budget: number; committed: number; est: number; room: number }[];
+  lines: { year: number; revenue: Record<string, number>; expenses: Record<string, number>; surplus: number; projected: boolean }[];
+  history: FinanceYear[];
+  labels: { revenue: Record<string, string>; expenses: Record<string, string> };
+}
+
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
   contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
@@ -163,6 +178,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  frontOffice: (id: string, team?: number) => req<FrontOfficeData>(`/api/leagues/${id}/front_office` + (team != null ? `?team=${team}` : "")),
   budget: (id: string, team?: number) => req<BudgetData>(`/api/leagues/${id}/budget` + (team != null ? `?team=${team}` : "")),
   collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),

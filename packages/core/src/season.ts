@@ -27,7 +27,7 @@ import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, projectCost, type Charge, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
 import { NEUTRAL, budgetClass, nextFortune, postseasonPayout, type FinanceYear, type Fortune, type SeasonOutcome } from "./fortunes.ts";
 import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
-import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, revenueCap, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
+import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, dealAmount, revenueCap, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
 import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
@@ -467,7 +467,7 @@ export class Season {
       const deals: Record<number, { amount: number; years: number; locked?: boolean }> = {};
       for (const p of next.roster(me)) {
         const c = activeContract(s.contracts?.[p.id], ny);
-        if (c) deals[p.id] = { amount: c.amount, years: c.start + c.years - ny, ...(c.locked ? { locked: true } : {}) };
+        if (c) deals[p.id] = { amount: dealAmount(c), years: c.start + c.years - ny, ...(c.locked ? { locked: true } : {}) };
       }
       Object.assign(deals, s.next_deals);
       next.applyDeals(deals);
@@ -536,6 +536,74 @@ export class Season {
     this.news(s.date, "offseason", `${this.team(me).school}: ${mine.length} players gone, ${fr.length} freshmen arrive`,
       `To the NFL: ${mine.filter((d) => d.reason === "nfl").map(who).join(", ") || "nobody"}. Graduated: ${mine.filter((d) => d.reason === "graduated").map(who).join(", ") || "nobody"}. ` +
       `Best of the new class: ${fr.slice(0, 5).map((p) => `${p.pos} ${playerName(p)} (${p.ovr})`).join(", ")}.`, [me]);
+  }
+
+  /**
+   * The front office (like OOTP's salaries and finances screens): every player's pay by season for this year
+   * and the next three (signed, locked, or what keeping him would likely cost), each season's roster budget
+   * against what's committed, football's budget this year and projected for the next two, and the money
+   * history. Projections assume a typical season from here: no new postseason money, fortune as projected.
+   */
+  frontOffice(teamId: number) {
+    const s = this.state, t = this.team(teamId), b = this.budget(teamId), pool = this.rosterPool(teamId);
+    if (!b || !pool) return null;
+    const y = s.year, years = [y, y + 1, y + 2, y + 3];
+    const leaving = this.leavingSet(), nfl = this.nflSlots();
+    const roster = this.roster(teamId);
+    // What this school pays for value now (keeping a player in later years would cost about the same share of his value).
+    const totalValue = roster.reduce((a, p) => a + this.value(p.id), 0), rate = totalValue > 0 ? (this.payroll(teamId) + this.nilPaid(teamId)) / totalValue : 0;
+    type Cell = { amount: number; kind: "paid" | "signed" | "locked" | "est" | "gone" };
+    const players = roster.map((p) => {
+      const last = y + Math.ceil(eligibilityLeft(p)) - 1;
+      const c = s.contracts?.[p.id], next = s.next_deals?.[p.id];
+      const vNext = playerValue({ pos: p.pos, ovr: ovrNext(p), stars: p.stars, years: p.years + 1 });
+      const cells: Cell[] = years.map((yr) => {
+        if (yr === y) return { amount: this.pay(p.id), kind: "paid" };
+        if (yr > last || (yr === y + 1 && leaving.has(p.id))) return { amount: 0, kind: "gone" };
+        if (next && yr < y + 1 + next.years) return { amount: next.amount, kind: next.locked ? "locked" : "signed" };
+        const a = activeContract(c, yr);
+        if (a && !(next && yr === y + 1)) return { amount: dealAmount(a), kind: a.locked ? "locked" : "signed" };
+        return { amount: Math.round(Math.max(rate * vNext, 0) / 5000) * 5000, kind: "est" };
+      });
+      return { pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, cls: p.class, years: p.years, value: this.value(p.id), value_next: vNext, last,
+        nfl: p.years >= 2 && (nfl.get(p.id) ?? 999) <= 100, cells };
+    });
+    const nb = this.nextBudget(teamId);
+    const budgets = years.map((yr, i) => (i === 0 ? pool.total : Math.round(nb.total * Math.pow(1.04, i - 1) / 10_000) * 10_000));
+    const totals = years.map((yr, i) => {
+      const committed = players.reduce((a, p) => a + (["paid", "signed", "locked"].includes(p.cells[i].kind) ? p.cells[i].amount : 0), 0);
+      const est = players.reduce((a, p) => a + (p.cells[i].kind === "est" ? p.cells[i].amount : 0), 0);
+      return { year: yr, budget: budgets[i], committed, est, room: budgets[i] - committed - est };
+    });
+    // Football's budget: this year as it stands, and the next two at the projected fortune.
+    const now = this.fortune(teamId), f = this.projectedFortune(teamId);
+    const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
+    const inputs = s.budgets![teamId];
+    const projects = (yr: number) => (s.projects ?? []).filter((p) => p.team_id === teamId && p.done > `${yr}-08-01`).reduce((a, p) => a + p.cost / p.years, 0);
+    const pcsaRet = (yr: number) => (s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t) / now.donors * f.donors * Math.pow(1.04, yr - y))) : 0);
+    const future = [y + 1, y + 2].map((yr) => {
+      const k = Math.pow(1.04, yr - y - 1);
+      const ticketsNow = b.revenue.tickets * (inputs.attendance > 0 ? Math.min(inputs.capacity, inputs.attendance / now.fans * f.fans) / inputs.attendance : 1);
+      const revenue = {
+        media: b.revenue.media, tickets: Math.round(ticketsNow), donors: Math.round((inputs.fixed.donors / now.donors * f.donors) * k + pcsaRet(yr)),
+        support: b.revenue.support, other: Math.round(inputs.fixed.other / (1 + 0.5 * (now.donors - 1)) * (1 + 0.5 * (f.donors - 1)) * k), postseason: 0,
+      };
+      const expenses = {
+        revenue_share: this.adPool(t, yr, f.ad) + pcsaRet(yr), coaches: b.expenses.coaches, operations: inputs.fixed.operations, facilities: Math.round(inputs.fixed.facilities + projects(yr)),
+        one_time: (s.charges ?? []).filter((c) => c.team_id === teamId && c.year === yr).reduce((a, c) => a + c.amount, 0),
+      };
+      return { year: yr, revenue, expenses, surplus: sum(revenue) - sum(expenses), projected: true };
+    });
+    const o = this.outcome(teamId);
+    return {
+      team_id: teamId, year: y, mine: teamId === s.user_team_id, conference: t.conference,
+      class: { now: this.budgetClassOf(teamId), next: budgetClass(nb.total, rosterBudgetYear(y + 1)) },
+      fortune: { now: { fans: now.fans, donors: now.donors, ad: now.ad }, next: f }, record: { w: o.wins, l: o.losses, exp: Math.round(o.exp * 10) / 10, ratio: Math.round(o.revenue_ratio * 1000) / 1000 },
+      postseason: this.postseasonMoney(teamId),
+      years, players, totals,
+      lines: [{ year: y, revenue: b.revenue, expenses: b.expenses, surplus: b.surplus, projected: false }, ...future],
+      history: s.fin_history?.[teamId] ?? [],
+    };
   }
 
   /** Close the fiscal year: every program's fortune for next year and a line in its money history. */
@@ -803,7 +871,7 @@ export class Season {
     if (years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
     const k = (x: number) => `$${Math.round(x / 1000).toLocaleString("en-US")}K`;
     // A multi-year deal locks him in, so he has to want it: most players would rather sign for a year.
-    if (years > 1 && !(cur?.locked && cur.start + cur.years >= s.year + years && amount >= cur.amount)) {
+    if (years > 1 && !(cur?.locked && cur.start + cur.years >= s.year + years && amount >= dealAmount(cur))) {
       const w = persona(s.seed, pid), most = Math.min(maxYears(w), eligibilityLeft(p));
       if (years > most) throw new Error(most === 1 ? `${playerName(p)} wants a one-year deal so he can test the market again` : `${playerName(p)} will sign for up to ${most} seasons`);
       const walk = payFor(this.stayContext(p, amount), w, COMMIT);
@@ -818,7 +886,7 @@ export class Season {
     if (fromNil > nilRoom) throw new Error(`that is over your roster budget: ${k(baseRoom + retRoom + nilRoom)} left for him`);
     const top = fmvCeiling(this.value(pid), !!s.settings.pcsa);
     if (fromNil > top) throw new Error(`the fair-market-value review would cut his NIL deal to ${k(top)}: offer at most ${k(fromBase + fromRet + top)}`);
-    if (fromBase + fromRet > 0) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...(years > 1 ? { locked: true } : {}) };
+    if (fromBase + fromRet > 0 || years > 1) contracts[pid] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...(years > 1 ? { locked: true, total: amount } : {}) };
     else delete contracts[pid];
     s.contracts = contracts;
     setNil(fromNil);
@@ -850,8 +918,8 @@ export class Season {
       const fromNil = Math.min(d.amount - fromBase - fromRet, c?.reserve ?? 0, fmvCeiling(this.value(p.id), !!s.settings.pcsa));
       const years = Math.max(1, Math.min(d.years, eligibilityLeft(p)));
       // A locked deal stays locked while it runs (its NIL part with it).
-      const locked = d.locked && years > 1 ? { locked: true } : {};
-      if (fromBase + fromRet > 0) contracts[p.id] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...locked };
+      const locked = d.locked && years > 1 ? { locked: true, total: d.amount } : {};
+      if (fromBase + fromRet > 0 || d.locked) contracts[p.id] = { amount: fromBase + fromRet, years, start: s.year, ...(fromRet ? { retention: fromRet } : {}), ...locked };
       if (fromNil > 0 && c) { nil[p.id] = { amount: fromNil, status: "approved", date: s.date }; c.reserve -= fromNil; }
     }
     const rest = roster.filter((p) => !deals[p.id]);
@@ -1026,12 +1094,23 @@ export class Season {
     return { own, pooled: Math.round(pot / Math.max(1, members)) };
   }
 
-  /** A program's season so far, as its money sees it. */
-  outcome(teamId: number): SeasonOutcome {
+  /**
+   * A program's season so far, as its money sees it. With `rest`, the regular-season games still to play
+   * count at their chances (a projection of the whole season).
+   */
+  outcome(teamId: number, rest = false): SeasonOutcome {
     const s = this.state, t = this.team(teamId);
-    let wins = 0, losses = 0, cfp = 0, cfpWins = 0, bowl = false, bowlWon = false, title = false;
+    let wins = 0, losses = 0, cfp = 0, cfpWins = 0, bowl = false, bowlWon = false, title = false, ahead = 0;
     for (const g of s.games) {
-      if (g.status !== "final" || (g.home_id !== teamId && g.away_id !== teamId)) continue;
+      if (g.home_id !== teamId && g.away_id !== teamId) continue;
+      if (g.status !== "final") {
+        if (rest && g.kind === "regular") {
+          const p = winChance((s.power[g.home_id] ?? 0) - (s.power[g.away_id] ?? 0) + (g.neutral ? 0 : s.settings.home_field_points));
+          const mine = g.home_id === teamId ? p : 1 - p;
+          wins += mine; losses += 1 - mine; ahead += mine;
+        }
+        continue;
+      }
       const won = (g.home_id === teamId) === (g.home_score! > g.away_score!);
       if (won) wins++; else losses++;
       if (g.kind === "playoff") { cfp++; if (won) cfpWins++; if (won && g.title) title = true; }
@@ -1039,13 +1118,14 @@ export class Season {
     }
     const f = this.fortune(teamId), v = this.budget(teamId);
     const revenue = v ? Object.values(v.revenue).reduce((a, x) => a + x, 0) : 0;
-    return { wins, losses, exp: f.exp ?? (wins + losses) / 2, cfp, cfp_wins: cfpWins, title, bowl, bowl_won: bowlWon,
+    const played = wins + losses - (rest ? s.games.filter((g) => g.status !== "final" && g.kind === "regular" && (g.home_id === teamId || g.away_id === teamId)).length : 0);
+    return { wins, losses, exp: (f.exp ?? played / 2) + ahead, cfp, cfp_wins: cfpWins, title, bowl, bowl_won: bowlWon,
       power: P4.has(t.conference) || t.school === "Notre Dame", revenue_ratio: f.plan && revenue ? revenue / f.plan : 1 };
   }
 
   /** Next year's fortune if the season ended today. */
   projectedFortune(teamId: number): Fortune {
-    return nextFortune(this.fortune(teamId), this.outcome(teamId));
+    return nextFortune(this.fortune(teamId), this.outcome(teamId, true));
   }
 
   /** A program's budget class from its roster budget this year. */
@@ -1897,7 +1977,7 @@ export class Season {
     const deal = s.next_deals?.[p.id];
     if (deal) return deal.amount;
     const c = activeContract(s.contracts?.[p.id], s.year + 1);
-    if (c) return c.amount;
+    if (c) return dealAmount(c);
     const now = this.pay(p.id), v = this.value(p.id);
     const vNext = playerValue({ pos: p.pos, ovr: ovrNext(p), stars: p.stars, years: p.years + 1 });
     return v > 0 ? Math.round(now * vNext / v) : 0;
@@ -1976,7 +2056,7 @@ export class Season {
     const leaving = this.leavingSet();
     const deals = Object.entries(s.next_deals ?? {}).reduce((a, [, d]) => a + d.amount, 0);
     let contracts = 0;
-    for (const p of this.roster(teamId)) if (!leaving.has(p.id) && !s.next_deals?.[p.id]) contracts += activeContract(s.contracts?.[p.id], ny)?.amount ?? 0;
+    for (const p of this.roster(teamId)) if (!leaving.has(p.id) && !s.next_deals?.[p.id]) { const c = activeContract(s.contracts?.[p.id], ny); contracts += c ? dealAmount(c) : 0; }
     return { total, committed: deals + contracts, deals, contracts };
   }
 
@@ -2069,7 +2149,7 @@ export class Season {
       .sort((a, b2) => this.value(b2.pid) - this.value(a.pid) || a.pid - b2.pid);
     for (const t of order) {
       // (A player re-signed over a multi-year deal only costs the raise: his deal is already counted.)
-      const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : activeContract(s.contracts?.[t.pid], s.year + 1)?.amount ?? 0);
+      const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : dealAmount(activeContract(s.contracts?.[t.pid], s.year + 1) ?? { amount: 0, years: 0, start: 0 }));
       if (cost > room) continue;
       room -= cost;
       // The rule signs one-year deals: a longer one is yours to negotiate.
