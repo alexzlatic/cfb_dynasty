@@ -65,10 +65,10 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
+  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived"] as const;
+  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {

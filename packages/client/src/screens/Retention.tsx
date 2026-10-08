@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSort } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
 import { api, type FutureData, type RenewalRule, type RetentionRow, type TalkView, type WatchLevel, type WatchView } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
@@ -56,6 +57,9 @@ function Negotiation({ f }: { f: FutureData }) {
   const [amount, setAmount] = useState(String(Math.round(start / 1000)));
   const [years, setYears] = useState(1);
   const left = f.budget.total - f.budget.committed;
+  // His number for the length on offer: longer deals cost more a year, by his premium.
+  const len = t.length, num = t.counter ?? t.ask;
+  const forYears = (x: number) => Math.round(x * (1 + len.premium * (years - 1)) / 5000) * 5000;
   if (t.status === "graduating" || t.status === "nfl" || t.status === "contract") {
     return <p>{t.label}{t.status === "contract" && f.next_deal ? `: ${money(f.next_deal.amount)} next season.` : "."}</p>;
   }
@@ -77,12 +81,15 @@ function Negotiation({ f }: { f: FutureData }) {
         <div className="offer-row">
           $<input className="num" style={{ width: "6em" }} value={amount} onChange={(e) => setAmount(e.target.value)} />K a year for{" "}
           <select value={years} onChange={(e) => setYears(Number(e.target.value))}>
-            {Array.from({ length: Math.max(1, f.eligibility) }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} season{y === 1 ? "" : "s"}</option>)}
+            {Array.from({ length: Math.max(1, f.eligibility) }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} season{y === 1 ? "" : "s"}{y > 1 ? " (locks him in)" : ""}</option>)}
           </select>{" "}
           <button className="primary" disabled={busy || !Number.isFinite(parseK(amount))} onClick={() => act("renewal_offer", { pid: f.pid, amount: parseK(amount), years })}>Make offer</button>
-          {(t.counter ?? t.ask) != null && <button disabled={busy} onClick={() => act("renewal_offer", { pid: f.pid, amount: t.counter ?? t.ask, years })}>Pay his number ({money((t.counter ?? t.ask)!)})</button>}
+          {num != null && years <= len.max && <button disabled={busy} onClick={() => act("renewal_offer", { pid: f.pid, amount: forYears(num), years })}>Pay his number ({money(forYears(num))}{years > 1 ? ` for ${years}` : ""})</button>}
         </div>
       )}
+      <p className="small">{len.max <= 1 ? "He wants a one-year deal so he can test the market again next winter."
+        : <>A multi-year deal locks him in: he won't renegotiate until it ends, and he's much less likely to leave. He'll sign for up to {len.max} seasons{len.premium > 0.005 ? <> and wants about {Math.round(len.premium * 100)}% more a year for each season beyond one</> : <> without asking much more for it</>}.</>}
+        {len.known ? "" : <span className="muted"> (Your staff's read of a typical player until you talk with him.)</span>}</p>
       <p className="small muted">He answers in a day or two: he stays at or above the least he'd take{f.watch.walk_range ? ` (your staff thinks ${money(f.watch.walk_range[0])}-${money(f.watch.walk_range[1])})` : ""}, or declines and names his number. Each decline costs patience,
         a lowball costs more and hurts his morale. With no deal by January 1 he enters the portal. {money(left)} of next season's budget is uncommitted.</p>
       <div className="row-actions">
@@ -107,7 +114,7 @@ export function FutureTab({ f }: { f: FutureData }) {
         <Panel title="Portal watch" right={<WatchChip w={w} />}>
           {w.leaving ? <p>{w.fix}</p> : <>
             <div className="meter"><span className={`w-${w.watch}`} style={{ width: `${Math.max(3, Math.round(w.p * 100))}%` }} /></div>
-            <p className="small muted">{Math.round(w.p * 100)}% chance he enters the portal in January{w.known ? `. You've talked with him (${w.persona}).` : ": your staff's read of a typical player. Talk with him to learn his real reasons."}</p>
+            <p className="small muted">{Math.round(w.p * 100)}% chance he enters the portal in January{w.known ? `. You've talked with him (${w.persona.toLowerCase()}).` : `: your staff's read of a typical ${w.persona.toLowerCase()}. Talk with him to learn his real reasons.`}</p>
             <h4>Why he might leave</h4>
             <Reasons w={w} />
             <h4>What keeps him</h4>
@@ -161,6 +168,9 @@ export function RetentionScreen() {
       : all.filter((r) => !r.watch.leaving && (r.watch.watch !== "settled" || (r.talk && !r.talk.outcome && r.talk.plan?.kind === "needs_you")));
     return pick.sort((a, b) => ORDER[a.watch.watch] - ORDER[b.watch.watch] || a.importance - b.importance);
   }, [data, filter]);
+  const { rows: sorted, th } = useSort(rows, {
+    name: (r) => r.name, ovr: (r) => r.ovr, watch: (r) => r.watch.p, why: (r) => r.watch.reasons[0]?.label, pay: (r) => r.pay, keep: (r) => r.watch.keep,
+  });
   if (!data) return state.user_team_id == null ? <Panel title="Retention"><p className="muted">Pick a team in Settings.</p></Panel> : <p className="muted">Loading...</p>;
   const count = (w: WatchLevel) => data.rows.filter((r) => !r.watch.leaving && r.watch.watch === w).length;
   const b = data.budget, pct = b.total ? Math.min(100, (100 * b.committed) / b.total) : 0;
@@ -193,8 +203,8 @@ export function RetentionScreen() {
         {err && <p className="error small">{err}</p>}
         {!rows.length ? <p className="muted">{filter === "risk" ? "Nobody is at risk right now." : "Nobody here."}</p> : (
           <table className="grid tight">
-            <thead><tr><th>Player</th><th className="num">Ovr</th><th>Watch</th><th>Why</th><th className="num">Pays now</th><th>What keeps him</th>{data.talks_open && <th>Talks</th>}<th></th></tr></thead>
-            <tbody>{rows.map((r) => <Row key={r.pid} r={r} talksOpen={data.talks_open} busy={busy} act={act} />)}</tbody>
+            <thead><tr>{th("name", "Player")}{th("ovr", "Ovr", { className: "num" })}{th("watch", "Watch")}{th("why", "Why")}{th("pay", "Pays now", { className: "num" })}{th("keep", "What keeps him")}{data.talks_open && <th>Talks</th>}<th></th></tr></thead>
+            <tbody>{sorted.map((r) => <Row key={r.pid} r={r} talksOpen={data.talks_open} busy={busy} act={act} />)}</tbody>
           </table>
         )}
       </Panel>

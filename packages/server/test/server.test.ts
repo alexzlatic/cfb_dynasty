@@ -193,6 +193,10 @@ describe("depth charts", () => {
     expect(d.schemes.layout.off).toHaveLength(14);
     expect(d.schemes.layout.def).toHaveLength(11);
     expect(d.schemes.ratings[d.depth.QB[0]].QB.rating).toBeGreaterThan(0);
+    // Your staff's read of each player's scheme fit: yours only, and none for specialists.
+    expect(typeof d.fit[d.depth.QB[0]]).toBe("number");
+    expect(d.fit[d.depth.K[0]]).toBeUndefined();
+    expect((await get(`/api/leagues/${id}/teams/158/depth`)).fit).toEqual({});
     const lg = manager.get(id);
     const before = lg.season.teamRatings(2509)!;
     // Start the backup QB.
@@ -354,7 +358,9 @@ describe("hidden ratings and development plans", () => {
     expect(dev.team_id).toBe(2509);
     expect(Object.keys(dev.lab)).toHaveLength(8);
     expect(dev.staff.known).toBeGreaterThan(0.5);
-    expect(dev.staff.players.length).toBe(mine.length);
+    expect(dev.players.length).toBe(mine.length);
+    expect(dev.phase.kind).toBe("season");
+    expect(dev.players.find((x: { pid: number }) => x.pid === mine[0].id).plan.area).toBe("technique");
     expect(Object.keys(dev.staff.units.off)).toEqual(["development", "fit", "chemistry"]);
     const pl = await getR(`/api/leagues/${id}/players/${mine[0].id}`);
     expect(pl.staff.plan.area).toBe("technique");
@@ -367,6 +373,7 @@ describe("hidden ratings and development plans", () => {
     const again = League.open("dev-check", manager.path(id));
     expect(again.season.state.lab).toEqual(lg.season.state.lab);
     expect(again.season.state.morale).toEqual(lg.season.state.morale);
+    expect(again.season.state.dev_track).toEqual(lg.season.state.dev_track);
     again.close();
   }, 120_000);
 

@@ -132,3 +132,20 @@ describe("recruiting in a season", () => {
     expect(commits(a)).toBeGreaterThan(0);
   }, 120_000);
 });
+
+describe("your big board", () => {
+  it("starts with your commits on it, adds new ones each week, and keeps one you take off off", () => {
+    const osu = seed.teams.find((t) => t.school === "Ohio State")!;
+    const s = Season.create(seed, { seed: 7, user_team_id: osu.id, settings: { keep_pbp: "none" } as never });
+    const st = s.state.recruiting!;
+    const mine = () => st.prospects.filter((p) => p.commit?.team === osu.id).map((p) => p.id);
+    expect(mine().length).toBeGreaterThan(5);
+    expect(new Set(st.user.board)).toEqual(new Set(mine()));
+    const gone = st.user.board![0];
+    s.setBoard(gone, false);
+    while (s.state.date < "2026-10-18") s.advanceDay();
+    const board = new Set(st.user.board);
+    expect(board.has(gone)).toBe(false);
+    for (const id of mine()) if (id !== gone) expect(board.has(id)).toBe(true);
+  }, 120_000);
+});

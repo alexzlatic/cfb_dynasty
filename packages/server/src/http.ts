@@ -124,8 +124,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (me == null) return { team_id: null };
         const v = S.staffView(me);
         const ctx = S.teamContext(me);
-        const players = S.roster(me).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr }));
-        return { team_id: me, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v, players, depth: S.depthChart(me) };
+        const r = S.developmentReport(me);
+        return { team_id: me, date: s.date, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v ? { known: v.known, units: v.units } : null, ...r, depth: S.depthChart(me) };
       }
       case route === "payroll": {
         // A team's revenue-share payroll (yours by default), and every school's in its conference.
@@ -155,6 +155,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
           .sort((a, b) => b.spent - a.spent);
         return { team_id: team, mine: team === s.user_team_id, base: c.base, reserve: c.reserve, focus: c.focus ?? [], focus_max: FOCUS_MAX, positions: POSITIONS,
           spent: deals.reduce((a, d) => a + d.deal.amount, 0), deals, conference };
+      }
+      case route === "front_office": {
+        // Salaries by season, roster budgets ahead, football's budget projected and the money history (yours by default).
+        const team = Number(url.searchParams.get("team") ?? s.user_team_id ?? NaN);
+        if (!S.teamById.get(team)) return { team_id: null };
+        const fo = S.frontOffice(team);
+        if (!fo) return { team_id: null };
+        // Other schools' contracts are public; their staff's estimates aren't sent.
+        return { ...fo, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES } };
       }
       case route === "budget": {
         // A school's budget (yours by default), its home games and facilities, and its conference's budgets.
@@ -201,7 +210,14 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (sort === "est") rows.sort((a, b) => (b.potential?.est ?? 0) - (a.potential?.est ?? 0) || byRank(a, b));
         else if (sort === "hi") rows.sort((a, b) => (b.potential?.hi ?? 0) - (a.potential?.hi ?? 0) || byRank(a, b));
         else if (sort === "board") rows.sort((a, b) => (a.board < 0 ? Infinity : a.board) - (b.board < 0 ? Infinity : b.board) || byRank(a, b));
+        else if (sort === "name") { const last = (r: typeof rows[number]) => r.name.split(" ").slice(1).join(" ") || r.name; rows.sort((a, b) => last(a).localeCompare(last(b)) || a.name.localeCompare(b.name) || byRank(a, b)); }
+        else if (sort === "pos") rows.sort((a, b) => a.pos.localeCompare(b.pos) || byRank(a, b));
+        else if (sort === "home") rows.sort((a, b) => (a.home.state ?? "~").localeCompare(b.home.state ?? "~") || (a.home.city ?? "").localeCompare(b.home.city ?? "") || byRank(a, b));
+        else if (sort === "now") rows.sort((a, b) => (b.ovr?.hi ?? 0) - (a.ovr?.hi ?? 0) || byRank(a, b));
+        else if (sort === "status") rows.sort((a, b) => (a.commit ? (a.commit.signed ? 2 : 1) : 0) - (b.commit ? (b.commit.signed ? 2 : 1) : 0) || byRank(a, b));
         else rows.sort(byRank);
+        // A second click on a column header flips it.
+        if (url.searchParams.get("dir") === "rev") rows.reverse();
         const staff = me != null ? S.staff(me) : [];
         const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
         const time = timeSplit(u.time, S.inSeason(s.date));
@@ -315,7 +331,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (c && c.team_id === id && c.mode === "fresh") coaches = coaches.map((x) => (x.role === "HC" ? { ...x, first: c.coach.first, last: c.coach.last, career: [], source: "you" } : x));
         const stats = S.roster(id).flatMap((pl) => { const st = s.player_stats?.[pl.id]; return st ? [statRow(pl.id, st)!] : []; });
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, schemes: S.schemes(id), games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats };
+        // Personality classes are public (like OOTP's); the traits behind them stay a read until you talk with him.
+        const personas = Object.fromEntries(S.roster(id).map((pl) => [pl.id, S.personaRead(pl.id).name]));
+        return { team, roster, coaches, schemes: S.schemes(id), games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats, personas };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
@@ -323,7 +341,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const mine = id === s.user_team_id;
         const gp = Object.fromEntries(S.roster(id).map((pl) => [pl.id, s.player_stats?.[pl.id]?.gp ?? 0]));
         return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries,
-          schemes: schemeView(id, S.roster(id)), gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES };
+          schemes: schemeView(id, S.roster(id)), gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES,
+          // Your staff's read on how each of your players fits the coaches' system; nobody else's is sent.
+          fit: mine ? Object.fromEntries((S.staffView(id)?.players ?? []).filter((x) => x.fit != null).map((x) => [x.pid, x.fit])) : {} };
       }
       case p[2] === "players" && p.length === 4: {
         const pl = S.playerById.get(Number(p[3]));
@@ -340,11 +360,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
           const snaps = d.snaps?.[pl.id];
           return Object.keys(line).length || snaps ? [{ game: gameRow(g), line, snaps: snaps ?? 0 }] : [];
         });
-        return { player: pl, team: S.team(pl.team_id), slots, log, potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
+        return { player: pl, team: S.team(pl.team_id), slots, log, persona: S.personaRead(pl.id), potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).
-          staff: pl.team_id === s.user_team_id ? { ...S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), plan: s.lab?.[pl.id] ?? null } : null,
+          staff: pl.team_id === s.user_team_id ? (() => {
+            const t = S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), r = S.developmentReport(pl.team_id), d = r.players.find((x) => x.pid === pl.id);
+            return { leadership: t?.leadership, adaptability: t?.adaptability, plan: s.lab?.[pl.id] ?? null, phase: r.phase.kind,
+              ...(d ? { focus: d.focus, so_far: d.so_far, gained: d.gained, target: d.target, by_now: d.by_now } : {}) };
+          })() : null,
           // His future: your players' portal watch, talks and comparables; anyone's portal entry.
           future: pl.team_id === s.user_team_id ? S.futureView(pl.id) : null,
           portal: S.portalEntry(pl.id) };

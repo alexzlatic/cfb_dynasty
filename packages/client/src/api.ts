@@ -1,6 +1,6 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
-export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan };
+export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
 export type CareerView = Career & { security: number; label: string };
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
@@ -9,19 +9,26 @@ export type LiveResult = LiveView & { since: number; result?: Game };
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
-/** Your staff's read on one of your players: development beyond what was expected so far, and his traits. */
-export interface StaffPlayer { pid: number; growth: number; expected: number; leadership: number; adaptability: number }
 export type UnitRead = { development: number; fit: number; chemistry: number };
+/** One of your players on the Development screen: what he's working on and his progress (overall points, your staff's read). */
+export interface DevPlayer {
+  pid: number; name: string; pos: string; class: string; years: number; ovr: number; starter: boolean; gp: number; plan: LabPlan | null;
+  focus: { area: LabArea; by: "plan" | "staff"; attrs: { key: string; label: string; value: number }[] };
+  /** Gained this year so far; gained this phase, what the staff planned for the whole phase and by today; trend against a normal pace over the last few weeks, and change since last Monday (in season). */
+  so_far: number; gained: number; target: number; by_now: number; trend: number | null; last_week: number | null;
+  leadership: number | null; adaptability: number | null;
+}
 export interface DevelopmentView {
-  team_id: number | null; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
-  staff: { known: number; units: Record<"off" | "def", UnitRead>; players: StaffPlayer[] } | null;
-  players: { pid: number; name: string; pos: string; class: string; years: number; ovr: number }[]; depth: DepthChart;
+  team_id: number | null; date: string; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
+  staff: { known: number; units: Record<"off" | "def", UnitRead> } | null;
+  phase: DevPhase; since: string; done: boolean; weeks: number; trend_since: string | null;
+  players: DevPlayer[]; depth: DepthChart;
 }
 
 // ---- keeping players and the portal ----
 export type WatchLevel = "settled" | "restless" | "shopping" | "gone";
 export interface WatchView {
-  p: number; watch: WatchLevel; label: string; known: boolean; persona: string | null;
+  p: number; watch: WatchLevel; label: string; known: boolean; persona: string;
   reasons: { reason: string; weight: number; label: string }[]; leaving: boolean; value: number; pay: number;
   /** Pay that settles him (null: money won't fix it), and your staff's range for the least he'd stay for. */
   keep: number | null; walk_range: [number, number] | null; fix: string; promise: { year: number; broken?: boolean } | null;
@@ -30,6 +37,8 @@ export interface TalkView {
   status: string; label: string; ask: number | null; patience: number; offer: { amount: number; years: number; made: string; answer: string } | null; counter: number | null;
   deal: { amount: number; years: number; via: string } | null; outcome: "signed" | "let_go" | "portal" | "stayed" | null; mine: boolean;
   plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
+  /** A longer deal: how much more a year he wants per extra season, the longest he'll sign (your staff's read until you talk). */
+  length: { premium: number; max: number; known: boolean };
 }
 export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
 export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
@@ -48,9 +57,24 @@ export interface PortalRow {
 export interface PortalNeed { spots: number; starter: boolean; floor: number }
 export interface PortalData { year: number | null; open: boolean; window: string | null; entries: PortalRow[]; needs: Record<string, PortalNeed>; budget: NextBudget | null; offered: number; pitches_left: number }
 
+export interface Fortune { fans: number; donors: number; ad: number }
+export interface FinanceYear { year: number; w: number; l: number; post: string | null; revenue: number; expenses: number; surplus: number; attendance: number; roster_budget: number; class: string; fortune: Fortune }
+export type SalaryCell = { amount: number; kind: "paid" | "signed" | "locked" | "est" | "gone" };
+export interface FrontOfficeData {
+  team_id: number | null; year: number; mine: boolean; conference: string;
+  class: { now: { key: string; label: string } | null; next: { key: string; label: string } };
+  fortune: { now: Fortune; next: Fortune }; record: { w: number; l: number; exp: number; ratio: number }; postseason: { own: number; pooled: number };
+  years: number[];
+  players: { pid: number; name: string; pos: string; ovr: number; cls: string; years: number; value: number; value_next: number; last: number; nfl: boolean; cells: SalaryCell[] }[];
+  totals: { year: number; budget: number; committed: number; est: number; room: number }[];
+  lines: { year: number; revenue: Record<string, number>; expenses: Record<string, number>; surplus: number; projected: boolean }[];
+  history: FinanceYear[];
+  labels: { revenue: Record<string, string>; expenses: Record<string, string> };
+}
+
 export interface PayrollPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; value: number;
-  contract: { amount: number; years: number; start: number; retention?: number } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
+  contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
   /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
   returning: boolean; ceiling: number;
 }
@@ -97,6 +121,7 @@ export interface ProspectPageData extends ProspectRow {
   history: { date: string; est: number; lo: number; hi: number }[];
   ratings: { attr: string; now: number; arrival: number }[];
   years_out: number;
+  persona: PersonaView;
 }
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
@@ -166,6 +191,7 @@ export const api = {
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
   career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  frontOffice: (id: string, team?: number) => req<FrontOfficeData>(`/api/leagues/${id}/front_office` + (team != null ? `?team=${team}` : "")),
   budget: (id: string, team?: number) => req<BudgetData>(`/api/leagues/${id}/budget` + (team != null ? `?team=${team}` : "")),
   collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),
@@ -174,12 +200,12 @@ export const api = {
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
   team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
-    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[] }>(`/api/leagues/${id}/teams/${tid}`),
+    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[]; personas: Record<number, string> }>(`/api/leagues/${id}/teams/${tid}`),
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
-    gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
+    gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
-    potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null }>(`/api/leagues/${id}/players/${pid}`),
+    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
+    potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),

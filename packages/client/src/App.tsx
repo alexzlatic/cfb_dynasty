@@ -24,6 +24,7 @@ import { DevelopmentScreen } from "./screens/Development.tsx";
 import { PayrollScreen } from "./screens/Payroll.tsx";
 import { CollectiveScreen } from "./screens/Collective.tsx";
 import { BudgetScreen } from "./screens/Budget.tsx";
+import { FrontOfficeScreen } from "./screens/FrontOffice.tsx";
 import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
@@ -79,7 +80,7 @@ const NAV: NavSection[] = [
     page("Development", "development", ["development"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
-  { key: "money", label: "Money", pages: [page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
+  { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Polls", "polls"), page("Postseason", "postseason"),
     page("Awards", "awards"), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
   { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
@@ -173,6 +174,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "payroll" && <PayrollScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "collective" && <CollectiveScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "budget" && <BudgetScreen tid={arg ? Number(arg) : undefined} />}
+        {screen === "front" && <FrontOfficeScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
         {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
         {screen === "draft" && <DraftScreen />}

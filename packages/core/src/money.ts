@@ -106,7 +106,14 @@ export interface Contract {
   start: number;
   /** The part of `amount` paid from the retention fund (Protect College Sports Act rules). */
   retention?: number;
+  /** A multi-year deal the player agreed to: he doesn't renegotiate until it ends. */
+  locked?: boolean;
+  /** A locked deal's whole yearly amount (revenue share and the collective's NIL part together). */
+  total?: number;
 }
+
+/** What a deal pays him a year: a locked deal's whole amount, otherwise the revenue share. */
+export const dealAmount = (c: Contract) => c.total ?? c.amount;
 
 /** A player has completed a season in college (the season also checks he wasn't a transfer who just arrived: Season.returningHere). */
 export const returning = (p: Pick<RatedPlayer, "years">) => p.years >= 1;

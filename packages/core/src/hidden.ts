@@ -1,7 +1,7 @@
 import { Rng, type TeamRatings, type UnitRates } from "@cfb/engine";
 import { mixSeed } from "./hash.ts";
-import { daysBetween, type ISODate } from "./dates.ts";
-import type { RatedPlayer } from "./players.ts";
+import { daysBetween, nthWeekday, type ISODate } from "./dates.ts";
+import { ATTR_LABELS, OVR_WEIGHTS, type Pos, type RatedPlayer } from "./players.ts";
 
 /**
  * What nobody knows in August (M1 "true vs scouted ratings"). Every season some teams are much better or
@@ -107,6 +107,50 @@ export function progress(year: number, date: ISODate): number {
     if (date <= d1) return v0 + (v1 - v0) * daysBetween(d0, date) / daysBetween(d0, d1);
   }
   return 1;
+}
+
+/**
+ * The three times of the development year, as the Development screen shows them. The offseason (from the
+ * rollover in February to fall camp: spring practice and summer workouts) is the biggest growth period;
+ * fall camp (the first Monday of August to the opener) settles position battles; in season, practice reps
+ * add the last of the year's growth, which is done by mid-November.
+ */
+export type DevPhaseKind = "offseason" | "camp" | "season";
+export interface DevPhase { kind: DevPhaseKind; label: string; start: ISODate; end: ISODate }
+/** Snapshots of the staff's development read by player id: at the start of the phase `key` (year:kind), and weekly in season. */
+export interface DevTrack { key: string; team: number; date: ISODate; start: Record<number, number>; weeks: { date: ISODate; read: Record<number, number> }[] }
+
+export function devPhase(year: number, date: ISODate, firstGame: ISODate): DevPhase {
+  const camp = nthWeekday(year, 8, 1, 1);
+  if (date < camp) return { kind: "offseason", label: "Offseason: spring practice and summer workouts", start: `${year}-01-01`, end: camp };
+  if (date < firstGame) return { kind: "camp", label: "Fall camp", start: camp, end: firstGame };
+  return { kind: "season", label: "In season", start: firstGame, end: `${year}-11-15` };
+}
+
+/** Overall points a development plan has added by a date (about 2 over 80 days of work, 2.5 at most). */
+export function labGain(l: LabPlan | undefined, date: ISODate): number {
+  if (!l || l.area === "leadership" || date <= l.from) return 0;
+  return 2 * Math.min(100, daysBetween(l.from, date)) / 80;
+}
+
+/** Which kind of work moves each rating; everything else is technique. */
+const FOCUS_OF: Record<string, LabArea> = {
+  speed: "strength", power: "strength", arm: "strength", k_power: "strength", p_power: "strength", run_block: "strength", shed: "strength", contested: "strength", tackle: "strength",
+  decisions: "film", pocket: "film", vision: "film", route: "film", discipline: "film", run_fit: "film", coverage: "film", zone: "film", range: "film", run_sup: "film", run_def: "film", blitz: "film",
+};
+export const focusArea = (attr: string): LabArea => FOCUS_OF[attr] ?? "technique";
+
+/**
+ * What a player is working on: his plan's area, or (without one) what his position coach would pick, the
+ * area of his weakest important rating. The ratings shown are his two weakest important ones in that area.
+ */
+export function devFocus(p: { pos: Pos; attrs: Record<string, number> }, plan?: LabPlan): { area: LabArea; by: "plan" | "staff"; attrs: { key: string; label: string; value: number }[] } {
+  const w = OVR_WEIGHTS[p.pos];
+  const keys = Object.keys(w).filter((k) => p.attrs[k] != null && (w[k] >= 0.1 || Object.keys(w).length <= 2));
+  const weakest = [...keys].sort((a, b) => p.attrs[a] - p.attrs[b] || w[b] - w[a]);
+  const area = plan?.area ?? (weakest.length ? focusArea(weakest[0]) : "technique");
+  const pick = area === "leadership" ? [] : weakest.filter((k) => focusArea(k) === area);
+  return { area, by: plan ? "plan" : "staff", attrs: (pick.length || area === "leadership" ? pick : weakest).slice(0, 2).map((k) => ({ key: k, label: ATTR_LABELS[k] ?? k, value: p.attrs[k] })) };
 }
 
 const OFF_POS = new Set(["QB", "RB", "WR", "TE", "OL"]);
