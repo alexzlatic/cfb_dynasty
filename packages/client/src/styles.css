@@ -381,3 +381,4 @@ span.offered .logo { outline: 2px solid #e0b43a; border-radius: 50%; }
 .skills { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 8px; }
 .skill { display: flex; justify-content: space-between; align-items: center; background: var(--head); border-radius: 8px; padding: 6px 10px; }
 .skill b { font-family: var(--display); font-size: 22px; }
+table.draft td.nfl { font-family: var(--display); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }

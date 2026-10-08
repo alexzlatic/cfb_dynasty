@@ -239,6 +239,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!s.recruiting) return [];
         return S.classRankings(Number(url.searchParams.get("cls") ?? s.year + 1)).slice(0, Number(url.searchParams.get("limit") ?? 50));
       }
+      case route === "draft": return S.draftView();
       case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
       case route === "leaders": {
         const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));

@@ -37,7 +37,7 @@ const ROSTER_FLOOR = 80;
  */
 const fifthYear = (ovr: number, median: number) => clamp(0.25 + 0.06 * (ovr - median), 0.05, 0.85);
 
-export interface Departure { pid: number; team_id: number; name: string; pos: Pos; ovr: number; reason: "graduated" | "nfl" | "released" }
+export interface Departure { pid: number; team_id: number; name: string; pos: Pos; ovr: number; reason: "graduated" | "nfl" | "released"; potential?: number; years?: number }
 
 /** The fewest players a roster carries at each position. */
 const MIN_AT: Record<Pos, number> = { QB: 3, RB: 3, WR: 6, TE: 3, OL: 10, DE: 4, DT: 4, LB: 5, CB: 5, S: 4, K: 1, P: 1, LS: 1 };
@@ -99,6 +99,8 @@ export function rollRosters(o: {
   growth: (teamId: number) => Map<number, number>; gp: Record<number, number>;
   /** Each program's development rate (devRate); 1 when absent. */
   rate?: (teamId: number) => number;
+  /** Players who declared early for the NFL draft (absent: the best few leave, as before the draft). */
+  declared?: Set<number>;
   /** Each team's signing class, rated as college freshmen (recruiting.ts); generated freshmen fill only what's left. */
   incoming?: Record<number, RatedPlayer[]>;
 }): RosterTurn {
@@ -119,9 +121,10 @@ export function rollRosters(o: {
     for (const p of [...tp.players].sort((a, b) => a.id - b.id)) {
       const done = p.years + 1;
       const u = rng.random(), v = rng.random();
-      const go = (reason: Departure["reason"]) => left.push({ pid: p.id, team_id: t.id, name: `${p.first} ${p.last}`.trim(), pos: p.pos, ovr: p.ovr, reason });
+      const go = (reason: Departure["reason"]) => left.push({ pid: p.id, team_id: t.id, name: `${p.first} ${p.last}`.trim(), pos: p.pos, ovr: p.ovr, reason, potential: p.hidden.potential, years: p.years });
       if (done >= 5) { go(p.ovr >= 80 ? "nfl" : "graduated"); continue; }
-      if (done >= 3 && u < clamp((p.ovr - 81) / 8, 0, 0.85)) { go("nfl"); continue; }
+      // Early entrants: the ones who declared in January (draft.ts), or in older leagues the best few.
+      if (done >= 3 && (o.declared ? o.declared.has(p.id) : u < clamp((p.ovr - 81) / 8, 0, 0.85))) { go("nfl"); continue; }
       if (done >= 4 && v >= fifthYear(p.ovr, median)) { go(p.ovr >= 80 ? "nfl" : "graduated"); continue; }
       keep.push(develop(p, done, growth.get(p.id) ?? 0, o.gp[p.id] ?? 0, o.rate?.(t.id) ?? 1, rng));
     }

@@ -56,7 +56,8 @@ const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
   "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "morale", "lab", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
-  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting"] as const;
+  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
+  "declared", "draft_pool", "draft", "draft_history"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -127,6 +128,7 @@ export class League {
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
+      declared: meta.declared ?? undefined, draft_pool: meta.draft_pool ?? undefined, draft: meta.draft ?? null, draft_history: meta.draft_history ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
       games: all<Game>("SELECT data FROM games WHERE season IS NULL ORDER BY rowid"),
@@ -156,6 +158,7 @@ export class League {
     if (!meta.recruiting) lg.season.startRecruiting();
     // ...and before the service rated every junior, or before staffs had to find prospects.
     lg.season.upgradeRecruiting();
+    lg.season.upgradeDraft();
     return lg;
   }
 

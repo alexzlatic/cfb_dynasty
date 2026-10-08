@@ -81,6 +81,14 @@ export interface RecruitingView {
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
   hours: number; regions: Record<string, { name: string; states: string[] }>; costs: { region: number; trip_near: number; trip_far: number; trip_hours: { near: number; far: number } };
 }
+export interface DraftPickRow { pick: number; round: number; nfl: string; pid: number; team_id: number; name: string; pos: string; ovr: number; early: boolean }
+export interface DraftView {
+  draft: { year: number; picks: DraftPickRow[] } | null;
+  projected: { pid: number; team_id: number; name: string; pos: string; ovr: number; early: boolean }[];
+  early: { pid: number; team_id: number; name: string; pos: string; ovr: number; rank: number }[];
+  prospects: { pid: number; team_id: number; name: string; pos: string; ovr: number; cls: string; declared: boolean }[];
+  history: Record<string, number[]>; dates: { deadline: string | null; draft: string | null }; prestige: Record<string, number>;
+}
 export interface ClassRank { team_id: number; points: number; commits: number; five: number; four: number }
 
 export interface LeagueState {
@@ -153,6 +161,7 @@ export const api = {
   liveSub: (id: string, slot: string, pid: number) => req<LiveResult>(`/api/leagues/${id}/live/sub`, { method: "POST", body: JSON.stringify({ slot, pid }) }),
   plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
   recruiting: (id: string, q: Record<string, string>) => req<RecruitingView>(`/api/leagues/${id}/recruiting?` + new URLSearchParams(q)),
+  draft: (id: string) => req<DraftView>(`/api/leagues/${id}/draft`),
   prospect: (id: string, pid: number) => req<ProspectPageData>(`/api/leagues/${id}/recruiting/prospect?pid=${pid}`),
   board: (id: string) => req<{ rows: BoardRow[] }>(`/api/leagues/${id}/recruiting/board`),
   recruitMap: (id: string, cls: number, pos = "") => req<{ cls: number; points: MapPoint[] }>(`/api/leagues/${id}/recruiting/map?cls=${cls}${pos ? `&pos=${pos}` : ""}`),

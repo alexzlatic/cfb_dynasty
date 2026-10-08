@@ -26,6 +26,7 @@ import { CollectiveScreen } from "./screens/Collective.tsx";
 import { BudgetScreen } from "./screens/Budget.tsx";
 import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
+import { DraftScreen } from "./screens/Draft.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -78,7 +79,7 @@ const NAV: NavSection[] = [
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Polls", "polls"), page("Postseason", "postseason"),
-    page("Awards", "awards"), page("Writers", "writers", ["writers", "writer"])] },
+    page("Awards", "awards"), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
   { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
 ];
 /** Which section a screen belongs to (pages about other teams, games and players sit under League). */
@@ -172,6 +173,7 @@ function Shell({ id, screen, arg, ctx, state, teams, busy, setBusy, toast, setTo
         {screen === "budget" && <BudgetScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
         {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
+        {screen === "draft" && <DraftScreen />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>
