@@ -59,5 +59,17 @@ Nobody publishes coordinators' schemes, so the seed infers them.
   chart route includes `schemes` with each side's layout and each player's rating and fit at every slot he can
   play (`ratings[pid][slot]`).
 
-Schemes have no effect on games yet. The next step wires fit into the hidden layer, lets the compiler read
-stand-ins and turns tendencies into the coordinators' call mix.
+## In games
+
+- **Fit.** Half of each player's hidden scheme fit (`docs/hidden-ratings.md`) comes from his scheme rating at
+  his opening slot, and the other half is unseen. The team-level spread of hidden strength is unchanged
+  (`hidden-check.ts spread`: 6.66 against the real 6.6). A new head coach brings new schemes, so the same
+  roster can fit better or worse.
+- **Out of position.** The compiler reads `STAND_IN` attributes, at a cost of 0.3 SD, for a defender in a
+  slot his position doesn't have ratings for. A linebacker at a 3-4 end rushes with his blitz rating. A SAM
+  linebacker in the nickel slot also counts in the box for run fits.
+- **Tendencies.** In called games (your games), each side's coordinators lean their mix the scheme's way.
+  Each pair of schemes is centered on its own mixes, so a scheme is a style and not an edge for an average
+  roster (`calls-check.ts schemes`: every offense and front within about 0.3 points of the usual mix).
+  How often a team runs or throws stays its real play-calling. Opponents scout these leanings
+  (`docs/scouting.md`).

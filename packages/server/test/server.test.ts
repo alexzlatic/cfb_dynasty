@@ -231,6 +231,9 @@ describe("live games", () => {
     expect(plan.plan.run_pass).toBe(-1);
     expect(plan.scout.team_id).toBeGreaterThan(0);
     expect(plan.edge.offense).toBeGreaterThan(0);
+    // The week before the game went into film of the opponent.
+    expect(plan.film.opponent).toBe(plan.scout.team_id);
+    expect(plan.film.hours).toBeGreaterThan(0);
     let v = await post(`/api/leagues/${id}/live/start`, { mode: { offense: "me", defense: "coordinator" } });
     expect((await post(`/api/leagues/${id}/actions`, { type: "set_game_plan", payload: {} })).error).toMatch(/live game/);
     const qb = v.sideline.find((x: any) => x.slot === "QB");

@@ -59,23 +59,26 @@ export function staffSkill(staff: StaffMember[], k: Skill): number {
 
 /**
  * How the staff splits its week. About 160 hours a week across the head coach and coordinators (more
- * with the bigger recruiting staffs of power programs); in season most of it goes to the next game.
+ * with the bigger recruiting staffs of power programs); in season most of it goes to the next game:
+ * practice and installing the plan (prep) and film of the opponent (scouting.ts).
  */
-export interface StaffTime { recruiting: number; scouting: number; prep: number }
-export const SEASON_TIME: StaffTime = { recruiting: 0.3, scouting: 0.1, prep: 0.6 };
-export const OFFSEASON_TIME: StaffTime = { recruiting: 0.7, scouting: 0.3, prep: 0 };
+export interface StaffTime { recruiting: number; scouting: number; prep: number; /** Film of the next opponent (absent in older saves). */ opponent?: number }
+export const SEASON_TIME: StaffTime = { recruiting: 0.3, scouting: 0.1, prep: 0.45, opponent: 0.15 };
+export const OFFSEASON_TIME: StaffTime = { recruiting: 0.7, scouting: 0.3, prep: 0, opponent: 0 };
 export const STAFF_HOURS = 160;
 
-/** A split normalized to add up to 1 (prep off in the offseason, when there is no game to prepare for). */
-export function timeSplit(t: StaffTime, inSeason: boolean): StaffTime {
+/** A split normalized to add up to 1 (prep and film off in the offseason, when there is no game to prepare for). */
+export function timeSplit(t: StaffTime, inSeason: boolean): Required<StaffTime> {
   const r = Math.max(0, t.recruiting), s = Math.max(0, t.scouting), p = inSeason ? Math.max(0, t.prep) : 0;
-  const sum = r + s + p;
-  if (sum <= 0) return inSeason ? SEASON_TIME : OFFSEASON_TIME;
-  return { recruiting: r / sum, scouting: s / sum, prep: p / sum };
+  // A split saved before film had its own share keeps the usual film week.
+  const o = inSeason ? Math.max(0, t.opponent ?? SEASON_TIME.opponent!) : 0;
+  const sum = r + s + p + o;
+  if (sum <= 0) return timeSplit(inSeason ? SEASON_TIME : OFFSEASON_TIME, inSeason);
+  return { recruiting: r / sum, scouting: s / sum, prep: p / sum, opponent: o / sum };
 }
 
 /**
- * What a week of preparation is worth: 1 at the usual split (60% of the staff's time on the game) with an
+ * What a week of preparation is worth: 1 at the usual split (45% of the staff's time on practice) with an
  * average game-planning staff; less when the staff spends its week recruiting, more (to a point) when it
  * doesn't, and up to about 30% more or less with the staff's skill.
  */

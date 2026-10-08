@@ -297,7 +297,10 @@ export function startServer(opts: ServerOptions, port: number): Server {
             ratings: r ? { offense: r.offense, defense: r.defense, pass_rate: r.pass_rate, plays_per_game: r.plays_per_game, aggressiveness: r.aggressiveness } : null,
           };
         }
-        return { plan: S.gamePlan, practice: S.practicePlan, prep: s.prep ?? null, edge: prepEdge(s.prep), next_game: g ? gameRow(g) : null, scout, league: LEAGUE };
+        const film = S.scoutReport();
+        return { plan: S.gamePlan, practice: S.practicePlan, prep: s.prep ?? null, edge: prepEdge(s.prep), next_game: g ? gameRow(g) : null, scout, league: LEAGUE,
+          film: film && { ...film, off_name: SCHEMES[film.schemes.off].name, def_name: SCHEMES[film.schemes.def].name,
+            share: s.recruiting ? timeSplit(s.recruiting.user.time, true).opponent : 0.15 } };
       }
       case route === "live/leave" && req.method === "POST": lg.live = null; return { ok: true };
       case route === "teams": return S.teams;

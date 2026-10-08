@@ -21,6 +21,7 @@ import {
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { BASE_FILM, USUAL_FILM_HOURS, filmEff, insights, knowledge, tendencies, type Insight } from "./scouting.ts";
 import { KNOWN_FRONTS, drawSchemes, fitSD, inferFronts, inferOffense, schemeRating, type TeamSchemes } from "./schemes.ts";
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
@@ -98,6 +99,8 @@ export interface SeasonState {
   schemes?: Record<number, TeamSchemes>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
+  /** Hours of film your staff has put into your next opponent. */
+  film?: { game_id: number; hours: number } | null;
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
   contracts?: Record<number, Contract>;
   pools?: Record<number, number>;
@@ -607,6 +610,7 @@ export class Season {
     // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
+    this.filmDay(today);
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
@@ -2755,6 +2759,8 @@ export class Season {
     const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls")), {
       plans: { [userSide]: this.gamePlan }, prep: { [userSide]: scaleEdge(prepEdge(this.prepFor(g.id)), this.prepFactor()) },
       schemes: { home: this.allSchemes()[g.home_id], away: this.allSchemes()[g.away_id] },
+      scout: { home: this.scoutKnowledge(g.home_id, g.id), away: this.scoutKnowledge(g.away_id, g.id) },
+      ratings: { home: this.teamRatings(g.home_id) ?? undefined, away: this.teamRatings(g.away_id) ?? undefined },
     }) : null;
     if (hs && as) {
       const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")),
@@ -2816,6 +2822,40 @@ export class Season {
     this.compiled.delete(me);
     rep.news.push(this.news(today, "injury", `${this.team(me).school} ${p.pos} ${name} ${injuryOutlook(days)}`,
       `${name} was hurt (${type}) in a hard ${PRACTICE_DAYS[wd - 1]} practice.`, [me]));
+  }
+
+  /**
+   * Film of the next opponent: in the six days before your game, the staff's opponent share of its week
+   * goes into film, worth more with a better scouting staff.
+   */
+  private filmDay(today: ISODate): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null || !s.recruiting) return;
+    const g = this.nextUserGame();
+    if (!g || g.date <= today || daysBetween(today, g.date) > 6) return;
+    if (!s.film || s.film.game_id !== g.id) s.film = { game_id: g.id, hours: 0 };
+    const share = timeSplit(s.recruiting.user.time, true).opponent;
+    s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(staffSkill(this.staff(me), "scouting"))) * 10) / 10;
+  }
+
+  /** How well a team's staff knows its opponent in a game (0 to 1): your film this week, or a usual week for everyone else. */
+  scoutKnowledge(teamId: number, gameId: number): number {
+    const s = this.state;
+    if (teamId === s.user_team_id) return knowledge(BASE_FILM + (s.film?.game_id === gameId ? s.film.hours : 0));
+    return knowledge(BASE_FILM + USUAL_FILM_HOURS * filmEff(staffSkill(this.staff(teamId), "scouting")));
+  }
+
+  /** Your staff's report on your next opponent: what it knows, and the tendencies it has found. */
+  scoutReport(): { game_id: number; opponent: number; knowledge: number; hours: number; usual: number; insights: Insight[]; schemes: TeamSchemes } | null {
+    const s = this.state, me = s.user_team_id, g = this.nextUserGame();
+    if (me == null || !g) return null;
+    const opp = g.home_id === me ? g.away_id : g.home_id;
+    const r = this.teamRatings(opp);
+    const sc = this.allSchemes()[opp];
+    if (!r || !sc) return null;
+    const k = this.scoutKnowledge(me, g.id);
+    return { game_id: g.id, opponent: opp, knowledge: k, hours: s.film?.game_id === g.id ? s.film.hours : 0, usual: USUAL_FILM_HOURS * filmEff(staffSkill(this.staff(me), "scouting")),
+      insights: insights(tendencies(r, sc), k, s.seed, g.id), schemes: sc };
   }
 
   private play(g: Game, rep: DayReport): void {

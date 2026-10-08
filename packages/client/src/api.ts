@@ -101,7 +101,7 @@ export interface ProspectPageData extends ProspectRow {
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
 export type MapPoint = [number, number, number, number, number, number | null, number, string, string];
-export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number }
+export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number; opponent?: number }
 export interface RecruitingView {
   available: boolean; team_id: number | null; year: number; date: string; cls: number;
   classes: { cls: number; grade: number; total: number; known: number; rated: number; found: number }[];
@@ -140,6 +140,11 @@ export interface PlanInfo {
   scout: {
     team_id: number; record: { w: number; l: number } | null; rank: number | null; power: number; last: GameRow[]; injuries: CoreInjury[];
     ratings: Pick<TeamRatings, "offense" | "defense" | "pass_rate" | "plays_per_game" | "aggressiveness"> | null;
+  } | null;
+  /** Your staff's film on the next opponent. */
+  film: {
+    game_id: number; opponent: number; knowledge: number; hours: number; usual: number; share: number; off_name: string; def_name: string;
+    insights: { id: string; side: "offense" | "defense" | "personnel"; text: string; counter: string; plain: number }[];
   } | null;
 }
 

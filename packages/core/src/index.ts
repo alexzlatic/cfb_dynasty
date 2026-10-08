@@ -30,3 +30,4 @@ export * from "./staff.ts";
 export * from "./draft.ts";
 export * from "./portal.ts";
 export * from "./schemes.ts";
+export * from "./scouting.ts";
