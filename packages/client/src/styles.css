@@ -429,3 +429,34 @@ b.needs { color: var(--down); }
 .needsyou h3 { margin: 0 0 4px; font-family: var(--display); text-transform: uppercase; color: var(--down); font-size: 18px; }
 .needsyou ul { margin: 0; padding-left: 18px; }
 .needsyou li { margin: 3px 0; }
+
+/* Depth chart (drag and drop) */
+.dslots { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.dslot { border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-width: 0; }
+.dslot.over { border-color: var(--accent); }
+.dslot-head { margin-bottom: 4px; }
+.dlist, .dpool-list { list-style: none; margin: 0; padding: 0; }
+.dpool-list { max-height: 420px; overflow-y: auto; }
+.drow { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-top: 2px solid transparent; border-bottom: 2px solid transparent; min-width: 0; }
+.drow[draggable="true"] { cursor: grab; }
+.drow.starter .dname > a { font-weight: 700; }
+.drow.dragging { opacity: .4; }
+.drow.drop-before { border-top-color: var(--accent); }
+.drow.drop-after { border-bottom-color: var(--accent); }
+.drow.empty { justify-content: center; border: 1px dashed var(--line); }
+.drow .grip { color: var(--muted); font-size: 11px; letter-spacing: -2px; user-select: none; }
+.drow .dnum { color: var(--muted); font-size: 12px; width: 12px; text-align: right; flex: none; }
+.drow .dname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drow .dbtns { display: flex; gap: 2px; flex: none; }
+.drow .dbtns button { padding: 0 5px; font-size: 11px; line-height: 18px; }
+.obar { width: 34px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; flex: none; }
+.obar > span { display: block; height: 100%; }
+.fit, .oop { font-size: 10px; font-weight: 700; padding: 0 4px; border-radius: 3px; white-space: nowrap; cursor: help; flex: none; }
+.fit-ideal { background: #1b7f3b; color: #fff; }
+.fit-good { background: #c5e1a5; color: #18202a; }
+.fit-fair { background: var(--line); color: var(--ink); }
+.fit-poor { background: #f6d7a7; color: #18202a; }
+.fit-bad { background: #c0392b; color: #fff; }
+.oop { background: #fff3c4; color: #8a5a00; }
+.dpool.over .panel { outline: 2px solid var(--accent); }
+select.dadd { width: 100%; margin-top: 4px; font-size: 12px; }

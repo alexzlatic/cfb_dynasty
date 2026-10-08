@@ -12,9 +12,10 @@ export const POS_ORDER: Pos[] = ["QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB",
 const CLASS_ORDER = ["FR", "SO", "JR", "SR"];
 
 /** A rating as a colored number: 90+ elite, 80s very good, 75 a typical starter, 60s depth. */
+export const ratingTier = (v: number) => (v >= 90 ? "r-elite" : v >= 82 ? "r-great" : v >= 74 ? "r-good" : v >= 66 ? "r-ok" : "r-low");
+
 export function Rating({ v, big = false }: { v: number; big?: boolean }) {
-  const tier = v >= 90 ? "r-elite" : v >= 82 ? "r-great" : v >= 74 ? "r-good" : v >= 66 ? "r-ok" : "r-low";
-  return <span className={`rating ${tier}${big ? " big" : ""}`}>{v}</span>;
+  return <span className={`rating ${ratingTier(v)}${big ? " big" : ""}`}>{v}</span>;
 }
 
 export function Bar({ label, v }: { label: string; v: number }) {
