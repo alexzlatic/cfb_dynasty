@@ -1,4 +1,4 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, DevPhase } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
 export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan };
 export type CareerView = Career & { security: number; label: string };
@@ -9,13 +9,20 @@ export type LiveResult = LiveView & { since: number; result?: Game };
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
-/** Your staff's read on one of your players: development beyond what was expected so far, and his traits. */
-export interface StaffPlayer { pid: number; growth: number; expected: number; leadership: number; adaptability: number }
 export type UnitRead = { development: number; fit: number; chemistry: number };
+/** One of your players on the Development screen: what he's working on and his progress (overall points, your staff's read). */
+export interface DevPlayer {
+  pid: number; name: string; pos: string; class: string; years: number; ovr: number; starter: boolean; gp: number; plan: LabPlan | null;
+  focus: { area: LabArea; by: "plan" | "staff"; attrs: { key: string; label: string; value: number }[] };
+  /** Gained this year so far; gained this phase, what the staff planned for the whole phase and by today; trend against a normal pace over the last few weeks, and change since last Monday (in season). */
+  so_far: number; gained: number; target: number; by_now: number; trend: number | null; last_week: number | null;
+  leadership: number | null; adaptability: number | null;
+}
 export interface DevelopmentView {
-  team_id: number | null; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
-  staff: { known: number; units: Record<"off" | "def", UnitRead>; players: StaffPlayer[] } | null;
-  players: { pid: number; name: string; pos: string; class: string; years: number; ovr: number }[]; depth: DepthChart;
+  team_id: number | null; date: string; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
+  staff: { known: number; units: Record<"off" | "def", UnitRead> } | null;
+  phase: DevPhase; since: string; done: boolean; weeks: number; trend_since: string | null;
+  players: DevPlayer[]; depth: DepthChart;
 }
 
 // ---- keeping players and the portal ----
@@ -173,7 +180,7 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<StaffPlayer> & { plan: LabPlan | null }) | null;
+    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
     potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),

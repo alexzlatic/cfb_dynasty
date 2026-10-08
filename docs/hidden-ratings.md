@@ -73,7 +73,15 @@ margin one hidden point is worth (`POINTS_PER_UNIT`).
 ## What you see
 
 - **Your staff knows first.** The Development screen shows your staff's read of your team's development,
-  fit and chemistry by unit, and each player's progress beyond what was expected, leadership and
+  fit and chemistry by unit (in words), and for each player what he is working on (his plan's area, or
+  the area of his weakest important rating) and his progress this phase in overall points: what he has
+  gained since the phase began against what the staff planned for it (his class's normal share of the
+  year's growth plus his plan). The view changes with the time of year (`devPhase`): the offseason (to
+  the first Monday of August) shows the biggest gainers, fall camp (to your opener) shows position
+  battles, and in season shows who is trending up or down week to week. The day sim snapshots the
+  read when each phase begins and every Monday in season (`dev_track`, saved in the league meta; a
+  league saved without it starts it on the next day simmed and measures from the phase's start until
+  then). Listed ratings still move only at the rollover. The player read also covers leadership and
   adaptability. The read is blurred by how long the staff has watched the team: about 50% sure before
   August, sharper through camp, 90% from mid-September on. Other teams' hidden scores are never sent to the client.
 - **Staff reports.** A fall camp report (with the preseason AD meeting) and a midseason report name the

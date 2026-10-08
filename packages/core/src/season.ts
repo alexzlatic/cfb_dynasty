@@ -1,10 +1,12 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
-import { LAB_SLOTS, applyHidden, hiddenPlayer, hiddenTeam, progress, unitOf, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit } from "./hidden.ts";
+import {
+  LAB_SLOTS, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
+} from "./hidden.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { ATTRS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
+import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
@@ -95,6 +97,12 @@ export interface SeasonState {
   morale?: Record<number, number>;
   /** Your staff's individual development plans, by player id. */
   lab?: Record<number, LabPlan>;
+  /**
+   * Your staff's read of each of your players' development (overall points gained this year) when the
+   * current phase began (`start`), and on each Monday of the season (the last four), for the Development
+   * screen's progress. Taken by the day sim, so a replay gives the same; see Season.trackDevelopment.
+   */
+  dev_track?: DevTrack;
   /** Revenue-share contracts by player id, and each school's football revenue-share budget this year. */
   contracts?: Record<number, Contract>;
   pools?: Record<number, number>;
@@ -600,6 +608,7 @@ export class Season {
     // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
+    this.trackDevelopment(today);
     this.adMeetings(today, rep);
     this.collectiveMonth(today);
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
@@ -1608,6 +1617,86 @@ export class Season {
         leadership: trait(hp.leadership), adaptability: trait(hp.adaptability) };
     });
     return { known, units, players };
+  }
+
+  /** The development phase a date is in for a team (its opener ends fall camp). */
+  devPhase(teamId: number | null, date = this.state.date): DevPhase {
+    const s = this.state;
+    const first = s.games.filter((g) => g.kind === "regular" && (teamId == null || g.home_id === teamId || g.away_id === teamId)).reduce<ISODate | null>((m, g) => (m == null || g.date < m ? g.date : m), null);
+    return devPhase(s.year, date, first ?? `${s.year}-08-29`);
+  }
+
+  /**
+   * Your staff's read of how many overall points each player has gained this year by a date: what scouts
+   * expected by now plus his development beyond it, blurred by how well the staff knows him. The blur is
+   * the same all year for a player and shrinks as he's watched (and as there is more growth to see), so
+   * the read moves smoothly from week to week.
+   */
+  devReads(teamId: number, date = this.state.date): Map<number, number> {
+    const s = this.state, out = new Map<number, number>();
+    const h = this.hidden(teamId, date);
+    if (!h) return out;
+    const phi = progress(s.year, date);
+    const known = Math.min(0.9, 0.5 + Math.max(0, daysBetween(`${s.year}-08-01`, date)) / 150);
+    for (const p of this.roster(teamId)) {
+      const noise = new Rng(mixSeed(s.seed, s.year, p.id, "dev-read")).gauss(0, 1);
+      out.set(p.id, Math.round((phi * hiddenPlayer(s.seed, s.year, p).expected + (h.growth.get(p.id) ?? 0) + 3 * (1 - known) * phi * noise) * 10) / 10 + 0); // + 0: no -0, which a save turns into 0
+    }
+    return out;
+  }
+
+  /** Snapshot your staff's development read when a phase begins, and every Monday in season (the last four kept). */
+  private trackDevelopment(today: ISODate): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return;
+    const key = `${s.year}:${this.devPhase(me, today).kind}`;
+    const t = s.dev_track;
+    const fresh = !t || t.key !== key || t.team !== me;
+    if (!fresh && !(key.endsWith(":season") && weekday(today) === 1)) return;
+    const read = Object.fromEntries(this.devReads(me, today));
+    if (fresh) s.dev_track = { key, team: me, date: today, start: read, weeks: [] };
+    else t!.weeks = [...t!.weeks, { date: today, read }].slice(-4);
+  }
+
+  /**
+   * The Development screen for your team: the phase of the year, and for each player what he is working on
+   * and how far he has come this phase against what the staff planned for (his class's expected growth
+   * plus his plan). Ratings themselves move at the rollover; until then this is the staff's read.
+   */
+  developmentReport(teamId: number) {
+    const s = this.state, date = s.date;
+    const phase = this.devPhase(teamId, date);
+    const t = s.dev_track?.team === teamId && s.dev_track.key === `${s.year}:${phase.kind}` ? s.dev_track : null;
+    // Without a snapshot yet (a new league, or one saved before this), the phase is measured from its start.
+    const baseDate = t?.date ?? (phase.start > date ? date : phase.start);
+    const now = this.devReads(teamId, date);
+    let then: Map<number, number> | null = null;
+    const base = (pid: number) => t?.start[pid] ?? (then ??= this.devReads(teamId, baseDate)).get(pid) ?? now.get(pid) ?? 0;
+    const week = t?.weeks.length ? t.weeks[0] : null;
+    const last = t?.weeks.length ? t.weeks[t.weeks.length - 1] : null;
+    const pEnd = progress(s.year, phase.end), pBase = progress(s.year, baseDate), pNow = progress(s.year, date);
+    const trait = new Map((this.staffView(teamId, date)?.players ?? []).map((x) => [x.pid, x]));
+    // Starters on offense and defense (a lineman who long-snaps is not the line's starter for that).
+    const dc = this.depthChart(teamId);
+    const starters = new Set([...OFFENSE_SLOTS, ...DEFENSE_SLOTS].map((k) => dc[k]?.[0]).filter((x) => x != null));
+    const players = this.roster(teamId).map((p) => {
+      const plan = teamId === s.user_team_id ? s.lab?.[p.id] : undefined;
+      const exp = hiddenPlayer(s.seed, s.year, p).expected;
+      const r1 = (x: number) => Math.round(x * 10) / 10;
+      const so_far = now.get(p.id) ?? 0, gained = r1(so_far - base(p.id));
+      // What the staff planned for this phase: his share of a normal year's growth, plus his plan's work.
+      const target = r1((pEnd - pBase) * exp + labGain(plan, phase.end) - labGain(plan, baseDate));
+      const by_now = r1((pNow - pBase) * exp + labGain(plan, date) - labGain(plan, baseDate));
+      // In season: his read now against a few Mondays ago, less what a normal week adds.
+      const trend = week && week.read[p.id] != null ? r1(so_far - week.read[p.id] - (pNow - progress(s.year, week.date)) * exp - labGain(plan, date) + labGain(plan, week.date)) : null;
+      return {
+        pid: p.id, name: playerName(p), pos: p.pos, class: p.class, years: p.years, ovr: p.ovr, starter: starters.has(p.id), gp: s.player_stats?.[p.id]?.gp ?? 0,
+        plan: plan ?? null, focus: devFocus(p, plan), so_far, gained, target, by_now, trend,
+        last_week: last && last.read[p.id] != null ? r1(so_far - last.read[p.id]) : null,
+        leadership: trait.get(p.id)?.leadership ?? null, adaptability: trait.get(p.id)?.adaptability ?? null,
+      };
+    });
+    return { phase, since: baseDate, done: pNow >= 1, weeks: t?.weeks.length ?? 0, trend_since: week?.date ?? null, players };
   }
 
   /** The staff's camp and midseason reports on your team. */

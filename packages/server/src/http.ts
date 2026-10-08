@@ -108,8 +108,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (me == null) return { team_id: null };
         const v = S.staffView(me);
         const ctx = S.teamContext(me);
-        const players = S.roster(me).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr }));
-        return { team_id: me, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v, players, depth: S.depthChart(me) };
+        const r = S.developmentReport(me);
+        return { team_id: me, date: s.date, lab: s.lab ?? {}, slots: LAB_SLOTS, areas: LAB_AREAS, context: ctx, staff: v ? { known: v.known, units: v.units } : null, ...r, depth: S.depthChart(me) };
       }
       case route === "payroll": {
         // A team's revenue-share payroll (yours by default), and every school's in its conference.
@@ -325,7 +325,11 @@ export function startServer(opts: ServerOptions, port: number): Server {
           season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).
-          staff: pl.team_id === s.user_team_id ? { ...S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), plan: s.lab?.[pl.id] ?? null } : null,
+          staff: pl.team_id === s.user_team_id ? (() => {
+            const t = S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), r = S.developmentReport(pl.team_id), d = r.players.find((x) => x.pid === pl.id);
+            return { leadership: t?.leadership, adaptability: t?.adaptability, plan: s.lab?.[pl.id] ?? null, phase: r.phase.kind,
+              ...(d ? { focus: d.focus, so_far: d.so_far, gained: d.gained, target: d.target, by_now: d.by_now } : {}) };
+          })() : null,
           // His future: your players' portal watch, talks and comparables; anyone's portal entry.
           future: pl.team_id === s.user_team_id ? S.futureView(pl.id) : null,
           portal: S.portalEntry(pl.id) };
