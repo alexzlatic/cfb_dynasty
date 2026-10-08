@@ -2,8 +2,9 @@ import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { GameDay, type SideSetup } from "./gameday.ts";
 import { Caller, type UserCall } from "./calls.ts";
+import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { POSITIONS, type RatedPlayer } from "./players.ts";
-import { addDays, type ISODate } from "./dates.ts";
+import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
@@ -54,7 +55,17 @@ export interface SeasonState {
   injuries?: Injury[];
   /** The user's play calls in games they called live, by game id, in the order the game asked for them. */
   calls?: Record<number, UserCall[]>;
+  /** The user's changes to their lineup during live games, by game id. */
+  subs?: Record<number, GameSub[]>;
+  /** The user's game plan and weekly practice plan (absent = the defaults). */
+  game_plan?: GamePlan;
+  practice?: PracticePlan;
+  /** Practice banked toward the user's next game. */
+  prep?: Prep | null;
 }
+
+/** A depth-chart change during a live game, made before the user's `at`-th decision. */
+export interface GameSub { at: number; depth: DepthChart }
 
 export interface DayReport {
   date: ISODate;
@@ -115,6 +126,24 @@ export class Season {
     this.compiled.delete(teamId);
   }
 
+  get gamePlan(): GamePlan { return this.state.game_plan ?? DEFAULT_PLAN; }
+  get practicePlan(): PracticePlan { return this.state.practice ?? DEFAULT_PRACTICE; }
+  setGamePlan(plan: GamePlan): void { this.state.game_plan = plan; }
+  setPractice(plan: PracticePlan): void { this.state.practice = plan; }
+
+  /** The user's next game that is not over. */
+  nextUserGame(): Game | null {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return null;
+    return s.games.find((g) => g.status !== "final" && g.date >= s.date && (g.home_id === me || g.away_id === me)) ?? null;
+  }
+
+  /** Practice banked for a game, if it is the one the banked practice was for. */
+  prepFor(gameId: number): Prep | null {
+    const p = this.state.prep;
+    return p && p.for_game === gameId ? p : null;
+  }
+
   /** Injuries keeping a team's players out today (or on `date`). */
   injured(teamId: number, date = this.state.date): Injury[] {
     return this.state.injuries!.filter((i) => i.team_id === teamId && i.back > date);
@@ -140,11 +169,14 @@ export class Season {
     return c.r;
   }
 
-  private sideSetup(teamId: number): SideSetup | null {
-    const base = this.ratings.get(teamId);
+  private sideSetup(teamId: number, gameId?: number): SideSetup | null {
+    let base = this.ratings.get(teamId);
     const tp = this.seed.players?.[teamId];
     if (!base || !tp) return null;
-    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out: new Set(this.injured(teamId).map((i) => i.pid)) };
+    const mine = teamId === this.state.user_team_id;
+    if (mine) base = planRatings(base, this.gamePlan);
+    const fresh = mine && gameId != null ? freshness(this.prepFor(gameId)) : 1;
+    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out: new Set(this.injured(teamId).map((i) => i.pid)), fresh };
   }
 
   /** A new league on the seed's start date. */
@@ -214,8 +246,9 @@ export class Season {
       if (e.active) this.fire(e, rep);
     }
     // 2. Actions are applied by the server before it calls advanceDay; contested orders resolve here in M3+.
-    // 3. Day processing: build postseason games whose inputs are now known.
+    // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
+    this.practiceDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -323,17 +356,22 @@ export class Season {
   gameSetup(g: Game): { sim: GameSim; gd: GameDay | null; sides: [SideSetup, SideSetup] | null; caller: Caller | null } {
     const s = this.state;
     const opts = { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true };
-    const hs = this.sideSetup(g.home_id), as = this.sideSetup(g.away_id);
+    const hs = this.sideSetup(g.home_id, g.id), as = this.sideSetup(g.away_id, g.id);
     const user = s.user_team_id;
     const userSide = user === g.home_id ? "home" : user === g.away_id ? "away" : null;
-    const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls"))) : null;
+    // Your games are always called: by you live, or by your coordinators from your game plan.
+    const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls")), {
+      plans: { [userSide]: this.gamePlan }, prep: { [userSide]: prepEdge(this.prepFor(g.id)) },
+    }) : null;
     if (hs && as) {
       const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")), { injuries: s.settings.injuries ?? 1 });
       const k = gd.kickoff();
       return { sim: new GameSim(k.home, k.away, opts), gd, sides: [hs, as], caller };
     }
-    const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
+    let home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
     if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
+    if (userSide === "home") home = planRatings(home, this.gamePlan);
+    if (userSide === "away") away = planRatings(away, this.gamePlan);
     return { sim: new GameSim(home, away, opts), gd: null, sides: null, caller };
   }
 
@@ -345,13 +383,53 @@ export class Season {
     (s.calls ??= {})[gameId] = calls;
   }
 
+  /** Record the user's lineup changes from a live game. */
+  setSubs(gameId: number, subs: GameSub[]): void {
+    if (!subs.length) return;
+    (this.state.subs ??= {})[gameId] = subs;
+  }
+
+  /**
+   * A practice day: Monday to Thursday in a week your team plays, the day's plan banks prep for the
+   * game. A hard day can cost a player time (from its own stream, so nothing else moves).
+   */
+  private practiceDay(today: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    const wd = weekday(today);
+    if (me == null || wd < 1 || wd > 4) return;
+    const g = this.nextUserGame();
+    if (!g || g.date <= today || daysBetween(today, g.date) > 6) return;
+    if (!s.prep || s.prep.for_game !== g.id) s.prep = emptyPrep(g.id);
+    const day = this.practicePlan[wd - 1];
+    addPractice(s.prep, day);
+    if (day.intensity !== "hard") return;
+    const rng = new Rng(mixSeed(s.seed, s.year, today, "practice"));
+    if (rng.random() >= PRACTICE_INJURY) return;
+    const hurt = new Set(this.injured(me).map((i) => i.pid));
+    const pool = this.roster(me).filter((p) => !hurt.has(p.id) && p.pos !== "K" && p.pos !== "P" && p.pos !== "LS");
+    if (!pool.length) return;
+    const p = pool[Math.floor(rng.random() * pool.length)];
+    const u = rng.random();
+    const days = u < 0.7 ? 3 + Math.floor(rng.random() * 5) : u < 0.95 ? 8 + Math.floor(rng.random() * 13) : 21 + Math.floor(rng.random() * 25);
+    const types = ["hamstring", "ankle", "knee", "shoulder", "back"];
+    const type = types[Math.floor(rng.random() * types.length)];
+    const name = `${p.first} ${p.last}`.trim();
+    const starter = Object.values(lineup(this.depthChart(me), this.playerById, hurt).slot).some((x) => x?.id === p.id);
+    s.injuries!.push({ pid: p.id, team_id: me, name, pos: p.pos, game_id: 0, date: today, type, days, back: addDays(today, days), starter });
+    this.compiled.delete(me);
+    rep.news.push(this.news(today, "injury", `${this.team(me).school} ${p.pos} ${name} ${injuryOutlook(days)}`,
+      `${name} was hurt (${type}) in a hard ${PRACTICE_DAYS[wd - 1]} practice.`, [me]));
+  }
+
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
     const { sim, gd, sides, caller } = this.gameSetup(g);
-    const calls = s.calls?.[g.id];
-    const called = calls && caller ? caller.replay(calls) : undefined;
+    const subs = s.subs?.[g.id] ?? [];
+    const userSide = caller?.userSide;
+    const called = caller ? caller.replay(s.calls?.[g.id] ?? [], (i) => { for (const x of subs) if (x.at === i && gd && userSide) gd.setDepth(userSide, x.depth); }) : undefined;
     sim.play(gd ? gd.provider(called) : called);
+    if (caller && s.prep?.for_game === g.id) s.prep = null;
     const hs = sides?.[0], as = sides?.[1];
     const r = sim.result();
     const day = gd?.result();

@@ -2,6 +2,8 @@
  * Play-call balance: the same games with no calls and with calls on both sides. "ai" lets the
  * coordinators call everything (should match the plain engine within about 0.5 points a team); "cheat"
  * lets the home offense see the defense's call first and pick the best counter (the plan allows about 7).
+ * "learn" is "ai" with coordinators adjusting to what works in the game (both sides; should also match);
+ * "prep" gives the home team a full unit of practice edge on offense and defense (about a point each way).
  *
  *   npx tsx packages/core/scripts/calls-check.ts [games] [ai|cheat]
  */
@@ -18,10 +20,11 @@ for (let i = 0; i < N; i++) {
   if (h === a) continue;
   const H = seed.ratings[h].ratings, A = seed.ratings[a].ratings;
   for (const k of ["plain", "calls"] as const) {
-    const sim = new GameSim(H, A, { seed: i, record: false });
+    const sim = new GameSim(H, A, { seed: i, record: mode === "learn" });
     if (k === "calls") {
-      const c = new Caller("home", new Rng(mixSeed(5, i, "calls")));
-      if (mode === "ai") sim.play(c.replay([]));
+      const prep = mode === "prep" ? { home: { offense: 1, defense: 1, situations: 0 } } : undefined;
+      const c = new Caller("home", new Rng(mixSeed(5, i, "calls")), { prep });
+      if (mode !== "cheat") sim.play(c.replay([]));
       else {
         // "Cheater": sees the defense's call and picks the offensive call with the best expected yards of its kind.
         sim.play((req, game) => {

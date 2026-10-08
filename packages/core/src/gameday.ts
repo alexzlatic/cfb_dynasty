@@ -1,6 +1,6 @@
 import { GameSim, Rng, type DecisionProvider, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, withFatigue, type Group, type Lineup } from "./compiler.ts";
-import { DEFENSE_SLOTS, OFFENSE_SLOTS, SPECIAL_SLOTS, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
+import { DEFENSE_SLOTS, OFFENSE_SLOTS, SLOT_POS, SPECIAL_SLOTS, playerName, z, type DepthChart, type Pos, type RatedPlayer, type Slot } from "./players.ts";
 import type { TeamPlayers } from "./types.ts";
 
 /**
@@ -71,6 +71,8 @@ export interface SideSetup {
   depth: DepthChart;
   /** Players unavailable before kickoff (injured). */
   out: Set<number>;
+  /** Energy every player starts with (below 1 after a week of hard practice). */
+  fresh?: number;
 }
 
 /** Starters sit: the leading team in a rout, the trailing team only once it is hopeless. `lead` < 0 when trailing. */
@@ -100,11 +102,13 @@ class SideState {
   dirty = false;
   sinceSub = 0;
 
-  constructor(readonly s: SideSetup) {
+  constructor(public s: SideSetup) {
     this.byId = new Map(s.players.players.map((p) => [p.id, p]));
+    const fresh = s.fresh ?? 1;
     for (const p of s.players.players) {
       if (!this.byName.has(playerName(p))) this.byName.set(playerName(p), p);
-      this.energy.set(p.id, 1);
+      this.energy.set(p.id, fresh);
+      if (fresh < 1) this.winded.add(p.id);
       this.rate.set(p.id, [DRAIN[p.pos] * Math.exp(-0.25 * z(p.traits.stamina)), RECOVER * Math.exp(0.15 * z(p.traits.stamina))]);
     }
   }
@@ -204,6 +208,29 @@ class SideState {
   }
 
   onField(offense: boolean): RatedPlayer[] { return offense ? this.offenseField : this.defenseField; }
+
+  /** Who is in at each field slot now and who could come in, for the sideline. */
+  sideline(): SidelineSlot[] {
+    const l = this.lineup(), hurt = this.unavailable(false);
+    return FIELD.map((slot) => {
+      const ids = this.s.depth[slot] ?? [];
+      const listed = new Set(ids);
+      const others = this.s.players.players.filter((p) => SLOT_POS[slot].includes(p.pos) && !listed.has(p.id));
+      const opt = (p: RatedPlayer) => ({ id: p.id, name: playerName(p), pos: p.pos, overall: p.ovr, energy: Math.round((this.energy.get(p.id) ?? 1) * 100) / 100, hurt: hurt.has(p.id) });
+      return {
+        slot, on: l.slot[slot]?.id ?? null,
+        options: [...ids.map((id) => this.byId.get(id)).filter((p): p is RatedPlayer => !!p), ...others.sort((a, b) => b.ovr - a.ovr).slice(0, 4)].map(opt),
+      };
+    });
+  }
+}
+
+export interface SidelineSlot {
+  slot: Slot;
+  /** The player in at this slot right now. */
+  on: number | null;
+  /** The slot's depth chart, then the best others who can play it. */
+  options: { id: number; name: string; pos: Pos; overall: number; energy: number; hurt: boolean }[];
 }
 
 export interface GameDayOptions {
@@ -336,6 +363,14 @@ export class GameDay {
     }
     this.injuries.push(inj);
     s.resting.delete(p.id);
+    s.dirty = true;
+  }
+
+  /** A coach's change to a side's depth chart for the rest of this game; it takes effect at the next snap. */
+  setDepth(k: "home" | "away", depth: DepthChart): void {
+    const s = this.sides[k];
+    s.s = { ...s.s, depth };
+    s.resting.clear();
     s.dirty = true;
   }
 

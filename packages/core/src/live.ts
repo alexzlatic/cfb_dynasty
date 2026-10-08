@@ -1,7 +1,8 @@
 import type { DecisionAnswer, DecisionRequest, FourthDownCall, GameSim, PlayRecord } from "@cfb/engine";
-import { Caller, DEF_CALLS, OFF_CALLS, isDefCall, isOffCall, type CallPair, type DefCall, type OffCall, type UserCall } from "./calls.ts";
-import type { GameDay } from "./gameday.ts";
-import type { Season } from "./season.ts";
+import { Caller, DEF_CALLS, OFF_CALLS, isDefCall, isOffCall, type Adjustment, type DefCall, type OffCall, type UserCall } from "./calls.ts";
+import type { GameDay, SidelineSlot } from "./gameday.ts";
+import { SLOT_POS, type DepthChart, type Slot } from "./players.ts";
+import type { GameSub, Season } from "./season.ts";
 import type { Game } from "./types.ts";
 
 /** Moments that stop the game for you while your coordinators are calling (M1 plan defaults). */
@@ -58,6 +59,10 @@ export interface LiveView {
   offense_calls: CallStat[];
   defense_calls: CallStat[];
   calls_made: number;
+  /** Your side's field slots: who is in and who could come in. */
+  sideline: SidelineSlot[];
+  /** Where the coordinators have moved off their usual calls because of how this game is going. */
+  adjustments: (Adjustment & { team_id: number })[];
 }
 
 const FOURTH: { id: FourthDownCall; label: string }[] = [{ id: "go", label: "Go for it" }, { id: "fg", label: "Field goal" }, { id: "punt", label: "Punt" }];
@@ -71,6 +76,8 @@ const YES_NO = (yes: string, no: string) => [{ id: "true", label: yes }, { id: "
  */
 export class LiveGame {
   readonly calls: UserCall[] = [];
+  /** Lineup changes, each before the user decision it was made at. */
+  readonly subs: GameSub[] = [];
   readonly sim: GameSim;
   private gd: GameDay | null;
   private caller: Caller;
@@ -81,6 +88,7 @@ export class LiveGame {
   private seenInjuries = 0;
   private hurtAlert: AlertKey | null = null;
   private stats = { offense: new Map<string, CallStat>(), defense: new Map<string, CallStat>() };
+  private tallied = 0;
   mode: LiveMode;
 
   constructor(season: Season, readonly game: Game, mode: Partial<LiveMode> = {}) {
@@ -115,6 +123,27 @@ export class LiveGame {
     this.run(user, toEnd);
   }
 
+  /**
+   * Put a player in at a field slot for the rest of the game (he moves to the top of that slot's list,
+   * and out of any other slot he was starting at). It takes effect at the next snap.
+   */
+  substitute(slot: Slot, pid: number): void {
+    if (this.done || !this.pending) throw new Error("the game is not stopped");
+    if (!this.gd) throw new Error("this game has no lineups");
+    const side = this.gd.sides[this.userSide];
+    const p = side.byId.get(pid);
+    if (!p) throw new Error("not one of your players");
+    if (!(SLOT_POS[slot] ?? []).includes(p.pos)) throw new Error(`${p.pos} cannot play ${slot}`);
+    if (side.unavailable(false).has(pid)) throw new Error("he is hurt");
+    const depth: DepthChart = {};
+    for (const [k, ids] of Object.entries(side.s.depth) as [Slot, number[]][]) depth[k] = ids.filter((x) => x !== pid || k === slot);
+    depth[slot] = [pid, ...(depth[slot] ?? []).filter((x) => x !== pid)].slice(0, 4);
+    this.gd.setDepth(this.userSide, depth);
+    const at = this.calls.length;
+    const prev = this.subs.at(-1);
+    if (prev?.at === at) prev.depth = depth; else this.subs.push({ at, depth });
+  }
+
   private validate(req: DecisionRequest, call: UserCall): UserCall {
     if (call == null) return null;
     const role = this.role(req);
@@ -141,9 +170,8 @@ export class LiveGame {
     }
     const gdp = this.gd?.provider();
     for (;;) {
-      const before = this.sim.plays.length;
       const r = this.it.next(answer);
-      this.tally(before);
+      this.tally();
       if (r.done) { this.done = true; return; }
       const req = r.value;
       answer = undefined;
@@ -187,21 +215,19 @@ export class LiveGame {
     }
   }
 
-  /** Credit the snap just played to the calls made on it. */
-  private tally(before: number): void {
-    const last = this.caller.last;
-    if (!last || this.sim.plays.length === before) return;
-    const p = this.sim.plays.slice(before).find((x) => x.play_type === "RUN" || x.play_type === "PASS");
-    if (!p) return;
-    this.caller.last = null;
-    const success = p.down === 1 ? p.yards >= 0.4 * p.distance : p.down === 2 ? p.yards >= 0.6 * p.distance : p.yards >= p.distance;
-    const userOff = last.side === this.userSide;
-    const key = userOff ? last.off : last.def;
-    const label = userOff ? OFF_CALLS.find((c) => c.id === key)!.label : DEF_CALLS.find((c) => c.id === key)!.label;
-    const m = userOff ? this.stats.offense : this.stats.defense;
-    const st = m.get(key) ?? { call: key, label, plays: 0, yards: 0, success: 0 };
-    st.plays++; st.yards += p.yards; if (success) st.success++;
-    m.set(key, st);
+  /** Credit each snap played to the calls made on it. */
+  private tally(): void {
+    this.caller.observe(this.sim);
+    for (; this.tallied < this.caller.history.length; this.tallied++) {
+      const { pair: last, play: p, success } = this.caller.history[this.tallied];
+      const userOff = last.side === this.userSide;
+      const key = userOff ? last.off : last.def;
+      const label = userOff ? OFF_CALLS.find((c) => c.id === key)!.label : DEF_CALLS.find((c) => c.id === key)!.label;
+      const m = userOff ? this.stats.offense : this.stats.defense;
+      const st = m.get(key) ?? { call: key, label, plays: 0, yards: 0, success: 0 };
+      st.plays++; st.yards += p.yards; if (success) st.success++;
+      m.set(key, st);
+    }
   }
 
   /** The game now; `since` drops plays the client already has (the list is still indexed from the start). */
@@ -217,6 +243,8 @@ export class LiveGame {
       mode: this.mode,
       offense_calls: [...this.stats.offense.values()], defense_calls: [...this.stats.defense.values()],
       calls_made: this.calls.filter((c) => c != null).length,
+      sideline: this.done || !this.gd ? [] : this.gd.sides[this.userSide].sideline(),
+      adjustments: this.caller.adjustments().map((a) => ({ ...a, team_id: a.side === "home" ? this.game.home_id : this.game.away_id })),
     };
   }
 
@@ -230,7 +258,7 @@ export class LiveGame {
           ? { ...base, suggestion: ai!.off, options: OFF_CALLS.map(({ id, label }) => ({ id, label })) }
           : { ...base, suggestion: ai!.def, options: DEF_CALLS.map(({ id, label }) => ({ id, label })) };
       case "fourthDown": return { ...base, suggestion: req.suggestion, options: FOURTH };
-      case "twoPoint": return { ...base, suggestion: req.suggestion, options: YES_NO("Go for two", "Kick the extra point") };
+      case "twoPoint": return { ...base, suggestion: (this.caller.coordinator(req) as boolean | undefined) ?? req.suggestion, options: YES_NO("Go for two", "Kick the extra point") };
       case "onside": return { ...base, suggestion: req.suggestion, options: YES_NO("Onside kick", "Kick deep") };
       default: return { ...base, suggestion: req.suggestion as boolean, options: YES_NO("Kneel", "Run a play") };
     }
