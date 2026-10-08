@@ -214,6 +214,13 @@ def build_schedule(teams, refresh: bool):
 # `npm run check:m1` (M1 gate: 3-6%).
 FCS_OFFSET = -2.5
 
+# Every offense's sack rate is scaled by this. At the engine's dropback volume, real per-team sack rates
+# gave FBS teams 32.5 sacks a season against 26.4 for real (2024), and 37 players with 10+ against 13-14.
+# The sacks taken away become throwaways, and the completion rate also gives back the 7 yards a sack cost,
+# so passing yards per dropback hold. Letting them become ordinary passes added 0.7 points a game in the
+# 2025 replay; throwaways alone still added 0.35.
+SACK_TRIM = 0.81
+
 def team_strength_points(teams, refresh: bool):
     """Points vs an average FBS team on a neutral field for teams that were FCS last season (2025 for 2026).
 
@@ -386,6 +393,11 @@ def main() -> None:
             pts = (strength[t["school"]] + FCS_OFFSET) / slope
             ratings[t["id"]] = {"source": f"fcs_{SEASON - 1}_vs_fbs_shrunk", "points": round(strength[t["school"]] + FCS_OFFSET, 1),
                                 "ratings": scaled_team(pts, t["school"], t["abbr"], rosters.get(t["id"], []))}
+    for r in ratings.values():
+        o = r["ratings"]["offense"]
+        sack = o["sack_rate"]
+        o["sack_rate"] = sack * SACK_TRIM
+        o["comp_pct"] = (o["comp_pct"] * (1 - sack) - (sack - o["sack_rate"]) * 7 / o["yds_per_comp"]) / (1 - o["sack_rate"])
     write("team_ratings_all.json", {"season": SEASON, "as_of": start, "teams": ratings})
 
     add_prestige(teams, args.refresh)
