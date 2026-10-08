@@ -1,13 +1,13 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, runSim, checkPlan, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
+  Season, LiveGame, runSim, checkPlan, type CareerStart, type Coach, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
 
 export type Action =
-  | { type: "create"; payload: { name: string; seed: number; user_team_id: number | null; settings?: Partial<Settings> } }
+  | { type: "create"; payload: { name: string; seed: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart } }
   | { type: "sim"; payload: SimCommand }
   | { type: "set_user_team"; payload: { team_id: number | null } }
   | { type: "update_settings"; payload: Partial<Settings> }
@@ -18,7 +18,9 @@ export type Action =
   /** The user's game plan; the coordinators call every game from it. */
   | { type: "set_game_plan"; payload: GamePlan }
   /** The user's practice plan, Monday to Thursday. */
-  | { type: "set_practice"; payload: PracticePlan };
+  | { type: "set_practice"; payload: PracticePlan }
+  /** Put one of your players on the redshirt list (he plays in up to four games), or take him off. */
+  | { type: "set_redshirt"; payload: { pid: number; on: boolean } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -28,7 +30,8 @@ export type Push =
 
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
-  "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep"] as const;
+  "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
+  "player_stats", "award_week", "awards", "redshirts", "career"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -41,11 +44,12 @@ export class League {
   private constructor(public readonly id: string, public readonly db: DatabaseSync) {}
 
   /** Create a league file from the seed bundle. The create action is the first entry in the log. */
-  static create(id: string, path: string, seed: SeedBundle, opts: { name: string; seed?: number; user_team_id: number | null; settings?: Partial<Settings> }): League {
+  static create(id: string, path: string, seed: SeedBundle, opts: { name: string; seed?: number; user_team_id: number | null; settings?: Partial<Settings>; career?: CareerStart }): League {
     const db = openDb(path);
     const lg = new League(id, db);
-    const payload = { name: opts.name, seed: opts.seed ?? randomInt(1, 2 ** 31), user_team_id: opts.user_team_id, settings: opts.settings };
-    lg.season = Season.create(seed, { seed: payload.seed, user_team_id: payload.user_team_id, settings: payload.settings });
+    const career = opts.career == null ? undefined : checkCareer(opts.career);
+    const payload = { name: opts.name, seed: opts.seed ?? randomInt(1, 2 ** 31), user_team_id: opts.user_team_id, settings: opts.settings, career };
+    lg.season = Season.create(seed, { seed: payload.seed, user_team_id: payload.user_team_id, settings: payload.settings, career });
     lg.name = opts.name;
     tx(db, () => {
       const ins = (sql: string, rows: unknown[][]) => { const st = db.prepare(sql); for (const r of rows) st.run(...(r as never[])); };
@@ -89,6 +93,8 @@ export class League {
       preseason_power: meta.preseason_power, poll_memory: meta.poll_memory, conf_champs: meta.conf_champs, playoff: meta.playoff,
       champion: meta.champion, next_game_id: meta.next_game_id, stars: meta.stars ?? {}, depth: meta.depth ?? {}, injuries: meta.injuries ?? [], calls: meta.calls ?? {},
       subs: meta.subs ?? {}, game_plan: meta.game_plan ?? undefined, practice: meta.practice ?? undefined, prep: meta.prep ?? null,
+      player_stats: meta.player_stats ?? undefined, award_week: meta.award_week ?? undefined, awards: meta.awards ?? undefined,
+      redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
       writers: all("SELECT data FROM writers ORDER BY id"),
       games: all<Game>("SELECT data FROM games ORDER BY rowid"),
       events: all<CalEvent>("SELECT data FROM events ORDER BY date, id"),
@@ -101,7 +107,15 @@ export class League {
     const packed = Object.fromEntries((db.prepare("SELECT team_id, data FROM rated_teams").all() as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]));
     const players = Object.keys(packed).length ? unpackPlayers(packed, rosters) : undefined;
     lg.season = new Season(state, { teams, ratings, players } as SeedBundle);
+    // Leagues saved before season stats and careers: rebuild stats from the box scores, and start the
+    // career the way a new league would (as the school's real head coach).
+    if (!("player_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));
+    if (!("career" in meta)) lg.season.startCareer({ mode: "real" }, lg.coaches());
     return lg;
+  }
+
+  coaches(): Coach[] {
+    return (this.db.prepare("SELECT data FROM coaches ORDER BY id").all() as { data: string }[]).map((r) => JSON.parse(r.data));
   }
 
   close(): void { this.db.close(); }
@@ -154,13 +168,20 @@ export class League {
     if (a.type === "call_game") { checkCalls(a.payload.calls); this.checkSubs(a.payload.subs); }
     if (a.type === "set_game_plan") a = { type: a.type, payload: checkPlan(a.payload) };
     if (a.type === "set_practice") a = { type: a.type, payload: checkPractice(a.payload) };
+    if (a.type === "set_redshirt") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
-    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan")) throw new Error("finish or leave your live game first");
+    if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
     let reports: DayReport[] = [];
     const logged = tx(this.db, () => {
       const l = this.log(a, user);
-      if (a.type === "set_user_team") s.user_team_id = a.payload.team_id;
+      if (a.type === "set_user_team") {
+        // A new school is a new job: your name (and how you started) go with you; expectations start over.
+        const c = s.career;
+        s.user_team_id = a.payload.team_id;
+        s.redshirts = [];
+        this.season.startCareer(c ? { mode: c.mode, first: c.coach.first, last: c.coach.last } : { mode: "real" }, this.coaches());
+      }
       if (a.type === "update_settings") {
         this.season.updateSettings(a.payload);
         this.db.exec("DELETE FROM events");
@@ -171,6 +192,7 @@ export class League {
       if (a.type === "call_game") { this.season.setCalls(a.payload.game_id, a.payload.calls); this.season.setSubs(a.payload.game_id, a.payload.subs ?? []); }
       if (a.type === "set_game_plan") this.season.setGamePlan(a.payload);
       if (a.type === "set_practice") this.season.setPractice(a.payload);
+      if (a.type === "set_redshirt") this.season.setRedshirt(a.payload.pid, a.payload.on);
       if (a.type === "sim") reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       this.writeMeta();
       return l;
@@ -294,6 +316,13 @@ export function replay(src: League, seed: SeedBundle): { original: string; repla
   const out = { original: src.digest(), replayed: copy.digest() };
   copy.close();
   return out;
+}
+
+function checkCareer(x: CareerStart): CareerStart {
+  if (!x || (x.mode !== "real" && x.mode !== "fresh")) throw new Error("career mode must be real or fresh");
+  if (x.mode === "real") return { mode: "real" };
+  const name = (v: unknown) => String(v ?? "").trim().slice(0, 40);
+  return { mode: "fresh", first: name(x.first), last: name(x.last) };
 }
 
 function checkCalls(calls: unknown): void {

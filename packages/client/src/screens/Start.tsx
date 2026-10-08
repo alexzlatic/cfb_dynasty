@@ -70,7 +70,11 @@ export function NewLeague() {
   const [format, setFormat] = useState("playoff-12");
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
-  useEffect(() => { api.seedTeams().then(setTeams); }, []);
+  const [coaches, setCoaches] = useState<Record<number, { first: string; last: string }>>({});
+  const [mode, setMode] = useState<"real" | "fresh">("real");
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
+  useEffect(() => { api.seedTeams().then(setTeams); api.seedCoaches().then(setCoaches).catch(() => {}); }, []);
   const byConf = useMemo(() => {
     const m = new Map<string, Team[]>();
     for (const t of teams) if (!q || t.school.toLowerCase().includes(q.toLowerCase())) m.set(t.conference, [...(m.get(t.conference) || []), t]);
@@ -81,7 +85,7 @@ export function NewLeague() {
     setBusy(true);
     const [f, n] = format.split("-");
     const playoff = f === "playoff" ? { format: "playoff", teams: Number(n), byes: n === "12" ? 4 : n === "24" ? 8 : 0, auto_bids: Number(n) >= 12 ? 5 : 0 } : { format: f };
-    const { id } = await api.createLeague(name, pick, { playoff } as never);
+    const { id } = await api.createLeague(name, pick, { playoff } as never, mode === "real" ? { mode } : { mode, first, last });
     go("l", id, "home");
   };
   return (
@@ -98,8 +102,15 @@ export function NewLeague() {
           <option value="bcs">BCS title game</option>
           <option value="bowls">Bowls only, AP champion</option>
         </select></label>
+        <div className="careerpick">
+          <span>Your career</span>
+          <label><input type="radio" checked={mode === "real"} onChange={() => setMode("real")} />
+            Take over as the real head coach{chosen && coaches[chosen.id] ? ` (${coaches[chosen.id].first} ${coaches[chosen.id].last})` : ""}</label>
+          <label><input type="radio" checked={mode === "fresh"} onChange={() => setMode("fresh")} /> Start fresh under your own name, an unknown</label>
+          {mode === "fresh" && <div className="names"><input placeholder="First name" value={first} onChange={(e) => setFirst(e.target.value)} /><input placeholder="Last name" value={last} onChange={(e) => setLast(e.target.value)} /></div>}
+        </div>
         <label>Find a school <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" /></label>
-        <button className="primary" disabled={busy || !pick} onClick={create}>{chosen ? `Start as ${chosen.school}` : "Pick a team"}</button>
+        <button className="primary" disabled={busy || !pick || (mode === "fresh" && !last.trim())} onClick={create}>{chosen ? `Start as ${chosen.school}` : "Pick a team"}</button>
       </div>
       {byConf.map(([conf, ts]) => (
         <section key={conf} className="confpick">

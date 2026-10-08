@@ -234,6 +234,8 @@ export interface SidelineSlot {
 }
 
 export interface GameDayOptions {
+  /** Stream for crediting defenders (no credit without it). */
+  credit?: Rng;
   /** Scales every injury hazard: 1 = real football, 0 = no injuries. */
   injuries?: number;
   /** false: tired players stay in (and play tired). */
@@ -242,7 +244,27 @@ export interface GameDayOptions {
   blowouts?: boolean;
 }
 
-export interface GameDayResult { injuries: InGameInjury[]; snaps: Record<number, number>; plays: Record<number, { offense: number; defense: number }> }
+/** A defender's line: tackles, tackles for loss, sacks, interceptions, passes defended, forced fumbles. */
+export interface DefLine { tkl?: number; tfl?: number; sacks?: number; def_int?: number; pd?: number; ff?: number }
+export interface GameDayResult {
+  injuries: InGameInjury[]; snaps: Record<number, number>; plays: Record<number, { offense: number; defense: number }>;
+  /** Defensive credit by player id. */
+  defense: Record<number, DefLine>;
+}
+
+/**
+ * Who made the play on defense. The engine plays team against team, so the tackler, the sacker and
+ * the defender who picked it off are drawn from the eleven on the field, weighted by position for the
+ * kind of play and by rating, from the credit stream (the game itself does not change).
+ */
+const CREDIT: Record<"run" | "pass" | "sack" | "int" | "pd" | "tfl", Partial<Record<Pos, number>>> = {
+  run: { LB: 3, S: 1.6, DE: 1.3, DT: 1.3, CB: 0.9 },
+  pass: { CB: 2.6, S: 2.4, LB: 1.8, DE: 0.25, DT: 0.15 },
+  sack: { DE: 3.2, DT: 1.4, LB: 1.3, S: 0.25, CB: 0.15 },
+  int: { CB: 3, S: 3, LB: 1 },
+  pd: { CB: 3.2, S: 2, LB: 0.8, DE: 0.2, DT: 0.2 },
+  tfl: { DE: 2.2, DT: 2, LB: 2, S: 0.5, CB: 0.3 },
+};
 
 /**
  * Runs one game with substitutions. `rng` is the injury stream; `injuryRate` scales every hazard
@@ -257,6 +279,10 @@ export class GameDay {
   readonly fatigue: Partial<Record<Group, [number, number]>> = {};
 
   private injuryRate: number;
+
+  readonly defense = new Map<number, DefLine>();
+  private seenPlays = 0;
+  private game: GameSim | null = null;
 
   constructor(home: SideSetup, away: SideSetup, private rng: Rng, private opts: GameDayOptions = {}) {
     this.sides = { home: new SideState(home), away: new SideState(away) };
@@ -277,6 +303,7 @@ export class GameDay {
   }
 
   private beforeSnap(game: GameSim): void {
+    this.game = game;
     const q = game.quarter;
     if (this.last) this.settle(game);
     // Rest between quarters, more at halftime.
@@ -321,9 +348,45 @@ export class GameDay {
     };
   }
 
+  /** Credit the defenders on the field for the plays since the last snap. */
+  private creditDefense(game: GameSim, defenders: RatedPlayer[]): void {
+    const rng = this.opts.credit;
+    const plays = game.plays;
+    if (!rng) { this.seenPlays = plays.length; return; }
+    for (; this.seenPlays < plays.length; this.seenPlays++) {
+      const p = plays[this.seenPlays];
+      if (p.play_type !== "RUN" && p.play_type !== "PASS") continue;
+      const d = p.description;
+      const who = (kind: keyof typeof CREDIT) => {
+        const w = defenders.map((x) => (CREDIT[kind][x.pos] ?? 0) * Math.exp(0.05 * (x.ovr - 75)));
+        const tot = w.reduce((a, b) => a + b, 0);
+        let u = rng.random() * tot;
+        for (let i = 0; i < defenders.length; i++) { u -= w[i]; if (u <= 0) return defenders[i]; }
+        return defenders[defenders.length - 1];
+      };
+      const add = (x: RatedPlayer | undefined, k: keyof DefLine, n = 1) => {
+        if (!x) return;
+        const l = this.defense.get(x.id) ?? {};
+        l[k] = (l[k] ?? 0) + n;
+        this.defense.set(x.id, l);
+      };
+      if (!defenders.length) continue;
+      if (/sacked/.test(d)) { const x = who("sack"); add(x, "sacks"); add(x, "tkl"); add(x, "tfl"); if (/FUMBLES/.test(d)) add(x, "ff"); continue; }
+      if (/INTERCEPTED/.test(d)) { const x = who("int"); add(x, "def_int"); add(x, "pd"); continue; }
+      if (/incomplete/.test(d)) { if (rng.random() < 0.3) add(who("pd"), "pd"); continue; }
+      if (/TOUCHDOWN/.test(d) || / scrambles /.test(d) && /out of bounds/.test(d)) continue;
+      if (/out of bounds/.test(d) && rng.random() < 0.6) continue;
+      const x = p.yards < 0 && p.play_type === "RUN" ? who("tfl") : who(p.play_type === "RUN" ? "run" : "pass");
+      add(x, "tkl");
+      if (p.yards < 0) add(x, "tfl");
+      if (/FUMBLES/.test(d)) add(x, "ff");
+    }
+  }
+
   /** The last snap happened: tire the players on the field, rest the rest, roll for injuries. */
   private settle(game: GameSim): void {
     const last = this.last!;
+    this.creditDefense(game, last[last.offense === "home" ? "away" : "home"]);
     for (const k of ["home", "away"] as const) {
       const s = this.sides[k];
       const on = new Set(last[k].map((p) => p.id));
@@ -375,10 +438,12 @@ export class GameDay {
   }
 
   result(): GameDayResult {
+    // The game's last snap is never followed by another one; credit it now.
+    if (this.game && this.last) this.creditDefense(this.game, this.last[this.last.offense === "home" ? "away" : "home"]);
     const snaps: Record<number, number> = {};
     for (const s of [this.sides.home, this.sides.away]) for (const [id, n] of s.snaps) snaps[id] = n;
     const plays = Object.fromEntries([this.sides.home, this.sides.away].map((s) => [s.s.team_id, s.plays]));
-    return { injuries: this.injuries, snaps, plays };
+    return { injuries: this.injuries, snaps, plays, defense: Object.fromEntries(this.defense) };
   }
 }
 

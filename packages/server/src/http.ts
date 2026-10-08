@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { autoDepth, prepEdge, records, type Game } from "@cfb/core";
+import { AWARD_NAMES, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import type { Action } from "./league.ts";
 import type { LeagueManager } from "./manager.ts";
@@ -60,11 +60,14 @@ export function startServer(opts: ServerOptions, port: number): Server {
       return { ok: true };
     }
     if (p[0] === "seed" && p[1] === "teams") return manager.seed().teams.filter((t) => t.level === "fbs");
+    if (p[0] === "seed" && p[1] === "coaches") {
+      return Object.fromEntries(manager.seed().coaches.filter((c) => c.role === "HC").map((c) => [c.team_id, { first: c.first, last: c.last, career: c.career }]));
+    }
     if (p[0] !== "leagues") throw new HttpError(404, "not found");
     if (p.length === 1) {
       if (req.method === "POST") {
         const b = await body(req);
-        const lg = manager.create({ name: String(b.name || "My Dynasty"), user_team_id: b.team_id ?? null, seed: b.seed, settings: b.settings });
+        const lg = manager.create({ name: String(b.name || "My Dynasty"), user_team_id: b.team_id ?? null, seed: b.seed, settings: b.settings, career: b.career });
         return { id: lg.id };
       }
       return manager.list();
@@ -73,6 +76,16 @@ export function startServer(opts: ServerOptions, port: number): Server {
     const S = lg.season, s = S.state;
     const route = p.slice(2).join("/");
     const gameRow = (g: Game) => ({ ...g, home_rank: S.rankOf(g.home_id), away_rank: S.rankOf(g.away_id) });
+    const career = () => {
+      const c = s.career;
+      if (!c) return null;
+      const sec = S.security()!;
+      return { ...c, security: sec, label: securityLabel(sec) };
+    };
+    const statRow = (pid: number, st: PlayerSeason) => {
+      const pl = S.playerById.get(pid);
+      return pl ? { pid, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr, ...st } : null;
+    };
     switch (true) {
       case route === "" || route === "state": {
         const upcoming = s.events.filter((e) => e.date >= s.date && e.status !== "done" && e.type !== "game_day").slice(0, 8);
@@ -81,8 +94,19 @@ export function startServer(opts: ServerOptions, port: number): Server {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
           champion: s.champion, upcoming, my_next_game: myGames.find((g) => g.status !== "final") ?? null,
           ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], playoff: s.playoff,
-          news: s.news.slice(-12).reverse(),
+          news: s.news.slice(-12).reverse(), career: career(),
         };
+      }
+      case route === "career": {
+        const byId = new Map(s.games.map((g) => [g.id, g]));
+        return { career: career(), trail: S.securityTrail().map((x) => ({ ...x, game: gameRow(byId.get(x.game_id)!) })) };
+      }
+      case route === "awards": return { names: AWARD_NAMES, awards: s.awards ?? [] };
+      case route === "leaders": {
+        const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));
+        const rows = Object.entries(s.player_stats ?? {}).filter(([, x]) => fbs.has(x.team_id)).map(([pid, x]) => statRow(Number(pid), x)!).filter(Boolean);
+        const KEYS = ["pass_yds", "pass_td", "rush_yds", "rush_td", "rec", "rec_yds", "rec_td", "tkl", "tfl", "sacks", "def_int", "pd", "ff", "fgm"] as const;
+        return Object.fromEntries(KEYS.map((k) => [k, rows.filter((r) => (r[k] ?? 0) > 0).sort((a, b) => (b[k] ?? 0) - (a[k] ?? 0) || a.pid - b.pid).slice(0, 10)]));
       }
       case route === "actions" && req.method === "POST": {
         const a = (await body(req)) as Action;
@@ -125,14 +149,21 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const team = S.team(id);
         if (!team) throw new HttpError(404, "no such team");
         const roster = (lg.db.prepare("SELECT data FROM players WHERE team_id = ?").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
-        const coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
+        let coaches = (lg.db.prepare("SELECT data FROM coaches WHERE team_id = ? ORDER BY id").all(id) as { data: string }[]).map((r) => JSON.parse(r.data));
+        // Your team's head coach is you.
+        const c = s.career;
+        if (c && c.team_id === id && c.mode === "fresh") coaches = coaches.map((x) => (x.role === "HC" ? { ...x, first: c.coach.first, last: c.coach.last, career: [], source: "you" } : x));
+        const stats = S.roster(id).flatMap((pl) => { const st = s.player_stats?.[pl.id]; return st ? [statRow(pl.id, st)!] : []; });
         const games = s.games.filter((g) => g.home_id === id || g.away_id === id).map(gameRow);
-        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id) };
+        return { team, roster, coaches, games, power: s.power[id], rank: S.rankOf(id), players: S.roster(id), depth: S.depthChart(id), custom_depth: !!s.depth?.[id], injuries: S.injured(id), stats };
       }
       case p[2] === "teams" && p.length === 5 && p[4] === "depth": {
         const id = Number(p[3]);
         const injuries = S.injured(id);
-        return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries };
+        const mine = id === s.user_team_id;
+        const gp = Object.fromEntries(S.roster(id).map((pl) => [pl.id, s.player_stats?.[pl.id]?.gp ?? 0]));
+        return { depth: S.depthChart(id), custom: !!s.depth?.[id], auto: autoDepth(S.roster(id), new Set(injuries.map((i) => i.pid))), players: S.roster(id), injuries,
+          gp, redshirts: mine ? s.redshirts ?? [] : [], redshirt_games: REDSHIRT_GAMES };
       }
       case p[2] === "players" && p.length === 4: {
         const pl = S.playerById.get(Number(p[3]));
@@ -144,12 +175,14 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const log = s.games.filter((g) => g.status === "final" && (g.home_id === pl.team_id || g.away_id === pl.team_id)).flatMap((g) => {
           const row = lg.db.prepare("SELECT data FROM game_details WHERE game_id = ?").get(g.id) as { data: string } | undefined;
           if (!row) return [];
-          const d = JSON.parse(row.data);
-          const line = (g.home_id === pl.team_id ? d.home_players : d.away_players)?.[name];
+          const d = JSON.parse(row.data) as GameDetail;
+          const line = { ...((g.home_id === pl.team_id ? d.home_players : d.away_players)?.[name] as object | undefined), ...d.defense?.[pl.id] };
           const snaps = d.snaps?.[pl.id];
-          return line || snaps ? [{ game: gameRow(g), line: line ?? {}, snaps: snaps ?? 0 }] : [];
+          return Object.keys(line).length || snaps ? [{ game: gameRow(g), line, snaps: snaps ?? 0 }] : [];
         });
-        return { player: pl, team: S.team(pl.team_id), slots, log, injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id) };
+        return { player: pl, team: S.team(pl.team_id), slots, log, injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
+          season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
+          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES };
       }
       case route === "schedule": {
         const team = url.searchParams.get("team"), date = url.searchParams.get("date"), week = url.searchParams.get("week");
@@ -161,7 +194,13 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const g = s.games.find((x) => x.id === id);
         if (!g) throw new HttpError(404, "no such game");
         const d = lg.db.prepare("SELECT data FROM game_details WHERE game_id = ?").get(id) as { data: string } | undefined;
-        return { game: gameRow(g), detail: d ? JSON.parse(d.data) : null };
+        const detail = d ? (JSON.parse(d.data) as GameDetail) : null;
+        // Defensive lines are by player id; send who they are.
+        const defenders = Object.fromEntries(Object.keys(detail?.defense ?? {}).map((k) => {
+          const pl = S.playerById.get(Number(k));
+          return [k, pl ? { name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, team_id: pl.team_id } : null];
+        }));
+        return { game: gameRow(g), detail, defenders };
       }
       case route === "standings": return lg.standings();
       case route === "polls": return s.polls.map((x) => ({ ...x, ranks: x.ranks.slice(0, 25) }));

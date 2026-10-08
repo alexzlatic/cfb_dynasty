@@ -208,3 +208,74 @@ describe("live games", () => {
     expect(r.replayed).toBe(r.original);
   });
 });
+
+describe("career and season polish", () => {
+  // Seasons here run synchronously; the server may drop idle keep-alive sockets meanwhile, so retry once.
+  const getR = (path: string): Promise<any> => fetch(base + path).then((r) => r.json(), () => fetch(base + path).then((r) => r.json()));
+  it("starts a fresh career, redshirts, credits defenders and hands out awards, and replays it all", async () => {
+    const { id } = await post("/api/leagues", { name: "Career", team_id: 135, seed: 21, career: { mode: "fresh", first: "Pat", last: "Rowan" } });
+    const lg = manager.get(id);
+    const st = await getR(`/api/leagues/${id}/state`);
+    expect(st.career.mode).toBe("fresh");
+    expect(st.career.coach).toMatchObject({ first: "Pat", last: "Rowan", reputation: 30 });
+    expect(st.career.expect.wins).toBeGreaterThan(0);
+    const team = await getR(`/api/leagues/${id}/teams/135`);
+    expect(team.coaches.find((c: any) => c.role === "HC")).toMatchObject({ first: "Pat", last: "Rowan" });
+
+    // Redshirt the three best true freshmen; another team's player is refused.
+    const fr = lg.season.roster(135).filter((p) => p.years === 0).sort((a, b) => b.ovr - a.ovr).slice(0, 3);
+    for (const p of fr) expect((await post(`/api/leagues/${id}/actions`, { type: "set_redshirt", payload: { pid: p.id, on: true } })).ok).toBe(true);
+    const other = lg.season.roster(2509)[0];
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_redshirt", payload: { pid: other.id, on: true } })).error).toMatch(/own players/);
+
+    lg.apply({ type: "sim", payload: { kind: "end_of_season" } });
+    const s = lg.season.state;
+    for (const p of fr) expect(s.player_stats![p.id]?.gp ?? 0).toBeLessThanOrEqual(4);
+    const depth = await getR(`/api/leagues/${id}/teams/135/depth`);
+    expect(depth.redshirts).toHaveLength(3);
+
+    // Every final box score credits about a game's worth of tackles on each side.
+    const any = s.games.find((g) => g.status === "final" && g.home_id === 135)!;
+    const game = await getR(`/api/leagues/${id}/games/${any.id}`);
+    const tackles = Object.values(game.detail.defense as Record<string, { tkl?: number }>).reduce((n, l) => n + (l.tkl ?? 0), 0);
+    expect(tackles).toBeGreaterThan(60);
+    expect(tackles).toBeLessThan(160);
+
+    const aw = await getR(`/api/leagues/${id}/awards`);
+    expect(aw.awards.filter((a: any) => a.type === "heisman")).toHaveLength(1);
+    expect(aw.awards.filter((a: any) => a.type === "heisman_finalist")).toHaveLength(3);
+    expect(aw.awards.filter((a: any) => a.type === "all_american" && a.team === 1)).toHaveLength(25);
+    expect(aw.awards.filter((a: any) => a.type === "potw_off").length).toBeGreaterThan(10);
+    const leaders = await getR(`/api/leagues/${id}/leaders`);
+    expect(leaders.sacks[0].sacks).toBeGreaterThan(8);
+    expect(leaders.pass_yds[0].pass_yds).toBeGreaterThan(3000);
+
+    const career = await getR(`/api/leagues/${id}/career`);
+    expect(career.career.meetings.map((m: any) => m.kind)).toEqual(["preseason", "midseason", "end"]);
+    expect(career.trail.length).toBeGreaterThanOrEqual(12);
+    expect(s.news.filter((n) => n.kind === "ad")).toHaveLength(3);
+
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("career-check", manager.path(id));
+    expect(again.season.state.awards).toEqual(s.awards);
+    expect(again.season.state.career).toEqual(s.career);
+    again.close();
+  }, 240_000);
+
+  it("a league saved before stats and careers rebuilds stats from its box scores and starts the real coach's career", async () => {
+    const lg = manager.create({ name: "Pre-career save", user_team_id: 2509, seed: 8 });
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-20" } });
+    lg.db.exec("DELETE FROM meta WHERE key IN ('player_stats', 'award_week', 'awards', 'redshirts', 'career')");
+    const { League } = await import("../src/league.ts");
+    const again = League.open("pre-career", manager.path(lg.id));
+    const was = lg.season.state.player_stats!, now = again.season.state.player_stats!;
+    const qb = Object.entries(was).filter(([, x]) => x.team_id === 2509).sort((a, b) => (b[1].pass_yds ?? 0) - (a[1].pass_yds ?? 0))[0];
+    expect(now[Number(qb[0])].pass_yds).toBe(qb[1].pass_yds);
+    expect(now[Number(qb[0])].gp).toBe(qb[1].gp);
+    expect(again.season.state.career).toMatchObject({ mode: "real", team_id: 2509 });
+    expect(again.season.state.career!.coach.reputation).toBeGreaterThan(30);
+    again.close();
+  }, 60_000);
+});

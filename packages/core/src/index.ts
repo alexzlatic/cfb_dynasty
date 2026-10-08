@@ -16,3 +16,5 @@ export * from "./writers.ts";
 export * from "./players.ts";
 export * from "./compiler.ts";
 export * from "./gameday.ts";
+export * from "./awards.ts";
+export * from "./career.ts";
