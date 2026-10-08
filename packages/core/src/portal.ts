@@ -28,7 +28,7 @@ export interface StayContext {
   /** His market value next season (dollars a year) and what staying pays him next season. */
   value: number;
   pay: number;
-  /** What schools at the level he would land at pay for value (their pay over their roster's value), and how many would want him (1 to 1.3). */
+  /** What schools at the level he would land at pay for value (their pay over their roster's value), and how many would want him (1 to 1.8). */
   ratio_away: number;
   demand: number;
   /** His chance to start next season here, and at the level he would land at (0-1). */
@@ -48,8 +48,9 @@ export interface StayContext {
   morale: number;
   /** Seasons already in college. */
   years: number;
-  /** Power, Group of Five or FCS. */
+  /** Power, Group of Five or FCS: his level now, and the level he'd land at. */
   tier: 0 | 1 | 2;
+  tier_away: 0 | 1 | 2;
   /** His deal runs into next season (leaving means a buyout). */
   contract?: boolean;
   /** Moving would cost him a season (a second transfer under the Protect College Sports Act). */
@@ -67,9 +68,13 @@ export const STAY_W = { money: 1.0, playing: 1.6, development: 0.6, fit: 0.35, w
  * Calibrated to the January 2026 portal (scripts/portal-real.ts): 16% of first-year power-conference
  * players entered, 28% of second- and third-year players, 21% of fourth-year players.
  */
-export const FRICTION = [1.75, 0.95, 0.95, 1.25, 1.6];
+export const FRICTION = [-0.35, -1.2, -0.7, -0.2, 0.25];
 /** Group of Five and FCS players enter a little less (18% against 22%): fewer places to go up to. */
-export const TIER_FRICTION = [0, 0.25, 0.4];
+export const TIER_FRICTION = [0, 1.4, 1.9];
+/** A player with nowhere better to play (little chance to start at the level he'd land at) mostly stays put. */
+export const NOWHERE = 0.8;
+/** Dropping a level (the exposure, the life and the money of a power program) holds players back, per level. */
+export const TIER_DROP = 0.9;
 /** Spread of a player's own pull each year. */
 export const NOISE_SD = 0.9;
 /** Pay beyond this many times his value never keeps anyone: money can't fix it. */
@@ -102,7 +107,8 @@ export function stayScore(c: StayContext, w: Pick<Persona, "money" | "playing" |
   };
   const sum = Object.values(parts).reduce((a, b) => a + b, 0);
   const friction = FRICTION[Math.max(0, Math.min(FRICTION.length - 1, Math.floor(c.years)))] + TIER_FRICTION[c.tier]
-    + 0.5 * w.loyalty * W.loyalty + (c.contract ? 1 : 0) + (c.costs_season ? 1.5 : 0);
+    + 0.5 * w.loyalty * W.loyalty + (c.contract ? 1 : 0) + (c.costs_season ? 1.5 : 0) + NOWHERE * Math.max(0, 1 - c.start_away / 0.3)
+    + TIER_DROP * Math.max(0, c.tier_away - c.tier);
   const net = sum + friction + NOISE_SD * c.noise;
   return { net, p: sigmoid(-net), parts };
 }

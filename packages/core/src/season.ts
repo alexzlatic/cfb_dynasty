@@ -9,7 +9,7 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, off
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
-import { YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
@@ -209,7 +209,13 @@ const P4 = new Set(["SEC", "Big Ten", "ACC", "Big 12"]);
 /** Each level (power, Group of Five, FCS): what it pays for value, its starters' rating by position, how it looks to a player. */
 type TierStats = { ratio: number; bar: Record<Pos, number>; win: number }[];
 /** A team's next season as players see it: each returning player's rank at his position, this year's starter bar and room counts. */
-interface NextYear { tier: 0 | 1 | 2; rank: Map<number, number>; bar: Partial<Record<Pos, number>>; count: Partial<Record<Pos, number>>; ratio: number; win: number; prestige: number }
+interface NextYear { tier: 0 | 1 | 2; rank: Map<number, number>; bar: Partial<Record<Pos, number>>; count: Partial<Record<Pos, number>>; os: Partial<Record<Pos, number[]>>; ratio: number; win: number; prestige: number; signees: Partial<Record<Pos, number>>; transfers_in: Partial<Record<Pos, number>>; budget: number }
+interface Need { spots: number; starter: boolean; floor: number }
+/** Schools stop bidding on a player holding this many offers. */
+const CROWD = 10;
+/** The share of FBS players who'd stop playing rather than drop to FCS (the January 2026 portal: 15% of power and 30% of Group of Five entrants found no school). */
+const QUIT_FCS = 0.5;
+const FULL_ROOM = (ROSTER_LIMIT - 5) / Object.values(ROOM).reduce((a, b) => a + b, 0);
 /** A player's rating next season as everyone expects it (the usual year's gain, slower past his potential). */
 const ovrNext = (p: RatedPlayer) => p.ovr + YEAR_GAIN[Math.max(0, Math.min(YEAR_GAIN.length - 1, Math.floor(p.years)))] * (p.hidden.potential > p.ovr ? 1 : 0.3);
 /** Winning and exposure as recruits weigh it (valuation.ts), for a player of quality q. */
@@ -1627,6 +1633,7 @@ export class Season {
 
   // ---- keeping players and the transfer portal (M3 step 5) ----------------------------------------
   private portalCache: { date: ISODate; tiers: TierStats; next: Map<number, NextYear> } | null = null;
+  private leavingCache: { date: ISODate; out: Set<number> } | null = null;
 
   /** What each level pays for value, its starters' ratings by position and how it looks to a player, and every team's projected next season. */
   private portalBasis(): { tiers: TierStats; next: Map<number, NextYear> } {
@@ -1635,6 +1642,17 @@ export class Season {
     const ratios: number[][] = [[], [], []], bars: Partial<Record<Pos, number[]>>[] = [{}, {}, {}], wins: number[][] = [[], [], []];
     const recs = records(s.games, this.teams);
     const leaving = this.leavingSet();
+    const inPortal = new Set((s.portal?.entries ?? []).map((e) => e.pid));
+    const committedTo = new Map<number, RatedPlayer[]>();
+    for (const e of s.portal?.entries ?? []) {
+      const p = e.status === "committed" && e.to != null ? this.playerById.get(e.pid) : undefined;
+      if (p) { const g = committedTo.get(e.to!) ?? []; g.push(p); committedTo.set(e.to!, g); }
+    }
+    const signees = new Map<number, Partial<Record<Pos, number>>>();
+    for (const p of s.recruiting?.prospects ?? []) {
+      if (p.cls !== s.year + 1 || p.commit?.team == null) continue;
+      const m = signees.get(p.commit.team) ?? {}; m[p.pos] = (m[p.pos] ?? 0) + 1; signees.set(p.commit.team, m);
+    }
     const next = new Map<number, NextYear>();
     for (const t of this.teams) {
       const tier = this.tierOf(t.id), roster = this.roster(t.id);
@@ -1645,19 +1663,20 @@ export class Season {
       // Next season's room at each position: returning players by projected rating, plus transfers already committed in.
       const byPos = new Map<Pos, { id: number; o: number }[]>();
       for (const p of roster) {
-        if (leaving.has(p.id) || this.portalOut(p.id)) continue;
+        if (leaving.has(p.id) || inPortal.has(p.id)) continue;
         const g = byPos.get(p.pos) ?? []; g.push({ id: p.id, o: ovrNext(p) }); byPos.set(p.pos, g);
       }
-      for (const e of s.portal?.entries ?? []) {
-        if (e.status !== "committed" || e.to !== t.id) continue;
-        const p = this.playerById.get(e.pid);
-        if (p) { const g = byPos.get(p.pos) ?? []; g.push({ id: p.id, o: ovrNext(p) }); byPos.set(p.pos, g); }
+      const transfers_in: Partial<Record<Pos, number>> = {};
+      for (const p of committedTo.get(t.id) ?? []) {
+        const g = byPos.get(p.pos) ?? []; g.push({ id: p.id, o: ovrNext(p) }); byPos.set(p.pos, g);
+        if (p.team_id !== t.id) transfers_in[p.pos] = (transfers_in[p.pos] ?? 0) + 1;
       }
-      const rank = new Map<number, number>(), bar: Partial<Record<Pos, number>> = {}, count: Partial<Record<Pos, number>> = {};
+      const rank = new Map<number, number>(), bar: Partial<Record<Pos, number>> = {}, count: Partial<Record<Pos, number>> = {}, os: Partial<Record<Pos, number[]>> = {};
       for (const pos of POSITIONS) {
         const g = (byPos.get(pos) ?? []).sort((a, b) => b.o - a.o || a.id - b.id);
         g.forEach((x, i) => rank.set(x.id, i));
         count[pos] = g.length;
+        os[pos] = g.map((x) => x.o);
         // This year's starters set the bar a newcomer has to clear.
         const o = roster.filter((p) => p.pos === pos).map((p) => p.ovr).sort((a, b) => b - a);
         bar[pos] = o[Math.min(o.length, STARTERS[pos]) - 1] ?? 55;
@@ -1667,7 +1686,8 @@ export class Season {
       const win = rec && rec.w + rec.l > 0 ? rec.w / (rec.w + rec.l) : 0.5;
       const w = winTerm((t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]), win, tier === 0, 0);
       if (t.level === "fbs" || tier === 2) wins[tier].push(w);
-      next.set(t.id, { tier, rank, bar, count, ratio: val > 0 ? pay / val : 0, win, prestige: (t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]) });
+      next.set(t.id, { tier, rank, bar, count, os, ratio: val > 0 ? pay / val : 0, win, prestige: (t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]),
+        signees: signees.get(t.id) ?? {}, transfers_in, budget: this.nextBudgetTotal(t) });
     }
     const med = (xs: number[]) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
     const tiers: TierStats = [0, 1, 2].map((i) => ({
@@ -1681,14 +1701,12 @@ export class Season {
 
   /** Players who won't be back next season whatever happens: out of eligibility, or declared for the draft. */
   private leavingSet(): Set<number> {
-    const s = this.state, out = new Set<number>(s.declared ?? []);
+    const s = this.state;
+    if (this.leavingCache?.date === s.date && this.leavingCache.out.size >= (s.declared?.length ?? 0)) return this.leavingCache.out;
+    const out = new Set<number>(s.declared ?? []);
     for (const t of this.teams) for (const p of this.roster(t.id)) if (p.years + 1 >= 5) out.add(p.id);
+    this.leavingCache = { date: s.date, out };
     return out;
-  }
-
-  /** He's in the portal (or committed elsewhere) this winter. */
-  private portalOut(pid: number): boolean {
-    return !!this.state.portal?.entries.some((e) => e.pid === pid);
   }
 
   /** Projected NFL slot among this year's draft-eligible players (players who'd go in the top 100 weigh the NFL, not the portal). */
@@ -1706,9 +1724,11 @@ export class Season {
     const me = next.get(p.team_id)!, t = this.team(p.team_id);
     const o = ovrNext(p), value = playerValue({ pos: p.pos, ovr: o, stars: p.stars, years: p.years + 1 });
     const q = Math.max(-2, Math.min(3, (o - 72) / 5));
-    // The level he'd land at: the best mix of playing time, winning and money among the three.
-    let best = { tier: me.tier as 0 | 1 | 2, u: -Infinity, start: 0 };
+    // The level he'd land at: the best mix of playing time, winning and money among the levels that would want
+    // him (where he'd be close to the starters; FCS takes anyone).
+    let best = { tier: 2 as 0 | 1 | 2, u: -Infinity, start: 0 };
     for (const i of [0, 1, 2] as const) {
+      if (i < 2 && o < tiers[i].bar[p.pos] - (i < me.tier ? 4 : 6)) continue;
       const start = sigmoid((o - tiers[i].bar[p.pos]) / 2.5);
       const u = STAY.playing * start + STAY.winning * winTerm(i === 0 ? 70 : i === 1 ? 40 : 25, 0.5, i === 0, q) + Math.log(tiers[i].ratio + 0.05);
       if (u > best.u) best = { tier: i, u, start };
@@ -1720,13 +1740,13 @@ export class Season {
       ? homeTerm(miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }), p.home.state === t.venue.state) : homeTerm(250, false);
     const frozen = s.recruiting?.frozen?.year === s.year ? s.recruiting.frozen.schools[t.id] : undefined;
     return {
-      value, pay, ratio_away: away.ratio, demand: 1 + 0.3 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
+      value, pay, ratio_away: away.ratio, demand: 1 + 0.8 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
       start_here, start_away: best.start,
       dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
       fit: Math.max(-1.5, Math.min(1.5, hiddenPlayer(s.seed, s.year, p).fit)),
       win_here: winTerm(me.prestige, me.win, me.tier === 0, q), win_away: winTerm(best.tier === 0 ? 70 : best.tier === 1 ? 40 : 25, 0.55, best.tier === 0, q),
       home_here: home, home_away: homeTerm(250, false),
-      morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier,
+      morale: s.player_morale?.[p.id] ?? 0, years: p.years, tier: me.tier, tier_away: best.tier,
       contract: !!activeContract(s.contracts?.[p.id], s.year + 1),
       costs_season: !!s.settings.pcsa && (s.moves?.[p.id] ?? 0) >= 1,
       promise: s.promises?.[p.id]?.year === s.year + 1,
@@ -1809,16 +1829,20 @@ export class Season {
 
   /** Next season's roster budget for a school (revenue share, retention fund and boosters), and what's committed to it. */
   nextBudget(teamId: number): { total: number; committed: number; deals: number; contracts: number } {
-    const s = this.state, t = this.team(teamId), ny = s.year + 1;
-    const pool = footballPool(t, ny, this.seed.finances?.[t.id]?.roster_budget);
-    const boost = Math.round(this.boosters(t) * 1.04);
-    const ret = s.settings.pcsa ? Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * boost) : 0;
-    const total = Math.round((pool + Math.max(0, boost - ret) + ret) / 10_000) * 10_000;
+    const s = this.state, ny = s.year + 1;
+    const total = this.nextBudgetTotal(this.team(teamId));
     const leaving = this.leavingSet();
     const deals = Object.entries(s.next_deals ?? {}).reduce((a, [, d]) => a + d.amount, 0);
     let contracts = 0;
     for (const p of this.roster(teamId)) if (!leaving.has(p.id) && !s.next_deals?.[p.id]) contracts += activeContract(s.contracts?.[p.id], ny)?.amount ?? 0;
     return { total, committed: deals + contracts, deals, contracts };
+  }
+
+  private nextBudgetTotal(t: Team): number {
+    const s = this.state, pool = footballPool(t, s.year + 1, this.seed.finances?.[t.id]?.roster_budget);
+    const boost = Math.round(this.boosters(t) * 1.04);
+    const ret = s.settings.pcsa ? Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * boost) : 0;
+    return Math.round((pool + Math.max(0, boost - ret) + ret) / 10_000) * 10_000;
   }
 
   /** Renewal talks open (the day after the conference championships): every player posts a status and an ask, and your standing rule signs most. */
@@ -2043,19 +2067,29 @@ export class Season {
     }
   }
 
-  /** What a school still needs next season by position (open spots against a healthy room, and starting jobs without a returning starter). */
-  private needsOf(teamId: number): Partial<Record<Pos, { spots: number; starter: boolean }>> {
+  /**
+   * What a school still wants next season by position: open spots against a healthy room, starting jobs
+   * without a returning starter, and upgrades on its two-deep (a transfer who'd play over the backups it has).
+   * `floor` is the rating a newcomer has to beat to be worth a spot.
+   */
+  needsOf(teamId: number): Partial<Record<Pos, Need>> {
     const nx = this.portalBasis().next.get(teamId);
-    const out: Partial<Record<Pos, { spots: number; starter: boolean }>> = {};
+    const out: Partial<Record<Pos, Need>> = {};
     if (!nx) return out;
-    const signees = new Map<Pos, number>();
-    for (const p of this.state.recruiting?.prospects ?? []) if (p.cls === this.state.year + 1 && p.commit?.team === teamId) signees.set(p.pos, (signees.get(p.pos) ?? 0) + 1);
+    const tiers = this.portalBasis().tiers;
     for (const pos of POSITIONS) {
-      const have = (nx.count[pos] ?? 0) + 0.5 * (signees.get(pos) ?? 0);
-      const startersBack = [...nx.rank].filter(([id, r]) => r < STARTERS[pos] && this.playerById.get(id)?.pos === pos).length;
-      const spots = Math.max(0, Math.round(ROOM[pos] - have));
+      const os = nx.os[pos] ?? [], bar = nx.bar[pos] ?? tiers[nx.tier].bar[pos];
+      const have = os.length + (nx.signees[pos] ?? 0);
+      // Returning players good enough to start at this level.
+      const startersBack = os.filter((o) => o >= bar - 3).length;
+      // A full roster's share at the position (a healthy room scaled up to the roster limit, less a few spots for walk-ons).
+      const spots = Math.max(0, Math.round(ROOM[pos] * FULL_ROOM - have));
       const starter = startersBack < STARTERS[pos];
-      if (spots > 0 || starter) out[pos] = { spots: Math.max(spots, starter ? 1 : 0), starter };
+      // The two-deep's weakest returning player: anyone clearly better is an upgrade.
+      const depth = os[Math.min(os.length, 2 * STARTERS[pos]) - 1] ?? 0;
+      const upgrade = pos === "K" || pos === "P" || pos === "LS" ? 0 : Math.max(0, (nx.tier === 0 ? STARTERS[pos] : Math.ceil(STARTERS[pos] / 2)) - (nx.transfers_in[pos] ?? 0));
+      const floor = starter ? bar - 3 : spots > 0 ? Math.min(bar - 7, depth) : Math.max(bar - 8, depth);
+      if (spots > 0 || starter || upgrade > 0) out[pos] = { spots: Math.max(spots, starter ? 1 : 0, upgrade > 0 ? 1 : 0), starter, floor: Math.round(floor) };
     }
     return out;
   }
@@ -2069,24 +2103,33 @@ export class Season {
     const { tiers, next } = this.portalBasis();
     const byPos = new Map<Pos, PortalEntry[]>();
     for (const e of open) { const p = this.playerById.get(e.pid)!; const g = byPos.get(p.pos) ?? []; g.push(e); byPos.set(p.pos, g); }
+    // What each school has out in offers (by position) and has spent on commits.
+    const pending = new Map<number, Map<Pos, number>>(), spent = new Map<number, number>();
+    for (const e of pt.entries) for (const o of e.offers) {
+      if (e.status === "open") {
+        const m = pending.get(o.team_id) ?? new Map<Pos, number>(), pos = this.playerById.get(e.pid)!.pos;
+        m.set(pos, (m.get(pos) ?? 0) + 1); pending.set(o.team_id, m);
+      }
+      if (e.status === "open" || e.to === o.team_id) spent.set(o.team_id, (spent.get(o.team_id) ?? 0) + o.amount);
+    }
     // AI schools: offers to the best fits for what they still need, from what's left of next season's money for transfers.
     for (const t of this.teams) {
       if (t.id === s.user_team_id) continue;
       const nx = next.get(t.id);
       if (!nx) continue;
       const style = styleOf(this.seed.styles, t.id), mix = STYLE_MIX[style];
-      const b = this.transferBudget(t.id);
-      let left = b.total - b.spent;
-      for (const [pos, need] of Object.entries(this.needsOf(t.id)) as [Pos, { spots: number; starter: boolean }][]) {
-        const pending = pt.entries.filter((e) => e.status === "open" && e.offers.some((o) => o.team_id === t.id) && this.playerById.get(e.pid)!.pos === pos).length;
-        let want = Math.min(4, 2 * need.spots) - pending;
+      // (Out of money, a school can still offer a scholarship to players with no market value.)
+      let left = Math.max(0, this.transferShare(t) * nx.budget - (spent.get(t.id) ?? 0));
+      for (const [pos, need] of Object.entries(this.needsOf(t.id)) as [Pos, Need][]) {
+        let want = Math.min(4, 2 * need.spots) - (pending.get(t.id)?.get(pos) ?? 0);
         if (want <= 0) continue;
         const bar = nx.bar[pos] ?? 60;
-        const cands = (byPos.get(pos) ?? []).filter((e) => e.from !== t.id && !e.offers.some((o) => o.team_id === t.id))
+        // (A player with a crowd of offers is a long shot: schools look elsewhere.)
+        const cands = (byPos.get(pos) ?? []).filter((e) => e.from !== t.id && e.offers.length < CROWD && !e.offers.some((o) => o.team_id === t.id))
           .map((e) => ({ e, p: this.playerById.get(e.pid)! })).map((x) => ({ ...x, o: ovrNext(x.p) }))
           // Someone who'd start, or add real depth; not a player far above what the school can attract.
-          .filter((x) => x.o >= bar - (need.starter ? 3 : 7) && x.o <= bar + (nx.tier === 0 ? 30 : nx.tier === 1 ? 9 : 6))
-          .map((x) => ({ ...x, sv: schoolValue({ value: Math.max(10_000, playerValue({ pos, ovr: x.o, stars: x.p.stars, years: x.p.years + 1 })), need: need.starter ? 1.4 : 1, fit: 0, style, source: "transfer", years: x.p.years + 1 }) + 1000 * hashGauss(t.id, x.e.pid, s.year) }))
+          .filter((x) => x.o >= need.floor && x.o <= bar + (nx.prestige >= 70 ? 12 : nx.tier === 0 ? 6 : nx.tier === 1 ? 5 : 4))
+          .map((x) => ({ ...x, sv: schoolValue({ value: Math.max(10_000, playerValue({ pos, ovr: x.o, stars: x.p.stars, years: x.p.years + 1 })), need: need.starter ? 1.4 : 1, fit: 0, style, source: "transfer", years: x.p.years + 1 }) / (1 + 0.3 * x.e.offers.length) + 1000 * hashGauss(t.id, x.e.pid, s.year) }))
           .sort((a, b2) => b2.sv - a.sv || a.e.pid - b2.e.pid);
         for (const c of cands) {
           if (want <= 0) break;
@@ -2104,10 +2147,11 @@ export class Season {
     for (const e of open) {
       const u = rng.random(), v = rng.random();
       if (!e.offers.length) continue;
+      const days = daysBetween(e.entered, date);
+      if (u >= transferHazard(days, 0)) continue;
       const p = this.playerById.get(e.pid)!;
       const scored = this.scoreOffers(e, p);
       const best = Math.max(...scored.map((x) => x.score));
-      const days = daysBetween(e.entered, date);
       if (u >= transferHazard(days, best < -1.5 ? 2 : 0)) continue;
       const pick = scored[chooseIdx(scored.map((x) => x.score), v)];
       this.commitTransfer(e, pick.team_id, date, rep);
@@ -2121,7 +2165,7 @@ export class Season {
     const q = Math.max(-2, Math.min(3, (o - 72) / 5));
     return e.offers.map((off) => {
       const t = this.team(off.team_id), nx = next.get(t.id)!;
-      const ahead = [...nx.rank].filter(([id]) => this.playerById.get(id)?.pos === p.pos && ovrNext(this.playerById.get(id)!) > o).length;
+      const ahead = (nx.os[p.pos] ?? []).filter((x) => x > o).length;
       const start = ahead < STARTERS[p.pos] ? 0.9 : ahead === STARTERS[p.pos] ? 0.4 : 0.1;
       const home = p.home.lat != null && p.home.lon != null && t.venue?.lat != null && t.venue?.lon != null ? miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }) : 400;
       const offer: SchoolOffer = {
@@ -2136,8 +2180,13 @@ export class Season {
 
   private commitTransfer(e: PortalEntry, to: number, date: ISODate, rep: DayReport): void {
     const s = this.state, p = this.playerById.get(e.pid)!, me = s.user_team_id;
+    // Most FBS players whose best road leads down to FCS stop playing instead.
+    if (to !== me && this.team(e.from).level === "fbs" && this.team(to).level !== "fbs" && new Rng(mixSeed(s.seed, s.year, e.pid, "quit")).random() < QUIT_FCS) {
+      e.status = "none";
+      return;
+    }
+    // (Rosters for the bids are recounted tomorrow: the day's basis is kept.)
     e.status = "committed"; e.to = to; e.committed = date;
-    this.portalCache = null;
     const off = e.offers.find((o) => o.team_id === to)!;
     if (to === me) s.next_deals = { ...s.next_deals, [p.id]: { amount: off.amount, years: off.years } };
     const big = p.ovr >= 82 || to === me || e.from === me;
@@ -2161,15 +2210,11 @@ export class Season {
     rep.news.push(this.news(date, "portal", `The portal closes: ${pt.entries.length - none} players found new schools`, `${none} found none and leave college football.`, []));
   }
 
-  /** What a school has for transfers next season (its style's share of the budget) and what it has committed. */
-  private transferBudget(teamId: number): { total: number; spent: number } {
-    const s = this.state, t = this.team(teamId);
-    const style = styleOf(this.seed.styles, teamId);
-    const share = style === "portal" || style === "win_now" ? 0.3 : style === "balanced" ? 0.2 : 0.12;
-    const total = t.level === "fbs" ? Math.round(this.nextBudget(teamId).total * share) : 0;
-    let spent = 0;
-    for (const e of s.portal?.entries ?? []) for (const o of e.offers) if (o.team_id === teamId && (e.status === "open" || e.to === teamId)) spent += o.amount;
-    return { total, spent };
+  /** The share of next season's budget a school's style puts into transfers (FCS schools don't bid). */
+  private transferShare(t: Team): number {
+    if (t.level !== "fbs") return 0;
+    const style = styleOf(this.seed.styles, t.id);
+    return style === "portal" || style === "win_now" ? 0.4 : style === "balanced" ? 0.3 : 0.2;
   }
 
   /** Bid for a player in the portal (0 withdraws your offer). The money comes from next season's budget. */
