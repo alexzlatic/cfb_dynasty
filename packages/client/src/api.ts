@@ -1,6 +1,9 @@
-import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury } from "@cfb/core";
+import type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
-export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan };
+export type { LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart };
+export type CareerView = Career & { security: number; label: string };
+/** A player's season stats with who he is. */
+export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
 export type LiveResult = LiveView & { since: number; result?: Game };
 
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
@@ -10,7 +13,7 @@ export type GameRow = Game & { home_rank: number | null; away_rank: number | nul
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
-  playoff: PlayoffState | null; news: NewsItem[];
+  playoff: PlayoffState | null; news: NewsItem[]; career: CareerView | null;
 }
 
 export type { RatedPlayer } from "@cfb/core";
@@ -42,15 +45,21 @@ export const api = {
   health: () => req<{ ok: boolean; commit: string; saves: string; can_quit: boolean }>("/api/health"),
   quit: () => req<{ ok: boolean }>("/api/quit", { method: "POST" }),
   seedTeams: () => req<Team[]>("/api/seed/teams"),
-  createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings }) }),
+  createLeague: (name: string, team_id: number | null, settings?: Partial<Settings>, career?: CareerStart) => req<{ id: string }>("/api/leagues", { method: "POST", body: JSON.stringify({ name, team_id, settings, career }) }),
+  seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
+  career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
+  awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
+  leaders: (id: string) => req<Record<string, StatRow[]>>(`/api/leagues/${id}/leaders`),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
   team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
-    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[] }>(`/api/leagues/${id}/teams/${tid}`),
-  depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[] }>(`/api/leagues/${id}/teams/${tid}/depth`),
-  player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[] }>(`/api/leagues/${id}/players/${pid}`),
+    players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[] }>(`/api/leagues/${id}/teams/${tid}`),
+  depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
+    gp: Record<number, number>; redshirts: number[]; redshirt_games: number }>(`/api/leagues/${id}/teams/${tid}/depth`),
+  player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
+    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number }>(`/api/leagues/${id}/players/${pid}`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
-  game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null }>(`/api/leagues/${id}/games/${gid}`),
+  game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; defenders: Record<string, { name: string; pos: string; team_id: number } | null> }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
   polls: (id: string) => req<Poll[]>(`/api/leagues/${id}/polls`),
   news: (id: string, q: Record<string, string> = {}) => req<NewsItem[]>(`/api/leagues/${id}/news?` + new URLSearchParams({ limit: "300", ...q })),

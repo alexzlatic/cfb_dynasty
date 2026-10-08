@@ -1,6 +1,6 @@
 import type { DepthChart, SchemeOffsets } from "./compiler.ts";
 import type { Pos, RatedPlayer } from "./players.ts";
-import type { InGameInjury } from "./gameday.ts";
+import type { DefLine, InGameInjury } from "./gameday.ts";
 import type { DriveRecord, PlayRecord, TeamBox, TeamRatings } from "@cfb/engine";
 import type { ISODate } from "./dates.ts";
 
@@ -60,6 +60,8 @@ export interface GameDetail {
   /** Everyone hurt in the game, including players who came back; snaps played by player id. */
   injuries?: InGameInjury[];
   snaps?: Record<number, number>;
+  /** Tackles, sacks, picks and the rest, credited to defenders by player id. */
+  defense?: Record<number, DefLine>;
 }
 
 /** A player who misses time. He is back for games on or after `back`. */

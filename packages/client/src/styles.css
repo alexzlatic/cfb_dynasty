@@ -209,3 +209,27 @@ button.link { border: none; background: none; color: var(--accent); padding: 0; 
 .planpage h4 { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, #6b7785); }
 .plan td:first-child { white-space: nowrap; }
 .plan select { max-width: 140px; }
+
+/* Career and awards */
+td.win { color: var(--up); }
+td.loss { color: var(--down); }
+.secmeter { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.secmeter .track { flex: 1; height: 10px; border-radius: 5px; background: var(--head); border: 1px solid var(--line); overflow: hidden; }
+.secmeter .fill { height: 100%; }
+.secmeter .fill.good { background: var(--up); }
+.secmeter .fill.warm { background: #d39b1c; }
+.secmeter .fill.hot { background: var(--down); }
+.seclabel { font-weight: 700; font-size: 12px; white-space: nowrap; }
+.seclabel.good { color: var(--up); } .seclabel.warm { color: #b07d0a; } .seclabel.hot { color: var(--down); }
+.meeting { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.meeting p { margin: 4px 0; }
+.leaders { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0 14px; }
+div.mine, span.mine { background: var(--mine); }
+.careerpick { display: flex; flex-direction: column; gap: 6px; }
+.newleague .careerpick label { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); font-size: 13px; margin-bottom: 0; }
+.careerpick > span { font-size: 12px; color: var(--muted); }
+.careerpick .names { display: flex; gap: 6px; margin-left: 22px; }
+.careerpick .names input { width: 130px; }
+.rs { font-size: 10px; font-weight: 700; border: 1px solid var(--muted); color: var(--muted); border-radius: 3px; padding: 0 3px; margin-left: 4px; }
+.rs.done { border-color: #b07d0a; color: #b07d0a; }
+span.win { color: var(--up); font-weight: 700; } span.loss { color: var(--down); font-weight: 700; }

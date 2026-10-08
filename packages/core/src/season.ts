@@ -3,7 +3,9 @@ import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { GameDay, type SideSetup } from "./gameday.ts";
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
-import { POSITIONS, type RatedPlayer } from "./players.ts";
+import { POSITIONS, playerName, type RatedPlayer } from "./players.ts";
+import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
+import { expectations, meetingText, newCareer, securityTrail, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
@@ -13,7 +15,7 @@ import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "
 import { records, updatePower } from "./ranking.ts";
 import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
-  DEFAULT_SETTINGS, type Ballot, type CalEvent, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
+  DEFAULT_SETTINGS, type Ballot, type CalEvent, type Coach, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team,
 } from "./types.ts";
 
@@ -62,7 +64,18 @@ export interface SeasonState {
   practice?: PracticePlan;
   /** Practice banked toward the user's next game. */
   prep?: Prep | null;
+  /** Season stats by player id, the best game each player has had since the last players of the week, and every award given. */
+  player_stats?: Record<number, PlayerSeason>;
+  award_week?: Record<number, WeekLine>;
+  awards?: Award[];
+  /** Your players being redshirted: each can play in up to four games and then sits. */
+  redshirts?: number[];
+  /** Your career: who you are, your athletic director, expectations and meetings (null without a team). */
+  career?: Career | null;
 }
+
+/** Games a redshirted player may play in and keep his redshirt. */
+export const REDSHIRT_GAMES = 4;
 
 /** A depth-chart change during a live game, made before the user's `at`-th decision. */
 export interface GameSub { at: number; depth: DepthChart }
@@ -111,6 +124,10 @@ export class Season {
     for (const t of Object.values(seed.players ?? {})) for (const p of t.players) this.playerById.set(p.id, p);
     state.depth ??= {};
     state.injuries ??= [];
+    state.player_stats ??= {};
+    state.award_week ??= {};
+    state.awards ??= [];
+    state.redshirts ??= [];
     // One canonical game order (date, then id), so a league reopened from its file plays a day's games in the same order.
     state.games.sort(gameOrder);
   }
@@ -176,11 +193,13 @@ export class Season {
     const mine = teamId === this.state.user_team_id;
     if (mine) base = planRatings(base, this.gamePlan);
     const fresh = mine && gameId != null ? freshness(this.prepFor(gameId)) : 1;
-    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out: new Set(this.injured(teamId).map((i) => i.pid)), fresh };
+    const out = new Set(this.injured(teamId).map((i) => i.pid));
+    if (mine) for (const pid of this.redshirtsSitting()) out.add(pid);
+    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out, fresh };
   }
 
   /** A new league on the seed's start date. */
-  static create(seed: SeedBundle, opts: { seed: number; user_team_id?: number | null; settings?: Partial<Settings> }): Season {
+  static create(seed: SeedBundle, opts: { seed: number; user_team_id?: number | null; settings?: Partial<Settings>; career?: CareerStart }): Season {
     const games: Game[] = seed.schedule.map((g) => ({
       id: g.id, kind: "regular", week: g.week, date: g.date, kickoff_et: g.kickoff_et, home_id: g.home_id, away_id: g.away_id,
       neutral: g.neutral, conference_game: g.conference_game, venue: g.venue, label: g.notes, status: "scheduled",
@@ -197,7 +216,9 @@ export class Season {
       polls: [], news: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: 9_000_001, writers: generateWriters(seed.teams, seed.rosters, opts.seed >>> 0), stars: {},
     };
-    return new Season(state, seed);
+    const season = new Season(state, seed);
+    season.startCareer(opts.career ?? { mode: "real" }, seed.coaches ?? []);
+    return season;
   }
 
   get done(): boolean { return this.state.events.some((e) => e.type === "season_end" && e.status === "done"); }
@@ -249,6 +270,7 @@ export class Season {
     // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
     this.practiceDay(today, rep);
+    this.adMeetings(today, rep);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
       if (g.date !== today || g.status === "final") continue;
@@ -257,6 +279,242 @@ export class Season {
     if (rep.fired.some((e) => e.type === "season_end")) rep.stop = "season_end";
     s.date = addDays(today, 1);
     return rep;
+  }
+
+  // ---- career --------------------------------------------------------------------------------
+  /** Start (or restart, after changing teams) your career at your team. */
+  startCareer(start: CareerStart, coaches: Coach[]): void {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) { s.career = null; return; }
+    const coach = coaches.find((c) => c.team_id === me && c.role === "HC");
+    s.career = newCareer(start, me, coach, expectations(me, this.teams, s.games, s.preseason_power, s.settings.home_field_points), s.seed);
+  }
+
+  /** Job security after each of your games so far. */
+  securityTrail() {
+    const s = this.state;
+    return s.career ? securityTrail(s.career, s.games, s.preseason_power, s.settings.home_field_points) : [];
+  }
+  security(): number | null {
+    const c = this.state.career;
+    if (!c) return null;
+    const t = this.securityTrail();
+    return t.length ? t[t.length - 1].security : c.start;
+  }
+
+  private adMeetings(today: ISODate, rep: DayReport): void {
+    const c = this.state.career;
+    if (!c) return;
+    const has = (k: Meeting["kind"]) => c.meetings.some((m) => m.kind === k);
+    const reg = this.state.games.filter((g) => g.kind === "regular" && (g.home_id === c.team_id || g.away_id === c.team_id));
+    const played = reg.filter((g) => g.status === "final").length;
+    if (!has("preseason") && !has("midseason") && played === 0) this.meet("preseason", today, rep);
+    else if (!has("midseason") && !has("end") && played >= Math.ceil(reg.length / 2)) this.meet("midseason", today, rep);
+  }
+
+  private meet(kind: Meeting["kind"], date: ISODate, rep: DayReport): void {
+    const s = this.state, c = s.career;
+    if (!c || c.meetings.some((m) => m.kind === kind)) return;
+    const sec = this.security()!;
+    const r = records(s.games, this.teams).get(c.team_id) ?? { w: 0, l: 0 };
+    const text = meetingText(c, kind, sec, r, this.team(c.team_id).school);
+    c.meetings.push({ kind, date, security: sec, text });
+    const ad = `${c.ad.first} ${c.ad.last}`;
+    const head = kind === "preseason" ? `Athletic director ${ad} sets the bar for ${s.year}` : kind === "midseason" ? `Midseason meeting with athletic director ${ad}` : `End-of-season meeting with athletic director ${ad}`;
+    rep.news.push(this.news(date, "ad", head, text, [c.team_id]));
+  }
+
+  // ---- stats, awards and redshirts -------------------------------------------------------------
+  private names = new Map<number, Map<string, number>>();
+  private pidByName(teamId: number, name: string): number | undefined {
+    let m = this.names.get(teamId);
+    if (!m) {
+      m = new Map();
+      for (const p of this.roster(teamId)) if (!m.has(playerName(p))) m.set(playerName(p), p.id);
+      this.names.set(teamId, m);
+    }
+    return m.get(name);
+  }
+
+  /** Add a game to season stats and to each player's best game of the week. */
+  recordStats(g: Game, d: GameDetail, week = true): void {
+    const s = this.state;
+    const homeWon = g.home_score! > g.away_score!;
+    const lines = new Map<number, { team_id: number; line: StatLine }>();
+    const get = (pid: number, team: number) => {
+      let x = lines.get(pid);
+      if (!x) lines.set(pid, (x = { team_id: team, line: {} }));
+      return x;
+    };
+    for (const [team, players] of [[g.home_id, d.home_players], [g.away_id, d.away_players]] as const) {
+      for (const [name, l] of Object.entries(players)) {
+        const pid = this.pidByName(team, name);
+        if (pid != null) addLine(get(pid, team).line, l as StatLine);
+      }
+    }
+    for (const [pid, l] of Object.entries(d.defense ?? {})) {
+      const p = this.playerById.get(Number(pid));
+      if (p) addLine(get(p.id, p.team_id).line, l);
+    }
+    const snapped = new Set(Object.keys(d.snaps ?? {}).map(Number));
+    for (const pid of snapped) { const p = this.playerById.get(pid); if (p) get(pid, p.team_id); }
+    for (const [pid, x] of lines) {
+      const ps = (s.player_stats![pid] ??= { team_id: x.team_id, gp: 0 });
+      // Kickers and punters are not on the field for scrimmage snaps; a kick counts as a game played.
+      if (snapped.has(pid) || !d.snaps || Object.keys(x.line).length) ps.gp++;
+      addLine(ps, x.line);
+      const v = offScore(x.line) + defScore(x.line);
+      if (!week || v <= 0) continue;
+      const prev = s.award_week![pid];
+      if (!prev || v > offScore(prev.line) + defScore(prev.line)) {
+        s.award_week![pid] = { pid, team_id: x.team_id, game_id: g.id, won: x.team_id === g.home_id ? homeWon : !homeWon, line: x.line };
+      }
+    }
+  }
+
+  /** Rebuild season stats from stored box scores (a league saved before stats were kept). */
+  rebuildStats(details: GameDetail[]): void {
+    const s = this.state;
+    s.player_stats = {};
+    s.award_week = {};
+    const lastPoll = s.events.filter((e) => e.type === "ap_poll" && e.status === "done").map((e) => e.date).sort().pop() ?? "";
+    const byId = new Map(s.games.map((g) => [g.id, g]));
+    for (const d of [...details].sort((a, b) => a.game_id - b.game_id)) {
+      const g = byId.get(d.game_id);
+      if (g && g.status === "final") this.recordStats(g, d, g.date >= lastPoll);
+    }
+  }
+
+  setRedshirt(pid: number, on: boolean): void {
+    const s = this.state, me = s.user_team_id;
+    const p = this.playerById.get(pid);
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only redshirt your own players");
+    const list = s.redshirts!.filter((x) => x !== pid);
+    if (on) list.push(pid);
+    s.redshirts = list;
+    this.compiled.delete(me);
+  }
+
+  /** Redshirted players who have used their four games and now sit. */
+  redshirtsSitting(): number[] {
+    const st = this.state.player_stats!;
+    return this.state.redshirts!.filter((pid) => (st[pid]?.gp ?? 0) >= REDSHIRT_GAMES);
+  }
+
+  private redshirtWarnings(g: Game, snaps: Record<number, number>, rep: DayReport): void {
+    const s = this.state;
+    for (const pid of s.redshirts!) {
+      const gp = s.player_stats![pid]?.gp ?? 0;
+      if (!snaps[pid] || gp !== REDSHIRT_GAMES) continue;
+      const p = this.playerById.get(pid)!;
+      rep.news.push(this.news(g.date, "redshirt", `${playerName(p)} has played in ${REDSHIRT_GAMES} games`,
+        `${p.pos} ${playerName(p)} sits from now on to keep his redshirt. A fifth game would use it up: take him off the redshirt list on the depth chart if you want him to play.`, [p.team_id]));
+    }
+  }
+
+  private fbsPlayer(pid: number, teamId: number): RatedPlayer | null {
+    const p = this.playerById.get(pid);
+    const t = this.teamById.get(teamId);
+    return p && t?.level === "fbs" ? p : null;
+  }
+
+  private award(a: Omit<Award, "year" | "name" | "pos">): Award {
+    const p = this.playerById.get(a.pid)!;
+    const x: Award = { ...a, year: this.state.year, name: playerName(p), pos: p.pos };
+    this.state.awards!.push(x);
+    return x;
+  }
+
+  /** National and conference players of the week, from each player's best game since the last poll. */
+  private weeklyAwards(date: ISODate, rep: DayReport): void {
+    const s = this.state;
+    const week = Object.values(s.award_week!).filter((w) => this.fbsPlayer(w.pid, w.team_id));
+    s.award_week = {};
+    if (!week.length) return;
+    const off = (w: WeekLine) => offScore(w.line) + (w.won ? 3 : 0);
+    const def = (w: WeekLine) => defScore(w.line) + (w.won ? 2 : 0);
+    const best = (ws: WeekLine[], f: (w: WeekLine) => number, pos: Set<string>) =>
+      ws.filter((w) => pos.has(this.playerById.get(w.pid)!.pos)).sort((a, b) => f(b) - f(a) || a.pid - b.pid)[0];
+    const o = best(week, off, OFF_POS), d = best(week, def, DEF_POS);
+    if (!o || !d) return;
+    const ao = this.award({ type: "potw_off", date, pid: o.pid, team_id: o.team_id, line: lineText(o.line) });
+    const ad = this.award({ type: "potw_def", date, pid: d.pid, team_id: d.team_id, line: lineText(d.line) });
+    const confs = new Map<string, WeekLine[]>();
+    for (const w of week) { const c = this.team(w.team_id).conference; if (c !== INDEPENDENT) confs.set(c, [...(confs.get(c) ?? []), w]); }
+    const lines: string[] = [];
+    for (const [conf, ws] of [...confs].sort()) {
+      const co = best(ws, off, OFF_POS), cd = best(ws, def, DEF_POS);
+      const parts: string[] = [];
+      if (co) { const a = this.award({ type: "conf_potw_off", date, conference: conf, pid: co.pid, team_id: co.team_id, line: lineText(co.line) }); parts.push(`${a.name} (${this.team(a.team_id).abbr ?? this.team(a.team_id).school})`); }
+      if (cd) { const a = this.award({ type: "conf_potw_def", date, conference: conf, pid: cd.pid, team_id: cd.team_id, line: lineText(cd.line) }); parts.push(`${a.name} (${this.team(a.team_id).abbr ?? this.team(a.team_id).school})`); }
+      if (parts.length) lines.push(`${conf}: ${parts.join(" and ")}`);
+    }
+    const tag = (a: Award) => `${a.pos} ${a.name}, ${this.team(a.team_id).school}`;
+    rep.news.push(this.news(date, "award", `Players of the week: ${ao.name} and ${ad.name}`,
+      `Offense: ${tag(ao)} (${ao.line}). Defense: ${tag(ad)} (${ad.line}). ${lines.join(". ")}.`, [ao.team_id, ad.team_id]));
+  }
+
+  /** Conference players of the year, All-Americans and the Heisman, after championship weekend. */
+  private seasonAwards(date: ISODate, rep: DayReport): void {
+    const s = this.state;
+    if (s.awards!.some((a) => a.type === "heisman" && a.year === s.year)) return;
+    const recs = records(s.games, this.teams);
+    const champs = new Set(Object.values(s.conf_champs));
+    const rows = Object.entries(s.player_stats!).map(([pid, st]) => ({ pid: Number(pid), st, p: this.fbsPlayer(Number(pid), st.team_id) }))
+      .filter((r): r is { pid: number; st: PlayerSeason; p: RatedPlayer } => !!r.p && r.st.gp > 0);
+    if (!rows.length) return;
+    const wins = (t: number) => recs.get(t)?.w ?? 0;
+    const tag = (a: Award) => `${a.pos} ${a.name}, ${this.team(a.team_id).school}`;
+
+    // Heisman: the best offensive season, with a push for winning (and a little for quarterbacks).
+    const heis = (r: (typeof rows)[number]) => (OFF_POS.has(r.p.pos) ? offScore(r.st) * (r.p.pos === "QB" ? 1.1 : 1) : DEF_POS.has(r.p.pos) ? 1.4 * defScore(r.st) : 0)
+      + 5 * wins(r.st.team_id) + (champs.has(r.st.team_id) ? 8 : 0);
+    const fin = [...rows].sort((a, b) => heis(b) - heis(a) || a.pid - b.pid).slice(0, 4);
+    const top = heis(fin[0]);
+    const finalists = fin.map((r, i) => this.award({ type: i === 0 ? "heisman" : "heisman_finalist", date, pid: r.pid, team_id: r.st.team_id,
+      points: Math.round(2500 * Math.pow(heis(r) / top, 4)), line: lineText(r.st) }));
+    rep.news.push(this.news(date, "award", `${finalists[0].name} wins the Heisman Trophy`,
+      `${tag(finalists[0])}: ${finalists[0].line}. Finalists: ${finalists.slice(1).map((a) => `${a.name} (${this.team(a.team_id).school}, ${a.points} pts)`).join(", ")}.`,
+      finalists.map((a) => a.team_id)));
+
+    // Conference players of the year.
+    const confs = new Map<string, typeof rows>();
+    for (const r of rows) { const c = this.team(r.st.team_id).conference; if (c !== INDEPENDENT) confs.set(c, [...(confs.get(c) ?? []), r]); }
+    const conf: string[] = [];
+    for (const [c, rs] of [...confs].sort()) {
+      const o = rs.filter((r) => OFF_POS.has(r.p.pos)).sort((a, b) => offScore(b.st) + 2 * wins(b.st.team_id) - offScore(a.st) - 2 * wins(a.st.team_id) || a.pid - b.pid)[0];
+      const d = rs.filter((r) => DEF_POS.has(r.p.pos)).sort((a, b) => defScore(b.st) + wins(b.st.team_id) - defScore(a.st) - wins(a.st.team_id) || a.pid - b.pid)[0];
+      const got: string[] = [];
+      if (o) got.push(`${this.award({ type: "conf_poy_off", date, conference: c, pid: o.pid, team_id: o.st.team_id, line: lineText(o.st) }).name} (offense)`);
+      if (d) got.push(`${this.award({ type: "conf_poy_def", date, conference: c, pid: d.pid, team_id: d.st.team_id, line: lineText(d.st) }).name} (defense)`);
+      if (got.length) conf.push(`${c}: ${got.join(", ")}`);
+    }
+    rep.news.push(this.news(date, "award", "Conference players of the year", conf.join(". ") + ".", []));
+
+    // All-Americans: stats at the skill positions and on defense, ratings and team success up front, kicks for kickers.
+    const aa = (r: (typeof rows)[number]) => {
+      const w = wins(r.st.team_id);
+      if (OFF_POS.has(r.p.pos)) return offScore(r.st) + w;
+      if (DEF_POS.has(r.p.pos)) return defScore(r.st) + 0.3 * r.p.ovr + w;
+      if (r.p.pos === "K") return kickScore(r.st) + 0.2 * r.p.ovr;
+      return r.p.ovr + 0.8 * w + (r.p.pos === "P" || r.st.gp >= 8 ? 5 : 0);
+    };
+    const first: string[] = [];
+    for (const [pos, k] of AA_SLOTS) {
+      // Punts are not credited to players, so punters are picked from each team's starter.
+      const cands = pos !== "P" ? rows.filter((r) => r.p.pos === pos) : this.teams.filter((t) => t.level === "fbs").flatMap((t) => {
+        const p = this.playerById.get(this.depthChart(t.id).P?.[0] ?? -1);
+        return p ? [{ pid: p.id, st: s.player_stats![p.id] ?? { team_id: t.id, gp: 0 }, p }] : [];
+      });
+      const pool = cands.sort((a, b) => aa(b) - aa(a) || a.pid - b.pid).slice(0, 2 * k);
+      pool.forEach((r, i) => {
+        const a = this.award({ type: "all_american", date, team: i < k ? 1 : 2, pid: r.pid, team_id: r.st.team_id, line: lineText(r.st) });
+        if (i < k) first.push(`${pos} ${a.name} (${this.team(a.team_id).school})`);
+      });
+    }
+    const mine = s.user_team_id != null ? s.awards!.filter((a) => a.year === s.year && a.date === date && a.type === "all_american" && a.team_id === s.user_team_id) : [];
+    rep.news.push(this.news(date, "award", "The All-America team", `First team: ${first.join(", ")}.` +
+      (mine.length ? ` ${this.team(s.user_team_id!).school}: ${mine.map((a) => `${a.name} (${a.team === 1 ? "first" : "second"} team)`).join(", ")}.` : ""), []));
   }
 
   // ---- events --------------------------------------------------------------------------------
@@ -302,6 +560,7 @@ export class Season {
         rep.news.push(this.news(e.date, "poll", prev ? (prev.ranks[0].team_id === top.id ? `${top.school} stays No. 1 in the AP poll` : `${top.school} takes over No. 1 in the AP poll`)
           : `${top.school} opens the season No. 1 in the AP poll`, `${firsts} of ${poll.voters} first-place votes. ${this.top(poll, 5)}`, [top.id]));
         this.stories(poll, prev, rep);
+        this.weeklyAwards(e.date, rep);
         break;
       }
       case "cfp_rankings": {
@@ -316,7 +575,7 @@ export class Season {
         rep.news.push(this.news(e.date, "bcs", `BCS standings: ${this.team(poll.ranks[0].team_id).school} is No. 1`, this.top(poll, 10), [poll.ranks[0].team_id]));
         break;
       }
-      case "selection": this.select(e.date, rep); break;
+      case "selection": this.seasonAwards(e.date, rep); this.select(e.date, rep); break;
       case "season_end": {
         const poll = this.poll("ap", e.date, AP_PANEL, s.champion, rep);
         if (s.champion == null) {
@@ -324,6 +583,7 @@ export class Season {
           rep.news.push(this.news(e.date, "champion", `${this.team(s.champion).school} is the AP national champion`, this.top(poll, 5), [s.champion]));
         }
         rep.polls.push(poll);
+        this.meet("end", e.date, rep);
         break;
       }
       default: break;
@@ -364,7 +624,8 @@ export class Season {
       plans: { [userSide]: this.gamePlan }, prep: { [userSide]: prepEdge(this.prepFor(g.id)) },
     }) : null;
     if (hs && as) {
-      const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")), { injuries: s.settings.injuries ?? 1 });
+      const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")),
+        { injuries: s.settings.injuries ?? 1, credit: new Rng(mixSeed(s.seed, s.year, g.id, "credit")) });
       const k = gd.kickoff();
       return { sim: new GameSim(k.home, k.away, opts), gd, sides: [hs, as], caller };
     }
@@ -441,9 +702,11 @@ export class Season {
     rep.details.push({
       game_id: g.id, home_box: r.home.box, away_box: r.away.box, home_players: r.home.players, away_players: r.away.players,
       home_q: r.home.qscores, away_q: r.away.qscores, drives: r.drives ?? [], plays: this.keepPlays(g) ? r.plays ?? null : null,
-      injuries: day?.injuries ?? [], snaps: day?.snaps ?? {},
+      injuries: day?.injuries ?? [], snaps: day?.snaps ?? {}, defense: day?.defense ?? {},
     });
+    this.recordStats(g, rep.details[rep.details.length - 1]);
     if (day) this.recordInjuries(g, day.injuries, [hs!, as!], rep);
+    if (userSide && day) this.redshirtWarnings(g, day.snaps, rep);
     updatePower(s.power, g, s.settings.home_field_points);
     for (const [id, side] of [[g.home_id, r.home], [g.away_id, r.away]] as const) {
       const line = starLine(side.players as Record<string, Record<string, number>>, this.team(id).school);

@@ -24,6 +24,11 @@ export function DepthScreen({ tid }: { tid: number }) {
   const starterCount = new Map<number, number>();
   for (const s of [...OFFENSE_SLOTS, ...DEFENSE_SLOTS]) { const x = depth[s]?.[0]; if (x != null) starterCount.set(x, (starterCount.get(x) ?? 0) + 1); }
 
+  const redshirt = async (pid: number, on: boolean) => {
+    setBusy(true); setErr(null);
+    try { await api.act(id, "set_redshirt", { pid, on }); } catch (e) { setErr((e as Error).message); }
+    setBusy(false);
+  };
   const save = async (d: DepthChart | null) => {
     setBusy(true); setErr(null);
     try { await api.act(id, "set_depth", { team_id: tid, depth: d }); } catch (e) { setErr((e as Error).message); }
@@ -74,10 +79,37 @@ export function DepthScreen({ tid }: { tid: number }) {
       {!mine && <p className="muted small">You can edit only your own team's depth chart.</p>}
       <div className="cols even">
         <div>{group("Offense", OFFENSE_SLOTS)}</div>
-        <div>{group("Defense", DEFENSE_SLOTS)}{group("Special teams", SPECIAL_SLOTS)}</div>
+        <div>{group("Defense", DEFENSE_SLOTS)}{group("Special teams", SPECIAL_SLOTS)}
+          {mine && <Redshirts players={data.players} gp={data.gp} list={data.redshirts} max={data.redshirt_games} busy={busy} onToggle={redshirt} />}</div>
       </div>
       <p className="muted small">Each game starts the first healthy player listed at each slot; tired players rotate out to the next one, and injured players are skipped until they are back. A player out of position plays well below a starter.</p>
     </div>
+  );
+}
+
+/** Your redshirt list: each player on it plays in up to four games, then sits so he keeps the year. */
+function Redshirts({ players, gp, list, max, busy, onToggle }: { players: RatedPlayer[]; gp: Record<number, number>; list: number[]; max: number; busy: boolean; onToggle: (pid: number, on: boolean) => void }) {
+  const { id } = useLeague();
+  const [all, setAll] = useState(false);
+  const on = new Set(list);
+  const rows = players.filter((p) => on.has(p.id) || all || (p.years === 0 && (gp[p.id] ?? 0) <= max))
+    .sort((a, b) => +on.has(b.id) - +on.has(a.id) || b.ovr - a.ovr);
+  return (
+    <Panel title={`Redshirts (${list.length})`} right={<label className="small"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Everyone</label>}>
+      <p className="small muted">A redshirted player can play in up to {max} games and keep the year of eligibility. After {max} he sits; take him off the list to play him and use it up.</p>
+      <table className="grid tight"><thead><tr><th>Player</th><th className="num">Games</th><th></th></tr></thead><tbody>{rows.slice(0, all ? 200 : 12).map((p) => {
+        const g = gp[p.id] ?? 0;
+        return (
+          <tr key={p.id} className={on.has(p.id) ? "mine" : ""}>
+            <td><Rating v={p.ovr} /> {playerLink(id, p)} <span className="muted small">{p.pos} {p.class}</span></td>
+            <td className={"num" + (on.has(p.id) && g >= max ? " loss" : "")}>{g}{on.has(p.id) ? ` of ${max}` : ""}</td>
+            <td>{on.has(p.id)
+              ? <button disabled={busy} onClick={() => onToggle(p.id, false)}>{g >= max ? "Play him (uses it up)" : "Remove"}</button>
+              : <button disabled={busy || g > max} onClick={() => onToggle(p.id, true)} title={g > max ? "Played too many games to redshirt" : ""}>Redshirt</button>}</td>
+          </tr>
+        );
+      })}</tbody></table>
+    </Panel>
   );
 }
 
