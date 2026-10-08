@@ -8,6 +8,7 @@ import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { mixSeed } from "./hash.ts";
 import { AP_PANEL, COMMITTEE_PANEL, bcsStandings, runPoll, type PanelMemory, type PanelSpec } from "./polls.ts";
 import { bracketOrder, mainRounds, openingPairs, slotCount, validatePlayoff } from "./playoff.ts";
+import { BOWLS, NY6, bowlDate, playoffBowls, selectBowls, type BowlTeam } from "./bowls.ts";
 import { records, updatePower } from "./ranking.ts";
 import { generateWriters, starLine, writeStory, type Writer } from "./writers.ts";
 import {
@@ -535,7 +536,8 @@ export class Season {
     const p = s.settings.playoff;
     if (Object.keys(s.conf_champs).length === 0) this.crownChampions(this.has("conf_champ").filter((g) => g.status === "final"), rep);
     if (p.format === "bowls") {
-      rep.news.push(this.news(date, "selection", "Bowl pairings are announced", "Bowl games are simulated from M1; the final AP poll crowns the champion.", []));
+      const ap = this.latestPoll("ap") ?? this.poll("ap", date, AP_PANEL);
+      this.buildBowls(date, ap, new Set(), rep);
       return;
     }
     if (p.format === "bcs") {
@@ -546,6 +548,7 @@ export class Season {
       s.playoff.alive = s.playoff.field;
       rep.news.push(this.news(date, "selection", `${this.team(a.team_id).school} and ${this.team(b.team_id).school} will play for the BCS title`, this.top(st, 10), [a.team_id, b.team_id]));
       this.buildRound(rep);
+      this.buildBowls(date, st, new Set(), rep);
       return;
     }
     const ranking = this.poll("cfp", date, COMMITTEE_PANEL);
@@ -563,6 +566,54 @@ export class Season {
     rep.news.push(this.news(date, "selection", `The ${p.teams}-team playoff field is set; ${this.team(field[0]).school} is the No. 1 seed`,
       seeded.map((f) => `${f.seed}. ${this.team(f.team_id).school}`).join(", "), field));
     this.buildRound(rep);
+    this.buildBowls(date, ranking, playoffBowls(mainRounds(p.teams, p.byes)), rep);
+  }
+
+  /**
+   * Bowl pairings on selection day: every FBS team not in the playoff, best first (the selection
+   * ranking, then winning percentage, then strength), fills the bowls by conference tie-in.
+   */
+  private buildBowls(date: ISODate, ranking: Poll, usedByPlayoff: Set<string>, rep: DayReport): void {
+    const s = this.state;
+    const inPlayoff = new Set(s.playoff?.field.map((f) => f.team_id) ?? []);
+    const done = s.games.filter((g) => g.status === "final");
+    const fbs = new Set(this.teams.filter((t) => t.level === "fbs").map((t) => t.id));
+    const rec = new Map<number, { fbsW: number; fcsW: number; w: number; l: number }>();
+    for (const g of done) {
+      const hw = g.home_score! > g.away_score!;
+      for (const [id, opp, won] of [[g.home_id, g.away_id, hw], [g.away_id, g.home_id, !hw]] as const) {
+        const r = rec.get(id) ?? { fbsW: 0, fcsW: 0, w: 0, l: 0 };
+        if (won) { r.w++; if (fbs.has(opp)) r.fbsW++; else r.fcsW++; } else r.l++;
+        rec.set(id, r);
+      }
+    }
+    const busy = new Map<number, ISODate>();
+    for (const g of s.games) for (const id of [g.home_id, g.away_id]) if (g.date > (busy.get(id) ?? "")) busy.set(id, g.date);
+    const rank = new Map(ranking.ranks.map((r, i) => [r.team_id, i]));
+    const pct = (id: number) => { const r = rec.get(id)!; return r.w / Math.max(1, r.w + r.l); };
+    const pool: BowlTeam[] = this.teams
+      .filter((t) => fbs.has(t.id) && !inPlayoff.has(t.id) && rec.has(t.id) && rec.get(t.id)!.w >= 5)
+      .map((t) => {
+        const r = rec.get(t.id)!;
+        return { id: t.id, conference: t.conference, busy_until: busy.get(t.id) ?? "", eligible: r.fbsW + Math.min(1, r.fcsW) >= 6 && r.w >= r.l };
+      })
+      .sort((a, b) => (rank.get(a.id) ?? 99) - (rank.get(b.id) ?? 99) || pct(b.id) - pct(a.id) ||
+        (s.power[b.id] ?? 0) - (s.power[a.id] ?? 0) || a.id - b.id);
+    const played = new Set(s.games.filter((g) => g.kind === "regular").map((g) => (g.home_id < g.away_id ? `${g.home_id}-${g.away_id}` : `${g.away_id}-${g.home_id}`)));
+    const bowls = [...NY6.filter((b) => !usedByPlayoff.has(b.name)), ...BOWLS].map((bowl) => ({ bowl, date: bowlDate(bowl, s.year) }));
+    const picks = selectBowls(bowls, pool, played);
+    for (const pk of picks) {
+      const g = this.addGame(rep, { kind: "bowl", date: pk.date, home_id: pk.home, away_id: pk.away, neutral: true, venue: pk.bowl.venue, label: pk.bowl.name });
+      g.kickoff_et = pk.bowl.kickoff_et;
+    }
+    const mine = s.user_team_id != null ? picks.find((pk) => pk.home === s.user_team_id || pk.away === s.user_team_id) : undefined;
+    const top = picks.slice(0, 6).map((pk) => `${pk.bowl.name}: ${this.team(pk.home).school} vs ${this.team(pk.away).school}`).join("; ");
+    rep.news.push(this.news(date, "selection", `${picks.length} bowl games are set`, top, picks.slice(0, 6).flatMap((pk) => [pk.home, pk.away])));
+    if (mine) {
+      const opp = this.team(mine.home === s.user_team_id ? mine.away : mine.home);
+      rep.news.push(this.news(date, "selection", `${this.team(s.user_team_id!).school} will play ${opp.school} in the ${mine.bowl.name}`,
+        `${mine.bowl.venue}, ${mine.date}`, [mine.home, mine.away]));
+    }
   }
 
   private winner(g: Game): Seeded {

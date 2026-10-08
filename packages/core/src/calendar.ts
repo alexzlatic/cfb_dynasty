@@ -27,7 +27,7 @@ export const RULES: Rule[] = [
   { type: "ap_poll", label: "AP poll", active: true, dates: (y, c) => sundays(`${y}-08-30`, addDays(c.lastRegular, 8)) },
   { type: "early_signing", label: "Early signing period", dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
   { type: "conf_championships", label: "Conference championships", active: true, dates: (y) => [{ date: nthWeekday(y, 12, 6, 1) }] },
-  { type: "bowls", label: "Bowl season", approx: true, dates: (y) => [{ date: `${y}-12-19`, end: `${y + 1}-01-04` }] },
+  { type: "bowls", label: "Bowl season", approx: true, active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 7), end: `${y + 1}-01-02` }] },
   { type: "portal_window", label: "Transfer portal window", dates: (y) => [{ date: `${y + 1}-01-02`, end: `${y + 1}-01-16` }] },
   { type: "draft_deadline", label: "NFL draft declaration deadline", approx: true, dates: (y) => [{ date: `${y + 1}-01-15` }] },
   { type: "season_end", label: "Season complete", active: true, dates: (y) => [{ date: `${y + 1}-01-26` }] },
@@ -65,6 +65,8 @@ export function postseasonEvents(year: number, p: PlayoffSettings): CalEvent[] {
     for (let d = nthWeekday(year, 10, 0, 3); d <= addDays(champDay, 1); d = addDays(d, 7)) out.push(mk("bcs_standings", "BCS standings", d, null));
     out.push(mk("selection", "BCS selection", addDays(champDay, 1), null, { approx: false }));
     out.push(mk("title_game", "BCS National Championship", ROUND_DATES(year)[0].date, null, { rounds_from_end: 0 }));
+  } else {
+    out.push(mk("selection", "Bowl selection", addDays(champDay, 1), null, { approx: false }));
   }
   return out;
 }

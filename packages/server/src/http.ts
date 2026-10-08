@@ -202,8 +202,15 @@ export function startServer(opts: ServerOptions, port: number): Server {
     const dir = opts.staticDir;
     if (!dir || !existsSync(dir)) { res.writeHead(404); res.end("client not built; run npm run dev"); return; }
     let file = normalize(join(dir, pathname));
-    if (!file.startsWith(dir) || !existsSync(file) || statSync(file).isDirectory()) file = join(dir, "index.html");
-    res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream" });
+    const found = file.startsWith(dir) && existsSync(file) && !statSync(file).isDirectory();
+    // A missing file with an extension (an asset from an older build) is a 404, not the page; sending the
+    // page as JavaScript leaves a blank window.
+    if (!found && extname(pathname)) { res.writeHead(404); res.end(); return; }
+    if (!found) file = join(dir, "index.html");
+    // Build assets have content hashes in their names and never change; the page must always be fresh so
+    // an update's new asset names are picked up.
+    const cache = pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache";
+    res.writeHead(200, { "content-type": MIME[extname(file)] || "application/octet-stream", "cache-control": cache });
     res.end(readFileSync(file));
   }
 

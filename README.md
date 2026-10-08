@@ -53,8 +53,11 @@ Open the same league in two windows and sim a day in one: the other updates live
     lean toward the team and conference they cover. Writers file a story on their beat every week.
     The coaches poll and the CFP committee are separate panels.
   - **Postseason format** is a setting: a 2, 4, 8, 12, 16 or 24-team playoff (automatic bids, byes and
-    campus early rounds configurable), a BCS title game, or bowls only with an AP champion (bowl games
-    arrive in M1). The default is the current 12-team format.
+    campus early rounds configurable), a BCS title game, or bowls only with an AP champion. The default
+    is the current 12-team format.
+  - **Bowls** (`packages/core/src/bowls.ts`): the 2025-26 slate of 35 bowls plus whichever New Year's
+    Six bowls the playoff leaves free, filled on selection day by conference tie-in from teams with six
+    wins (one may be over an FCS team) and a .500 record, best first; 5-7 teams fill only what is left.
 - **Server** (`packages/server`): one authoritative game server. Every change is an action appended to
   the league's log and pushed to every open client over a WebSocket; re-running the log from the seed
   reproduces the season exactly.

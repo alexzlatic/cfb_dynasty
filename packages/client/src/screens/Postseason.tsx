@@ -8,8 +8,9 @@ export function Postseason() {
   const games = useData(() => api.schedule(id, {}), []);
   const p = state.settings.playoff;
   const fmt = p.format === "playoff" ? `${p.teams}-team playoff: ${p.auto_bids} automatic bids for the highest-ranked conference champions, ${p.byes} byes, ${p.campus_first_round ? "campus" : "neutral"} early rounds`
-    : p.format === "bcs" ? "BCS: the top two in the BCS standings meet in one title game" : "Bowls only: the final AP poll names the champion (bowl games arrive in M1)";
+    : p.format === "bcs" ? "BCS: the top two in the BCS standings meet in one title game" : "Bowls only: conference tie-ins fill the bowls and the final AP poll names the champion";
   const titles = (games ?? []).filter((g) => g.kind === "conf_champ");
+  const bowls = (games ?? []).filter((g) => g.kind === "bowl").sort((a, b) => a.date.localeCompare(b.date) || (a.kickoff_et ?? "").localeCompare(b.kickoff_et ?? ""));
   const rounds = new Map<number, typeof titles>();
   for (const g of games ?? []) if (g.kind === "playoff") rounds.set(g.round!, [...(rounds.get(g.round!) || []), g]);
   return (
@@ -19,6 +20,7 @@ export function Postseason() {
       <div className="cols">
         <div>
           {[...rounds].sort((a, b) => b[0] - a[0]).map(([r, gs]) => <Panel key={r} title={gs[0].label?.replace(/ \(.*\)$/, "") ?? `Round ${r}`}><GameTable games={gs} showDate /></Panel>)}
+          <Panel title={`Bowl games${bowls.length ? ` (${bowls.length})` : ""}`}>{bowls.length ? <GameTable games={bowls} showDate /> : <p className="muted">Set on selection day: bowls take eligible teams (six wins, .500 or better) by conference tie-in.</p>}</Panel>
           <Panel title="Conference championships">{titles.length ? <GameTable games={titles} showDate /> : <p className="muted">Set after the last regular-season conference games.</p>}</Panel>
         </div>
         <Panel title="Field">

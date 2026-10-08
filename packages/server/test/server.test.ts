@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -116,6 +116,25 @@ describe("launcher support", () => {
     for (let i = 1; i < list.length; i++) expect(list[i - 1].played_at).toBeGreaterThanOrEqual(list[i].played_at);
     const r = await fetch(base + "/api/quit", { method: "POST" });
     expect(r.status).toBe(403);
+  });
+
+  it("never caches the page and answers an asset from an older build with 404, not the page", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cfb-static-"));
+    mkdirSync(join(dir, "assets"));
+    writeFileSync(join(dir, "index.html"), "<html></html>");
+    writeFileSync(join(dir, "assets", "index-new.js"), "1");
+    const s = startServer({ manager, staticDir: dir }, 0);
+    const b = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+    try {
+      for (const p of ["/", "/l/x/depth/1"]) {
+        const r = await fetch(b + p);
+        expect(r.status).toBe(200);
+        expect(r.headers.get("cache-control")).toBe("no-cache");
+      }
+      const asset = await fetch(b + "/assets/index-new.js");
+      expect(asset.headers.get("cache-control")).toContain("immutable");
+      expect((await fetch(b + "/assets/index-old.js")).status).toBe(404);
+    } finally { s.close(); }
   });
 });
 
