@@ -194,7 +194,7 @@ function shiftUnit(u: UnitRates, x: number, xc: number): UnitRates {
  * points to the average game (0.36 a game between average teams, about 0.8 across the 2025 replay's real
  * matchups). Taking CONVEX x points squared back off each unit keeps scoring where the scouted ratings put it.
  */
-const CONVEX = 0.012;
+const CONVEX = 0.016;
 
 /** A team's ratings with `off` points of hidden strength on offense and `def` on defense (positive = better). */
 export function applyHidden(r: TeamRatings, off: number, def: number): TeamRatings {

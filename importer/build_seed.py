@@ -209,6 +209,11 @@ def build_schedule(teams, refresh: bool):
 
 
 # ---- FCS and missing-FBS team strength ---------------------------------------------------------
+# Points taken off every team rated from an FCS season. The regression alone let FCS teams beat FBS teams
+# 6.6% of the time in simulated 2026 seasons against 5.0% (2024) and 3.2% (2025) for real; tuned with
+# `npm run check:m1` (M1 gate: 3-6%).
+FCS_OFFSET = -2.5
+
 def team_strength_points(teams, refresh: bool):
     """Points vs an average FBS team on a neutral field for teams that were FCS last season (2025 for 2026).
 
@@ -378,8 +383,8 @@ def main() -> None:
         if t["level"] == "fbs" and t["school"] in fbs_built:
             ratings[t["id"]] = {"source": "preseason_prior_v2", **{"ratings": fbs_built[t["school"]]}}
         else:  # FCS teams, and FBS newcomers rated from their last FCS season
-            pts = strength[t["school"]] / slope
-            ratings[t["id"]] = {"source": f"fcs_{SEASON - 1}_vs_fbs_shrunk", "points": round(strength[t["school"]], 1),
+            pts = (strength[t["school"]] + FCS_OFFSET) / slope
+            ratings[t["id"]] = {"source": f"fcs_{SEASON - 1}_vs_fbs_shrunk", "points": round(strength[t["school"]] + FCS_OFFSET, 1),
                                 "ratings": scaled_team(pts, t["school"], t["abbr"], rosters.get(t["id"], []))}
     write("team_ratings_all.json", {"season": SEASON, "as_of": start, "teams": ratings})
 

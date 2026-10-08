@@ -15,8 +15,10 @@ models this directly instead of moving ratings after results.
 
 `packages/core/src/hidden.ts` holds the model; `Season.hidden`, `hiddenStrength` and `staffView` expose it.
 `applyHidden` turns points into small log-odds shifts of completion rate, yards per completion, sack and
-interception rates, yards per carry, stuffs and explosive runs. It changes odds only, never the number of
-random draws, so engine parity is untouched.
+interception rates, yards per carry, stuffs and explosive runs. Sack and interception rates move in
+proportion to their size, so a hidden swing changes how often they happen without adding more of them on
+average. It changes odds only, never the number of random draws, so engine parity is untouched. FCS filler
+teams have no hidden layer: they play their ratings.
 
 ## The three scores
 
