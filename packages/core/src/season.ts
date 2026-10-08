@@ -1,6 +1,7 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { GameDay, type SideSetup } from "./gameday.ts";
+import { Caller, type UserCall } from "./calls.ts";
 import { POSITIONS, type RatedPlayer } from "./players.ts";
 import { addDays, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
@@ -51,6 +52,8 @@ export interface SeasonState {
   depth?: Record<number, DepthChart>;
   /** Every injury that cost a player games, oldest first. */
   injuries?: Injury[];
+  /** The user's play calls in games they called live, by game id, in the order the game asked for them. */
+  calls?: Record<number, UserCall[]>;
 }
 
 export interface DayReport {
@@ -312,22 +315,44 @@ export class Season {
     return g.kind !== "regular" || (this.rankOf(g.home_id) != null && this.rankOf(g.away_id) != null);
   }
 
+  /**
+   * A game ready to kick off: the engine, game day (fatigue, rotation, injuries and blowout subs, on
+   * its own random stream) and, when the user called plays in it, the caller on a third stream. A live
+   * game builds the same objects, so playing it later with the recorded calls gives the same game.
+   */
+  gameSetup(g: Game): { sim: GameSim; gd: GameDay | null; sides: [SideSetup, SideSetup] | null; caller: Caller | null } {
+    const s = this.state;
+    const opts = { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true };
+    const hs = this.sideSetup(g.home_id), as = this.sideSetup(g.away_id);
+    const user = s.user_team_id;
+    const userSide = user === g.home_id ? "home" : user === g.away_id ? "away" : null;
+    const caller = userSide ? new Caller(userSide, new Rng(mixSeed(s.seed, s.year, g.id, "calls"))) : null;
+    if (hs && as) {
+      const gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")), { injuries: s.settings.injuries ?? 1 });
+      const k = gd.kickoff();
+      return { sim: new GameSim(k.home, k.away, opts), gd, sides: [hs, as], caller };
+    }
+    const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
+    if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
+    return { sim: new GameSim(home, away, opts), gd: null, sides: null, caller };
+  }
+
+  /** Record the user's calls for one of their games today (from a live game); the game plays with them tonight. */
+  setCalls(gameId: number, calls: UserCall[]): void {
+    const s = this.state, g = s.games.find((x) => x.id === gameId);
+    if (!g || g.status === "final" || g.date !== s.date) throw new Error("that game is not being played today");
+    if (s.user_team_id == null || (g.home_id !== s.user_team_id && g.away_id !== s.user_team_id)) throw new Error("you can only call your own games");
+    (s.calls ??= {})[gameId] = calls;
+  }
+
   private play(g: Game, rep: DayReport): void {
     const s = this.state;
     const rankH = this.rankOf(g.home_id), rankA = this.rankOf(g.away_id);
-    const opts = { rng: new Rng(mixSeed(s.seed, s.year, g.id)), neutral: g.neutral, record: true };
-    const hs = this.sideSetup(g.home_id), as = this.sideSetup(g.away_id);
-    let gd: GameDay | null = null, sim: GameSim;
-    if (hs && as) {
-      // Game day: fatigue, rotation, injuries and blowout subs, on their own random stream.
-      gd = new GameDay(hs, as, new Rng(mixSeed(s.seed, s.year, g.id, "gameday")), { injuries: s.settings.injuries ?? 1 });
-      const k = gd.kickoff();
-      sim = new GameSim(k.home, k.away, opts).play(gd.provider());
-    } else {
-      const home = this.teamRatings(g.home_id), away = this.teamRatings(g.away_id);
-      if (!home || !away) throw new Error(`no ratings for game ${g.id}`);
-      sim = new GameSim(home, away, opts).play();
-    }
+    const { sim, gd, sides, caller } = this.gameSetup(g);
+    const calls = s.calls?.[g.id];
+    const called = calls && caller ? caller.replay(calls) : undefined;
+    sim.play(gd ? gd.provider(called) : called);
+    const hs = sides?.[0], as = sides?.[1];
     const r = sim.result();
     const day = gd?.result();
     g.status = "final";

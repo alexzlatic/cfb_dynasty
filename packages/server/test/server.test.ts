@@ -167,3 +167,30 @@ describe("depth charts", () => {
     expect(lg.season.teamRatings(2509)!.qb).toBe(before.qb);
   });
 });
+
+describe("live games", () => {
+  it("calls a game over the API, plays the day at the final whistle, and the league replays it", async () => {
+    const made = await post("/api/leagues", { name: "Live", team_id: 158, seed: 6 });
+    expect(made.error).toBeUndefined();
+    const id = made.id;
+    await post(`/api/leagues/${id}/actions`, { type: "sim", payload: { kind: "my_next_game" } });
+    let v = await post(`/api/leagues/${id}/live/start`, { mode: { offense: "me", defense: "coordinator" } });
+    expect(v.stop).not.toBeNull();
+    expect((await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 158, depth: null } })).error).toMatch(/live game/);
+    let since = 0, n = 0;
+    while (!v.final && n < 400) {
+      since += v.plays.length;
+      const call = v.stop.kind !== "playCall" ? null : v.stop.role === "offense" ? (n % 3 === 0 ? "deep" : "inside_run") : "blitz";
+      v = await post(`/api/leagues/${id}/live/call`, { call, since });
+      if (v.error) throw new Error(v.error);
+      n++;
+    }
+    expect(v.final).toBe(true);
+    expect(v.result.status).toBe("final");
+    expect([v.result.home_score, v.result.away_score]).toEqual([v.home_score, v.away_score]);
+    expect(await get(`/api/leagues/${id}/live`)).toBeNull();
+    const lg = manager.get(id);
+    const r = replay(lg, manager.seed());
+    expect(r.replayed).toBe(r.original);
+  });
+});
