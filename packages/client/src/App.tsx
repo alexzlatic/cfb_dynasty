@@ -31,6 +31,7 @@ import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
 import { RetentionScreen } from "./screens/Retention.tsx";
+import { RenewalsScreen } from "./screens/Renewals.tsx";
 import { PortalScreen } from "./screens/Portal.tsx";
 import { StaffScreen } from "./screens/Staff.tsx";
 import { CoachesScreen, CoachPage } from "./screens/Coaches.tsx";
@@ -82,7 +83,7 @@ const myPage = (label: string, screen: string): NavPage => ({
 const NAV: NavSection[] = [
   { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("Inbox", "inbox", ["inbox"], true), page("News", "news"), page("Calendar", "calendar")] },
   { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
-    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
+    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Renewals", "renewals", ["renewals"], true), page("Game day", "live", ["live"], true)] },
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
@@ -193,6 +194,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "stats" && <StatsScreen key={`${arg}/${sub}`} sub={arg ?? "players"} year={sub ? Number(sub) : undefined} />}
         {screen === "draft" && <DraftScreen />}
         {screen === "retention" && <RetentionScreen />}
+        {screen === "renewals" && <RenewalsScreen />}
         {screen === "portal" && <PortalScreen />}
         {screen === "staff" && <StaffScreen />}
         {screen === "coaches" && <CoachesScreen />}
