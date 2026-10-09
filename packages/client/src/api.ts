@@ -149,7 +149,12 @@ export interface ProspectRow {
   offers: number[]; interest: number; top_schools: { team_id: number; hours: number; offered: boolean }[];
   /** Place on your big board (-1 when not on it). */
   board: number; scouting: boolean; lat: number; lon: number;
+  /** His latest high school season, JV or varsity (null before his first). */
+  hs: { year: number; grade: number; final: boolean; g: number; level: string; summary: string; lead: number; stats: Record<string, number> } | null;
 }
+/** One high school season: varsity, backup or JV, games so far, playoff run and the line. */
+export interface HsSeason { year: number; grade: number; level: "varsity" | "backup" | "jv"; g: number; final: boolean; injured: number; playoffs: number; champion: boolean; stats: Record<string, number> }
+export interface HsCol { key: string; label: string; title: string }
 /** A school a prospect is considering: his chance of picking it if he chose today. */
 export interface Considering { team: number; share: number; offered: boolean; hours: number }
 export interface ProspectPageData extends ProspectRow {
@@ -158,6 +163,7 @@ export interface ProspectPageData extends ProspectRow {
   ratings: { attr: string; now: number; arrival: number }[];
   years_out: number;
   persona: PersonaView;
+  hs_seasons: HsSeason[]; hs_cols: HsCol[];
 }
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
@@ -167,6 +173,8 @@ export interface RecruitingView {
   available: boolean; team_id: number | null; year: number; date: string; cls: number;
   classes: { cls: number; grade: number; total: number; known: number; rated: number; found: number }[];
   total: number; prospects: ProspectRow[];
+  /** The high school stat columns for the position filtered on (null for all positions). */
+  hs_cols?: HsCol[] | null;
   settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit; board: number[] };
   home: { lat: number | null; lon: number | null; state: string | null } | null;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;

@@ -11,7 +11,7 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defS
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
-import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, starterMedians, type Departure, type FreshModel } from "./rollover.ts";
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
@@ -19,11 +19,12 @@ import {
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
-  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
+  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { HS_COLS, HS_LEAD, hsLatest, hsSeasons, hsSummary } from "./hsstats.ts";
 import {
   CAROUSEL_CLOSE, ROLE_NAMES, buyout, candidates, coachName, contractYears, hire, jobOf, marketDay, openCarousel, release, salaryFor, staffBudget, staffPay, staffRecs,
   newCoach, startCoaching, toMember, willing, type CoachRec, type CoachingState, type Job, type MarketCtx, type Role, type TeamYear,
@@ -145,6 +146,8 @@ export interface SeasonState {
   requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
   /** How generated freshmen rate (measured from the opening rosters at the first rollover), and the next new player's id. */
   fresh_model?: FreshModel;
+  /** Each position's median FBS starter in the league's first season, which rollover keeps fixed (rollover.ts). */
+  rating_anchor?: Partial<Record<Pos, number>>;
   next_player_id?: number;
   /** Every season played before this one, oldest first. */
   past?: SeasonSummary[];
@@ -430,6 +433,7 @@ export class Season {
     if (!this.done) throw new Error("the season isn't over");
     const players = this.seed.players ?? {};
     const model = s.fresh_model ?? freshModel(players);
+    const anchor = s.rating_anchor ?? starterMedians(this.teams, players);
     // Each player's development over the whole season (for teams without hidden scores, his own draw).
     const growth = (tid: number) => this.hidden(tid, `${y}-12-31`)?.growth ?? new Map(this.roster(tid).map((p) => [p.id, hiddenPlayer(s.seed, y, p).dev]));
     const gp = Object.fromEntries(Object.entries(s.player_stats ?? {}).map(([pid, st]) => [pid, st.gp]));
@@ -452,7 +456,7 @@ export class Season {
       } else if (e.status !== "committed") gone.add(e.pid);
     }
     const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
-      transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa,
+      transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa, anchor,
       rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     // Conferences for next season (moves, folds, new deals), and conference schedules for any that changed.
@@ -491,7 +495,7 @@ export class Season {
       polls: [], news: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: Math.max(s.next_game_id + base.schedule.length, ...schedule.map((g) => g.id + 1)), writers: s.writers, stars: {},
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
-      requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
+      requests: s.requests, fresh_model: model, rating_anchor: anchor, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
       // Everyone leaving for the pros or out of eligibility goes into April's draft.
       draft_pool: turn.left.filter((d) => d.reason === "nfl" || d.reason === "graduated").map((d) => ({ pid: d.pid, team_id: d.team_id, name: d.name, pos: d.pos, ovr: d.ovr,
         potential: d.potential ?? d.ovr, years: (d.years ?? 3) + 1, early: !!declared?.has(d.pid), tier: this.tierOf(d.team_id) }))
@@ -1937,7 +1941,7 @@ export class Season {
     const t = me != null ? this.team(me) : null;
     let read: { est: number; sd: number } | null = null;
     const eye = this.myEye();
-    if (t && eye) read = schoolRead(eye, p, s.date, s.seed, st.user.evals[p.id] ?? 0);
+    if (t && eye) read = schoolRead(eye, p, s.date, s.seed, looksOf(p, eye.id, st.user.evals[p.id] ?? 0));
     const ovr = currentOvr(p, s.date);
     const cap = (x: number) => Math.max(40, Math.min(99, x));
     return {
@@ -1951,8 +1955,15 @@ export class Season {
       scouting: st.user.scout.includes(p.id), lat: p.home.lat, lon: p.home.lon,
       commit: p.commit ? { team_id: p.commit.team, signed: p.commit.signed, date: p.commit.date } : null,
       offers: p.offers, interest: me != null ? p.interest[me] ?? 0 : 0,
+      hs: this.hsView(p),
       top_schools: Object.entries(p.interest).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 6).map(([id, h]) => ({ team_id: Number(id), hours: Math.round(h), offered: p.offers.includes(Number(id)) })),
     };
+  }
+
+  /** His latest high school season for lists (JV or varsity): the line, a few words and the number his position is sorted by. */
+  private hsView(p: Prospect) {
+    const last = hsLatest(this.state.seed, p, this.state.date);
+    return last ? { year: last.year, grade: last.grade, final: last.final, g: last.g, level: last.level, summary: hsSummary(p.pos, last), lead: last.stats[HS_LEAD[p.pos]] ?? 0, stats: last.stats } : null;
   }
 
   /**
@@ -1969,7 +1980,7 @@ export class Season {
     if (eye) {
       const start = `${p.cls - 4}-08-01`;
       for (let d = s.date, i = 0; d >= start && i < 53; d = addDays(d, -7), i++) {
-        const r = schoolRead(eye, p, d, s.seed, st.user.evals[p.id] ?? 0);
+        const r = schoolRead(eye, p, d, s.seed, looksOf(p, eye.id, st.user.evals[p.id] ?? 0));
         const c = (v: number) => Math.round(Math.max(40, Math.min(99, v)) * 10) / 10;
         history.unshift({ date: d, est: c(r.est), lo: c(r.est - 1.65 * r.sd), hi: c(r.est + 1.65 * r.sd) });
       }
@@ -1982,7 +1993,9 @@ export class Season {
       const nowGap = arrivalOvr(view.potential.est) - (view.ovr ? (view.ovr.lo + view.ovr.hi) / 2 : arrivalOvr(view.potential.est));
       ratings = ATTRS[p.pos].map((a) => { const arrival = fromZ(zz + 0.47 * rng.gauss(0, 1)); return { attr: a, now: Math.max(15, Math.round(arrival - nowGap)), arrival }; });
     }
-    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id) };
+    // His high school seasons so far (true production: nobody's read filters it) and his position's columns.
+    const hs_seasons = hsSeasons(s.seed, p, s.date);
+    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id), hs_seasons, hs_cols: HS_COLS[p.pos] };
   }
 
   /** The schools a prospect is considering, best first (see RecruitWeek.considering). */

@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { SortTable } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
-import { api, type ProspectRow, type RecruitingView, type StaffTimeSplit } from "../api.ts";
+import { api, type HsCol, type ProspectRow, type RecruitingView, type StaffTimeSplit } from "../api.ts";
 import { Logo, money } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { ConsideringList } from "./Prospect.tsx";
@@ -11,7 +11,8 @@ import { recruitStars } from "./ratings.tsx";
 const GRADES = ["Freshmen", "Sophomores", "Juniors", "Seniors"];
 export const POS = ["", "QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB", "CB", "S", "K", "P", "LS"];
 const VIEWS: [string, string][] = [["known", "Everyone you know"], ["rated", "Rated by the service"], ["found", "Found by your staff"], ["board", "On your big board"], ["mine", "You're recruiting"], ["committed", "Committed to you"]];
-const SORTS: [string, string][] = [["rank", "Service rank"], ["est", "Your estimate"], ["hi", "Highest ceiling"]];
+const SORTS: [string, string][] = [["rank", "Service rank"], ["est", "Your estimate"], ["hi", "Highest ceiling"], ["stat", "High school production"]];
+const GRADE_ABBR = ["FR", "SO", "JR", "SR"];
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /** Recruiting: your big board, the prospects your staff knows, the map, class rankings and your scouting and staff. */
@@ -120,8 +121,11 @@ function ProspectList({ cls, head }: { cls: number; head: RecruitingView }) {
       {!data ? <p className="muted">Loading...</p> : (
         <div className="scrollx">
           <table className="grid prospects">
-            <thead><tr>{sortTh("rank", "Rk", "num")}{sortTh("name", "Prospect")}{sortTh("pos", "Pos")}{sortTh("rank", "Stars")}{sortTh("home", "Home")}{sortTh("est", "Potential")}{sortTh("now", "Now")}{sortTh("status", "Status")}<th>In his picture</th>{me != null && sortTh("board", "")}</tr></thead>
-            <tbody>{data.prospects.map((p) => <Row key={p.id} p={p} me={me} busy={busy} act={act} />)}</tbody>
+            <thead><tr>{sortTh("rank", "Rk", "num")}{sortTh("name", "Prospect")}{sortTh("pos", "Pos")}{sortTh("rank", "Stars")}{sortTh("home", "Home")}{sortTh("est", "Potential")}{sortTh("now", "Now")}
+              {data.hs_cols ? <>{data.hs_cols.length ? <th className="small">Season</th> : null}{sortTh("stat:g", "G", "num")}{data.hs_cols.map((c) => <React.Fragment key={c.key}>{sortTh(`stat:${c.key}`, c.label, "num")}</React.Fragment>)}</>
+                : sortTh("stat", "Last season")}
+              {sortTh("status", "Status")}<th>In his picture</th>{me != null && sortTh("board", "")}</tr></thead>
+            <tbody>{data.prospects.map((p) => <Row key={p.id} p={p} me={me} busy={busy} act={act} cols={data.hs_cols ?? null} />)}</tbody>
           </table>
           {!data.prospects.length && <p className="muted">Nobody here your staff knows about. Scout a region to find more prospects there.</p>}
         </div>
@@ -130,12 +134,16 @@ function ProspectList({ cls, head }: { cls: number; head: RecruitingView }) {
         <button disabled={page === 0} onClick={() => setPage(page - 1)}>‹ Previous</button> page {page + 1} of {pages}{" "}
         <button disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Next ›</button></p>}
       <p className="small muted">Your staff knows every prospect the service rates (about 50 freshmen, 500 sophomores and every junior and senior) plus the ones it finds:
-        most near home, more wherever you pay a regional scout, and the best sooner. Potential is your staff's 90% range for what he'll be on arrival.</p>
+        most near home, more wherever you pay a regional scout, and the best sooner. Potential is your staff's 90% range for what he'll be on arrival.
+        Last season is his latest high school season (a dot while it's still going; JV players have no varsity stats); pick a position to see and sort every stat. Stats follow what he really is, plus his competition and his team's scheme, so a kid whose numbers outrun his rating may be one the scouts missed.</p>
     </Panel>
   );
 }
 
-function Row({ p, me, busy, act }: { p: ProspectRow; me: number | null; busy: boolean; act: (t: string, x: unknown) => Promise<void> }) {
+/** His latest season: which one ("SR '26", with a dot while it's still going). */
+const seasonTag = (h: NonNullable<ProspectRow["hs"]>) => `${GRADE_ABBR[h.grade]} '${String(h.year).slice(2)}${h.final ? "" : " •"}`;
+
+function Row({ p, me, busy, act, cols }: { p: ProspectRow; me: number | null; busy: boolean; act: (t: string, x: unknown) => Promise<void>; cols: HsCol[] | null }) {
   const { id, team } = useLeague();
   return (
     <tr className={p.commit?.team_id === me && me != null ? "mine" : p.board >= 0 ? "onboard" : ""}>
@@ -146,6 +154,11 @@ function Row({ p, me, busy, act }: { p: ProspectRow; me: number | null; busy: bo
       <td className="small">{p.home.city}{p.home.state ? `, ${p.home.state}` : ""}</td>
       <td>{p.potential ? <RangeBar {...p.potential} /> : ""}</td>
       <td className="small muted nowrap">{p.ovr ? `${p.ovr.lo}-${p.ovr.hi}` : ""}</td>
+      {cols ? <>
+        {cols.length ? <td className="small muted nowrap">{p.hs ? seasonTag(p.hs) : ""}</td> : null}
+        <td className="num">{p.hs && p.hs.level !== "jv" ? p.hs.g : ""}</td>
+        {cols.map((c) => <td key={c.key} className="num">{p.hs && p.hs.level !== "jv" ? (p.hs.stats[c.key] ?? 0).toLocaleString() : ""}</td>)}
+      </> : <td className="small nowrap" title={p.hs ? seasonTag(p.hs) : "No high school season yet"}>{p.hs ? <>{p.hs.summary} <span className="muted">{seasonTag(p.hs)}</span></> : <span className="muted">-</span>}</td>}
       <td className="small nowrap">{p.commit ? <><Logo team={team(p.commit.team_id)} size={18} /> {p.commit.signed ? "Signed" : "Verbal"}</> : <span className="muted">Open</span>}</td>
       <td className="nowrap">{p.top_schools.slice(0, 3).map((x) => <span key={x.team_id} title={`${team(x.team_id)?.school}${x.offered ? " (offer)" : ""}`} className={x.offered ? "offered" : ""}><Logo team={team(x.team_id)} size={18} /></span>)}</td>
       {me != null && <td className="nowrap">
@@ -189,6 +202,7 @@ function BigBoard({ head }: { head: RecruitingView }) {
                 <div className="bwho">
                   <div>{prospectLink(id, r)} <span className="pos">{r.pos}</span> {recruitStars(r.service?.stars)}</div>
                   <div className="small muted">{r.cls} · {r.home.city}{r.home.state ? `, ${r.home.state}` : ""}{r.service ? ` · No. ${r.service.rank}` : ""}</div>
+                  {r.hs && <div className="small" title="His latest high school season">{r.hs.summary} <span className="muted">{seasonTag(r.hs)}</span></div>}
                 </div>
                 <div className="bpot">{r.potential && <RangeBar {...r.potential} />}</div>
                 <div className="bstatus">{committed ? <><Logo team={committed} size={22} /> <span className="small">{r.commit!.signed ? "Signed" : "Verbal"}</span></> : <span className="muted small">Open</span>}</div>

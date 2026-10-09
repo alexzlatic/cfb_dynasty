@@ -4,6 +4,7 @@ import { mixSeed } from "./hash.ts";
 import { ATTRS, POSITIONS, fromZ, overall, z, type Pos, type RatedPlayer } from "./players.ts";
 import { RECRUIT_FIT, STARTERS, choose, miles, offerScore, persona, type Persona, type SchoolOffer } from "./valuation.ts";
 import type { StaffTime } from "./staff.ts";
+import { statRead } from "./hsstats.ts";
 
 /**
  * High school recruiting (M3 step 3). Four classes are live at once: in August 2026 the 2027 class are
@@ -105,10 +106,14 @@ export function currentOvr(p: Prospect, date: ISODate): number {
 
 /** A seeded error that drifts smoothly with his age (yearly draws, joined by the same smooth curve). */
 export function smoothError(seed: number, a: number, b: number, t: number): number {
-  const base = hashGauss(seed, a, b, 101);
-  const pts = [0, 1, 2, 3, 4, 5].map((k) => 0.6 * base + 0.8 * hashGauss(seed, a, b, k, 103));
-  return smoothAt(pts, Math.max(0, Math.min(5, 4.5 - t)));
+  return errorAt(errorPoints(seed, a, b), t);
 }
+/** The yearly draws behind a smoothError (kept by a week of recruiting so it draws them once). */
+export function errorPoints(seed: number, a: number, b: number): number[] {
+  const base = hashGauss(seed, a, b, 101);
+  return [0, 1, 2, 3, 4, 5].map((k) => 0.6 * base + 0.8 * hashGauss(seed, a, b, k, 103));
+}
+export const errorAt = (pts: number[], t: number) => smoothAt(pts, Math.max(0, Math.min(5, 4.5 - t)));
 
 // ---- the pool generated prospects come from ---------------------------------------------------------
 export interface RecruitSeed {
@@ -192,7 +197,8 @@ export function realClass(o: { seed: number; rs: RecruitSeed; shape: { mu: numbe
   let id = o.startId;
   for (const r of o.rs.real) {
     // The service's rating is a read of where he is now; the truth is near it.
-    const now = (r.rating != null ? potentialFor(r.rating) : 68) + (r.rating != null ? SENIOR_TRUE_SD : 3) * rng.gauss(0, 1);
+    // The real services miss more the further down their lists a prospect is (svcMiss).
+    const now = (r.rating != null ? potentialFor(r.rating) : 68) + (r.rating != null ? Math.max(SENIOR_TRUE_SD, svcMiss(r.rank)) : 3) * rng.gauss(0, 1);
     const [first, ...rest] = (r.name ?? "").split(" ");
     const team = r.committed_to ? o.teamIds.get(r.committed_to) ?? null : null;
     out.push({
@@ -214,6 +220,25 @@ export function realClass(o: { seed: number; rs: RecruitSeed; shape: { mu: numbe
 /** The service's read error (points of potential) by years until arrival (0 to 4+), before re-rates narrow it. */
 const SVC_SD = [1.5, 2, 3, 4, 6];
 const svcSd = (t: number) => smoothAt(SVC_SD, Math.max(0, Math.min(4, t)));
+/**
+ * The service's misses that never wash out, by where a prospect ranks (its last list; unrated is the bottom),
+ * in points of potential: the top 100 go to every camp and are on film everywhere, a 700th-ranked kid at a
+ * small school is seen once or twice. They add to its everyday error (svcSdFor). Calibrated to real drafts
+ * (docs/recruiting.md): about 44% of first-rounders were outside the top 300 as recruits.
+ */
+export const SVC_MISS: [number, number][] = [[25, 2], [100, 2.6], [300, 3.6], [1000, 7], [Infinity, 8.5]];
+export const svcMiss = (rank: number | null | undefined) => SVC_MISS.find(([r]) => (rank ?? Infinity) <= r)![1];
+/** The service's error on a prospect `t` years from college at its `k`-th re-rate of the year, by his last rank. */
+const svcSdFor = (t: number, rank: number | null | undefined, k = 0) => Math.hypot(svcSd(t) * RERATE[k], svcMiss(rank));
+/**
+ * The service's error on a prospect (points): its everyday error, narrowing with each re-rate, plus the miss
+ * for his rank. Below its top 1,000 the miss runs mostly one way: a kid nobody has seen is far more often
+ * underrated than overrated (an unknown doesn't get rated a five-star by mistake).
+ */
+function svcError(seed: number, p: Prospect, t: number, rank: number | null | undefined, k = 0): number {
+  const miss = smoothError(seed, p.id, 1, t);
+  return svcSd(t) * RERATE[k] * smoothError(seed, p.id, 0, t) + svcMiss(rank) * ((rank ?? Infinity) > 1000 && miss > 0 ? 0.35 * miss : miss);
+}
 /** How many each grade the service rates: about 50 freshmen, about 500 sophomores, every junior and senior. */
 export const SVC_RATED = [50, 500, Infinity, Infinity];
 /**
@@ -258,8 +283,7 @@ export function rateClasses(ps: Prospect[], year: number, date: ISODate, rerate:
       if (p.svc?.real) return { p, read: p.svc.read };
       // Its error drifts slowly; prominent prospects are watched more closely.
       const t = yearsOut(p, date);
-      const sd = svcSd(t) * RERATE[rerate] * (p.svc && p.svc.rank <= 100 ? 0.8 : 1);
-      return { p, read: truthAt(p, date) + sd * smoothError(seed, p.id, 0, t) };
+      return { p, read: truthAt(p, date) + svcError(seed, p, t, p.svc?.rank, rerate) };
     }).sort((a, b) => b.read - a.read || a.p.id - b.p.id);
     // In the real class the rest rank among the real ratings by their reads (an unfinished real list is mostly the low end).
     let k = 0, rank = 0;
@@ -276,10 +300,16 @@ export function rateClasses(ps: Prospect[], year: number, date: ISODate, rerate:
 
 // ---- scouting: each school's read --------------------------------------------------------------------
 /**
- * A school's read error without the service (points of potential) by years until arrival: about ±15 for a
- * freshman, ±3 for a senior (90% ranges), narrowing every day as he gets older.
+ * A school's read error without the service (points of potential) by years until arrival, before it puts
+ * any time into him: about ±16 for a freshman, ±5 for a senior (90% ranges), narrowing every day as he gets
+ * older. Evaluations and contact narrow it a lot (readSd): a staff that works a senior hard reads him
+ * within a point or two.
  */
-export const READ_SD = [1.6, 2, 4, 6.5, 9];
+export const READ_SD = [2.5, 4.5, 6, 7.5, 10];
+/** How fast evaluations narrow a read (an evaluation's worth; contact hours count as a twentieth of one each). */
+const EVAL_GAIN = 1.2;
+/** Contact hours a school has put into a prospect count toward its evaluations: every 20 hours is one look. */
+export const HOURS_PER_EVAL = 20;
 export const readBase = (t: number) => smoothAt(READ_SD, Math.max(0, Math.min(4, t)));
 /** Scouting regions a school can send scouts to (each is a set of states; California splits north and south). */
 export type Region = "texas" | "florida" | "georgia" | "socal" | "west" | "mountain" | "deep_south" | "carolinas" | "mid_south" | "ohio_valley" | "midwest" | "northeast";
@@ -299,9 +329,9 @@ export const REGIONS: Record<Region, { name: string; states: string[] }> = {
 };
 export function regionOf(home: { state: string | null; lat: number }): Region | null {
   const st = home.state === "CA" ? (home.lat < 35.5 ? "CA-S" : "CA-N") : home.state;
-  for (const [k, v] of Object.entries(REGIONS)) if (st && v.states.includes(st)) return k as Region;
-  return null;
+  return st ? REGION_OF.get(st) ?? null : null;
 }
+const REGION_OF = new Map(Object.entries(REGIONS).flatMap(([k, v]) => v.states.map((st) => [st, k as Region])));
 /** What a regional scout costs for a year, and an evaluation trip (in and out of your region). */
 export const SCOUT_COST = { region: 95_000, trip_near: 2_500, trip_far: 7_500 };
 /** Staff hours an evaluation takes. */
@@ -317,31 +347,60 @@ export interface SchoolEye {
 }
 
 /** How wide a school's read of a prospect runs (SD, points of potential) after `evals` evaluation trips. */
-export function readSd(eye: SchoolEye, p: Prospect, date: ISODate, evals = 0): number {
+export function readSd(eye: SchoolEye, p: Prospect, date: ISODate, evals = 0, area = scoutArea(eye, p)): number {
+  return readBase(yearsOut(p, date)) * area * eye.width / Math.sqrt(1 + EVAL_GAIN * evals);
+}
+/** How well a school's scouts cover where he lives: near home best, then a region it pays for, then national scouting. */
+export function scoutArea(eye: SchoolEye, p: Prospect): number {
   const near = p.home.state === eye.state || miles(p.home, eye) <= 300;
   const reg = regionOf(p.home);
   const covered = reg != null && eye.regions.includes(reg);
-  const area = near ? 0.7 : covered ? 0.75 : eye.national ? 0.85 : 1;
-  return readBase(yearsOut(p, date)) * area * eye.width / Math.sqrt(1 + 0.6 * evals);
+  return near ? 0.7 : covered ? 0.75 : eye.national ? 0.85 : 1;
 }
 
 /**
- * A school's estimate of a prospect's potential and how sure it is: its own read, combined with the service's
- * when he's rated. The service's public ratings change on its re-rate dates, but what the staff takes from
- * it follows the service's evaluators day by day (the same error, at its everyday width), so no date moves
- * every estimate at once.
+ * What anyone can see of a prospect: the service's read (with how far to trust it) and his high school stats
+ * (hsstats.ts, trusted only a little). The same for every school, so a week of recruiting works it out once.
  */
-export function schoolRead(eye: SchoolEye, p: Prospect, date: ISODate, seed: number, evals = 0): { est: number; sd: number } {
+export interface PublicRead { svc: { est: number; sd: number } | null; stat: { est: number; sd: number } | null }
+export function publicRead(p: Prospect, date: ISODate, seed: number): PublicRead {
   const t = yearsOut(p, date);
-  const sd = readSd(eye, p, date, evals);
-  // His error drifts with time, and each trip adds what it saw, so the read narrows smoothly toward the truth.
-  const own = truthAt(p, date) + sd * smoothError(seed, eye.id, p.id, t);
-  if (!p.svc) return { est: own, sd };
-  const ssd = svcSd(t);
-  const svc = p.svc.real ? p.svc.read : truthAt(p, date) + ssd * smoothError(seed, p.id, 0, t);
-  const w1 = 1 / (sd * sd), w2 = 1 / (ssd * ssd);
-  return { est: (own * w1 + svc * w2) / (w1 + w2), sd: 1 / Math.sqrt(w1 + w2) };
+  let svc: PublicRead["svc"] = null;
+  if (p.svc) {
+    // What the staff takes from the service follows its evaluators day by day (the same error, at its
+    // everyday width), so no publishing date moves every estimate at once.
+    const ssd = svcSdFor(t, p.svc.rank);
+    svc = { est: p.svc.real ? p.svc.read : truthAt(p, date) + svcError(seed, p, t, p.svc.rank), sd: ssd };
+  }
+  return { svc, stat: statRead(seed, p, date) };
 }
+
+/**
+ * A school's estimate of a prospect's potential and how sure it is: its own read, combined with what his high
+ * school stats say and with the service's when he's rated. Its own read is as good as the time it has put in
+ * (evaluations, and contact hours: HOURS_PER_EVAL), so a school that works a prospect knows him far better
+ * than the service does, and one that never looked leans on the service.
+ */
+export function schoolRead(eye: SchoolEye, p: Prospect, date: ISODate, seed: number, evals = 0, pub = publicRead(p, date, seed),
+  /** The school's coverage of him and its error draws, when the caller keeps them. */
+  own?: OwnRead): { est: number; sd: number } {
+  const t = yearsOut(p, date);
+  const sd = readSd(eye, p, date, evals, own?.area);
+  // His error drifts with time, and each look adds what it saw, so the read narrows smoothly toward the truth.
+  const mine = truthAt(p, date) + sd * (own ? errorAt(own.pts, t) : smoothError(seed, eye.id, p.id, t));
+  let w = 1 / (sd * sd), est = mine * w;
+  for (const x of [pub.stat, pub.svc]) if (x) { const wx = 1 / (x.sd * x.sd); est += x.est * wx; w += wx; }
+  return { est: est / w, sd: 1 / Math.sqrt(w) };
+}
+
+/** What a school's read of a prospect is built on that never changes: its coverage of where he lives and its error draws. */
+export interface OwnRead { area: number; pts: number[] }
+
+/** How much a school's valuation of a prospect follows its own scouts rather than the service's stars. */
+const OWN_WEIGHT = 0.65;
+
+/** A school's looks at a prospect: its evaluation trips plus the contact hours it has put in. */
+export const looksOf = (p: Prospect, schoolId: number, trips = 0) => trips + (p.interest[schoolId] ?? 0) / HOURS_PER_EVAL;
 
 // ---- discovery: which prospects a staff knows about ----------------------------------------------------
 /** Everyone knows the prospects the service rates and anyone who has committed somewhere. */
@@ -529,7 +588,7 @@ export function commitHazard(grade: number, date: ISODate, offers: number): numb
  * A week of recruiting, every Sunday. Schools spend their contact hours on their boards and offer the
  * prospects they want most that they think they can get; prospects with offers commit, a few committed ones
  * flip. Seniors, juniors the service rates and the sophomores it rates are in play; the AI recruits from the
- * service's lists (your own scouting can find others).
+ * service's lists (your own scouting can find others), but judges each prospect by its own scouts' read.
  */
 /** The k-th largest of the first n values (quickselect; reorders them). */
 function kthLargest(a: Float64Array, n: number, k: number): number {
@@ -555,7 +614,16 @@ export class RecruitWeek {
   /** Each prospect's base scores for the schools that would recruit him, kept for the year and re-rate. */
   private cache = new Map<string, Map<number, Considered>>();
   private personas = new Map<number, Persona>();
+  /** Each school's fixed read parts for the prospects it works (cleared with the lists). */
+  private owns = new Map<number, OwnRead>();
   constructor(private seed: number) {}
+
+  private ownRead(s: School, p: Prospect): OwnRead {
+    const key = p.id * 1e6 + s.id;
+    let o = this.owns.get(key);
+    if (!o) { o = { area: scoutArea(s, p), pts: errorPoints(this.seed, s.id, p.id) }; this.owns.set(key, o); }
+    return o;
+  }
 
   persona(id: number): Persona {
     let p = this.personas.get(id);
@@ -567,16 +635,30 @@ export class RecruitWeek {
   private considered(year: number, rerate: number, schools: School[], user: number | null, p: Prospect): Considered {
     // Everything a list depends on is fixed for the key: the year's frozen schools, the re-rate's reads, your school.
     const key = `${year}:${rerate}:${user}`;
+    // Each school decides whether he's in its range by its own read as of the service's last list (a date fixed
+    // by the key, so the lists don't depend on when they were first worked out).
+    const ref: ISODate = rerate > 0 ? RERATE_DATES(year)[rerate - 1] : `${year}-02-15`;
     let c = this.cache.get(key);
-    if (!c) { this.cache.clear(); c = new Map(); this.cache.set(key, c); }
+    if (!c) { this.cache.clear(); this.owns.clear(); c = new Map(); this.cache.set(key, c); }
     const got = c.get(p.id);
     if (got) return got;
     const ts: number[] = [], bs: number[] = [];
+    // What he thinks of himself (his playing time, his standing) is what the service says.
     const read = p.svc!.read, q = (p.svc!.r - 0.86) / 0.04, me = { value: 0, quality: q, persona: this.persona(p.id) };
+    const pub = publicRead(p, ref, this.seed);
+    const truth = truthAt(p, ref), base = readBase(yearsOut(p, ref));
+    let pw = 0, pe = 0;
+    for (const x of [pub.stat, pub.svc]) if (x) { pw += 1 / (x.sd * x.sd); pe += x.est / (x.sd * x.sd); }
     for (let i = 0; i < schools.length; i++) {
       const t = schools[i];
-      // Schools recruit in their range; the elite programs chase anyone above it too (nobody is too good for them).
-      if (read < t.band[0] - 4 || (read > t.band[1] + 0.6 && t.band[1] < ELITE_BAND)) continue;
+      // Schools recruit in their range by their own scouts' read; the elite programs chase anyone above it too
+      // (nobody is too good for them). A school whose read can't come near its range (even six SDs off) is
+      // skipped without working the read out.
+      const lo = t.band[0] - 4, hi = t.band[1] < ELITE_BAND ? t.band[1] + 0.6 : Infinity;
+      const sd = base * scoutArea(t, p) * t.width, w = 1 / (sd * sd);
+      if ((pe + (truth + 6 * sd) * w) / (pw + w) < lo || (pe + (truth - 6 * sd) * w) / (pw + w) > hi) continue;
+      const mine = schoolRead(t, p, ref, this.seed, 0, pub).est;
+      if (mine < lo || mine > hi) continue;
       ts.push(i);
       bs.push(baseScore(t, p, read, me));
     }
@@ -629,7 +711,7 @@ export class RecruitWeek {
     }
     const room = (i: number, pos: Pos, g: number) => ((schools[i].target[pos] ?? 0) - ((g >= 3 ? have : haveJr)[i][pos] ?? 0));
     // 1. Who is in play, and how much he likes each school that would recruit him.
-    type Cand = { p: Prospect; g: number; list: Considered; u: Float64Array; z: number; lz: number; m: number };
+    type Cand = { p: Prospect; g: number; list: Considered; u: Float64Array; z: number; lz: number; m: number; pub: PublicRead };
     const cands: Cand[] = [];
     for (const p of st.prospects) {
       const g = gradeOf(p, year);
@@ -646,7 +728,7 @@ export class RecruitWeek {
       for (let k = 0; k < u.length; k++) if (u[k] > m) m = u[k];
       let z = 0;
       for (let k = 0; k < u.length; k++) { u[k] -= m; z += Math.exp(u[k]); }
-      cands.push({ p, g, list, u, z, lz: Math.log(z), m });
+      cands.push({ p, g, list, u, z, lz: Math.log(z), m, pub: publicRead(p, date, this.seed) });
     }
     // 2. Each school works its board: priority = what he'd be worth x need x its chance with him. A prospect
     // committed elsewhere is only worked by the few schools he likes best (they try to flip him).
@@ -682,7 +764,10 @@ export class RecruitWeek {
         if (open <= 0) continue;
         // What he is worth to the school, times its chance of landing him (schools offer where they can win).
         const share = Math.exp(0.8 * (c.u[k] - c.lz));
-        const worth = Math.exp((p.svc!.read - s.band[1]) / 3);
+        // Each school values him by its own scouts' read (the more time it has put in, the closer to the truth),
+        // and some by his stars: a class's ranking sells.
+        const read = schoolRead(s, p, date, this.seed, looksOf(p, s.id, s.id === o.user ? st.user.evals[p.id] ?? 0 : 0), c.pub, this.ownRead(s, p)).est;
+        const worth = Math.exp((OWN_WEIGHT * read + (1 - OWN_WEIGHT) * p.svc!.read - s.band[1]) / 3);
         const need = Math.min(2, 0.6 + 0.4 * open);
         (p.commit ? com : unc)[t].push({ c, k, pr: worth * need * share * (c.g >= 3 ? 1 : c.g === 2 ? 0.45 : 0.2) });
       }
