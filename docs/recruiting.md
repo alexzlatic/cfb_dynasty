@@ -180,7 +180,7 @@ one of his favorites, and his commitment.
 | Committed: own school's share, 10th/50th/90th pct (Oct 15) | 0% / 3% / 19% | 79% / 93% / 97% |
 | Uncommitted seniors: leader's share, 10th/50th/90th pct (Oct 15) | 5% / 9% / 18% | 7% / 16% / 46% |
 | Uncommitted rated juniors: leader's share, 90th pct | 27% | 62% |
-| Commitments to power programs flipped or reopened, Aug 24 to Dec 1 (real: 18.8% over a whole cycle, 247Sports, 2024 class) | about 2% | 14.4% |
+| Commitments to power programs flipped or reopened, Aug 24 to Dec 1 (real: 18.8% over a whole cycle, 247Sports, 2024 class) | 3.6% (all schools) | 14.4% |
 | Five-, four- and three-stars flipped or reopened | 0%, 0.7%, 4% | 15%, 17%, 15% |
 
 Before, a commitment added nothing to his interest (and a commit to a school outside his list didn't show it
