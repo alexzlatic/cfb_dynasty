@@ -165,6 +165,8 @@ export interface SeasonState {
   draft_history?: Record<string, number[]>;
   /** Your renewal talks this winter (from the end of the regular season to January 1), by player id, and your standing rule. */
   talks?: Record<number, Talk>;
+  /** Your contract offers to your players during the season (this season's pay or an extension), waiting on their answer, by player id. */
+  contract_offers?: Record<number, { amount: number; years: number; made: ISODate; answer: ISODate }>;
   renewal_rule?: RenewalRule;
   /** Next season's deals you've signed (renewals and transfers): dollars a year and seasons. */
   next_deals?: Record<number, { amount: number; years: number; locked?: boolean }>;
@@ -902,6 +904,7 @@ export class Season {
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
     this.recruitingDay(today, rep);
     if (s.talks && !s.portal) this.talksDay(today, rep);
+    if (s.contract_offers) this.contractAnswers(today, rep);
     if (s.coaching?.open) this.carouselDay(today, rep);
     if (s.portal?.year === s.year) this.portalDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
@@ -1329,6 +1332,82 @@ export class Season {
     else delete contracts[pid];
     s.contracts = contracts;
     setNil(fromNil);
+  }
+
+  /**
+   * What one of your players wants to sign for, by length (OOTP-style): a one-year change is anything that
+   * isn't a pay cut; a longer deal locks him in, so he wants at least the least he'd commit for at that
+   * length (his premium per extra season on top), half his value, and no less than he makes now. Null: he
+   * won't sign that long (or not for money alone).
+   */
+  contractDemand(pid: number): { years: number; amount: number | null; why?: string }[] {
+    const s = this.state, p = this.playerById.get(pid);
+    if (!p) return [];
+    const w = persona(s.seed, pid), pay = this.pay(pid), most = Math.min(maxYears(w), eligibilityLeft(p));
+    const out: { years: number; amount: number | null; why?: string }[] = [{ years: 1, amount: pay }];
+    let walk: number | null | undefined;
+    for (let y = 2; y <= eligibilityLeft(p); y++) {
+      if (y > most) { out.push({ years: y, amount: null, why: most === 1 ? "wants one-year deals so he can test the market" : `will sign for up to ${most} seasons` }); continue; }
+      walk ??= payFor(this.stayContext(p, pay), w, COMMIT);
+      if (walk == null) { out.push({ years: y, amount: null, why: "won't commit past this season for money alone" }); continue; }
+      out.push({ years: y, amount: roundPay(Math.max(askFor(walk, w, y), this.value(pid) * 0.5, pay)) });
+    }
+    return out;
+  }
+
+  /** Offer one of your players a deal: he answers in a day or two (your inbox). */
+  contractOffer(pid: number, amount: number, years: number): void {
+    const s = this.state, p = this.playerById.get(pid), me = s.user_team_id;
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only make offers to your own players");
+    if (s.contract_offers?.[pid]) throw new Error("he hasn't answered your last offer yet");
+    if (!(amount > 0)) throw new Error("make an offer above zero (or end his deal)");
+    if (years < 1 || years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
+    const pool = this.rosterPool(me);
+    if (pool && amount - this.pay(pid) > pool.room) throw new Error(`that's over your roster budget: ${money(Math.max(0, pool.room + this.pay(pid)))} left for him`);
+    const n = Object.keys(s.contract_offers ?? {}).length + years;
+    s.contract_offers = { ...s.contract_offers, [pid]: { amount: roundPay(amount), years, made: s.date, answer: addDays(s.date, answerDays(s.seed, pid, 101 + n)) } };
+  }
+
+  /** Take back an offer he hasn't answered. */
+  withdrawOffer(pid: number): void {
+    const s = this.state;
+    if (!s.contract_offers?.[pid]) throw new Error("no offer to him is waiting");
+    const o = { ...s.contract_offers }; delete o[pid];
+    s.contract_offers = Object.keys(o).length ? o : undefined;
+  }
+
+  /** Players answer your offers that have waited a day or two: they sign at or above what they want, else they name it. */
+  private contractAnswers(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    const offers = { ...s.contract_offers };
+    for (const [id, o] of Object.entries(offers)) {
+      if (o.answer > date) continue;
+      const pid = Number(id), p = this.playerById.get(pid);
+      delete offers[pid];
+      if (!p || p.team_id !== me) continue;
+      const name = playerName(p), len = `${o.years} season${o.years === 1 ? "" : "s"}`;
+      const d = this.contractDemand(pid).find((x) => x.years === o.years);
+      const link = [{ label: "Payroll", to: "payroll" }, { label: "His page", to: `player/${pid}` }];
+      if (!d || d.amount == null) {
+        this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} turns down your offer`, body: `He ${d?.why ?? "won't sign that deal"}.`, links: link, urgent: true }, rep);
+        continue;
+      }
+      if (o.amount >= d.amount) {
+        try {
+          this.setContract(pid, o.amount, o.years);
+          this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} accepts: ${money(o.amount)} a year for ${len}`,
+            body: o.years > 1 ? `He's locked in through ${s.year + o.years - 1}: no renegotiating until it ends.` : "His new pay starts now.", links: link }, rep);
+        } catch (e) {
+          this.mail({ date, category: "contracts", from: "Your staff", subject: `The deal with ${p.pos} ${name} fell through`, body: `He said yes, but ${(e as Error).message}.`, links: link, urgent: true }, rep);
+        }
+        continue;
+      }
+      const insulted = o.amount < 0.7 * d.amount;
+      if (insulted) s.player_morale = { ...s.player_morale, [pid]: Math.round(((s.player_morale?.[pid] ?? 0) - 0.2) * 100) / 100 };
+      this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} turns down ${money(o.amount)} for ${len}`,
+        body: `He wants ${money(d.amount)} a year for ${len}.${insulted ? " The offer insulted him, and it's hurt his mood." : ""} Make another offer on the Payroll screen.`, links: link, urgent: true }, rep);
+    }
+    s.contract_offers = Object.keys(offers).length ? offers : undefined;
   }
 
   /** He has completed a season at his school (the retention fund can pay him): not a freshman, not a first-year transfer. */

@@ -117,6 +117,9 @@ export interface PayrollPlayer {
   contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
   /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
   returning: boolean; ceiling: number;
+  /** Your players: what he wants to sign for, by length (null: he won't sign that long), and your offer waiting on his answer. */
+  demand?: { years: number; amount: number | null; why?: string }[];
+  offer?: { amount: number; years: number; made: string; answer: string } | null;
 }
 /** A school's one roster pool: the AD's revenue share (and retention fund) plus the collective's money. */
 export interface RosterPool { revenue_share: number; retention: number; collective: number; total: number; signed: number; room: number }

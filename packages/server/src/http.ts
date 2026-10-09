@@ -194,7 +194,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const pcsa = !!s.settings.pcsa;
         const players = S.roster(team).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr,
           value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, morale: s.player_morale?.[pl.id] ?? 0, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
-          gp: s.player_stats?.[pl.id]?.gp ?? 0, returning: S.returningHere(pl), ceiling: fmvCeiling(S.value(pl.id), pcsa) }));
+          gp: s.player_stats?.[pl.id]?.gp ?? 0, returning: S.returningHere(pl), ceiling: fmvCeiling(S.value(pl.id), pcsa),
+          ...(team === s.user_team_id ? { demand: S.contractDemand(pl.id), offer: s.contract_offers?.[pl.id] ?? null } : {}) }));
         const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === t.conference).map((x) => ({ team_id: x.id, ...S.rosterPool(x.id)! })).filter((x) => x.total != null)
           .sort((a, b) => b.signed - a.signed);
         return { team_id: team, year: s.year, cap: revenueCap(s.year), football_share: FOOTBALL_SHARE, pcsa, pool: S.rosterPool(team),

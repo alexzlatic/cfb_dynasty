@@ -411,6 +411,8 @@ button.danger, .link.danger { color: var(--down); }
 .nego-head b { font-size: 16px; }
 .dots { letter-spacing: 2px; color: var(--accent); }
 .offer-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.offerbox { display: flex; flex-direction: column; gap: 4px; max-width: 520px; white-space: normal; }
+.offerbox > .nowrap { white-space: normal; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .watchcounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
 .watchcounts div { border-radius: 8px; padding: 8px; color: #fff; display: flex; flex-direction: column; }
 .watchcounts div b { font-size: 26px; font-family: var(--display); line-height: 1; }

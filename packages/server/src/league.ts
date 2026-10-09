@@ -53,6 +53,9 @@ export type Action =
   | { type: "renewal_rule"; payload: Partial<RenewalRule> }
   | { type: "renewal_promise"; payload: { pid: number; on: boolean } }
   | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean; reopen?: boolean } }
+  /** Offer one of your players a deal (he answers in a day or two), or take back an offer he hasn't answered. */
+  | { type: "contract_offer"; payload: { pid: number; amount: number; years: number } }
+  | { type: "contract_withdraw"; payload: { pid: number } }
   /** Make the standing rule's renewals official (these players, or every one waiting). */
   | { type: "renewal_confirm"; payload: { pids?: number[] } }
   /** The transfer portal: bid for a player (0 withdraws), or a pitch call. */
@@ -78,7 +81,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "team_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
+  "talks", "contract_offers", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -150,7 +153,7 @@ export class League {
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
       declared: meta.declared ?? undefined, draft_pool: meta.draft_pool ?? undefined, draft: meta.draft ?? null, draft_history: meta.draft_history ?? undefined,
-      talks: meta.talks ?? undefined, renewal_rule: meta.renewal_rule ?? undefined, next_deals: meta.next_deals ?? undefined, promises: meta.promises ?? undefined,
+      talks: meta.talks ?? undefined, contract_offers: meta.contract_offers ?? undefined, renewal_rule: meta.renewal_rule ?? undefined, next_deals: meta.next_deals ?? undefined, promises: meta.promises ?? undefined,
       talked: meta.talked ?? undefined, watch: meta.watch ?? undefined, portal: meta.portal ?? undefined, moves: meta.moves ?? undefined, arrived: meta.arrived ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
@@ -324,6 +327,8 @@ export class League {
     }
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
     if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}), ...(a.payload?.reopen ? { reopen: true } : {}) } };
+    if (a.type === "contract_offer") a = { type: a.type, payload: { pid: Number(a.payload?.pid), amount: Math.round(Number(a.payload?.amount)), years: Math.max(1, Math.round(Number(a.payload?.years) || 1)) } };
+    if (a.type === "contract_withdraw") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
     if (a.type === "renewal_confirm") a = { type: a.type, payload: Array.isArray(a.payload?.pids) ? { pids: a.payload.pids.map(Number) } : {} };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab" || a.type === "hire_coach" || a.type === "fire_coach" || a.type === "answer_offer")) throw new Error("finish or leave your live game first");
@@ -378,6 +383,8 @@ export class League {
       if (a.type === "renewal_promise") this.season.setPromise(a.payload.pid, a.payload.on);
       if (a.type === "renewal_talk") this.season.setTalk(a.payload.pid, a.payload);
       if (a.type === "renewal_confirm") this.season.confirmRenewals(a.payload.pids);
+      if (a.type === "contract_offer") this.season.contractOffer(a.payload.pid, a.payload.amount, a.payload.years);
+      if (a.type === "contract_withdraw") this.season.withdrawOffer(a.payload.pid);
       if (a.type === "portal_offer") this.season.portalOffer(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "portal_pitch") this.season.portalPitch(a.payload.pid);
       if (a.type === "hire_coach") this.season.hireCoach(a.payload.role, a.payload.coach_id);

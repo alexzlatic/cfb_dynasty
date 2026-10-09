@@ -89,6 +89,16 @@ opens.
 **Promises.** You can promise a starting job next season, one per starting spot at a position. It counts as
 starting in his score. If he isn't starting by your fourth game, the promise is broken: morale drops hard.
 
+## Contract offers during the season (OOTP-style)
+
+On the Payroll screen, Change opens an offer: pick an amount and a length and you see what he wants for it.
+For this season alone he takes anything that isn't a pay cut; a longer deal locks him in, so he wants the least
+he'd commit to stay for at that length (his premium per extra season on top), at least half his value and no
+less than he makes now, and some players won't sign that long at all (`contractDemand`). Your offer waits a day
+or two; his answer comes to your inbox (Contracts): he accepts and the deal starts, or turns it down and names
+his number (an offer under 70% of it insults him and hurts his mood). You can withdraw an offer he hasn't
+answered. Ending a deal is still immediate.
+
 ## The portal window
 
 Each day every AI school works out what it still needs at each position next season: open spots on a full
