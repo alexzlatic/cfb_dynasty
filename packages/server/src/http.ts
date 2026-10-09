@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { HS_COLS, REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Pos, type Prospect, type Skill } from "@cfb/core";
+import { HS_COLS, REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, SEASON_TIME, labPace, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Pos, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, eligibilityYears, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
@@ -296,11 +296,33 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return {
           available: true, team_id: me, year: s.year, date: s.date, cls, classes,
           total: rows.length, prospects: rows.slice(offset, offset + limit), hs_cols: pos ? HS_COLS[pos as Pos] ?? [] : null,
-          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: u.time, split: time, board: u.board ?? [] },
+          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: timeSplit(u.time, true), split: time, board: u.board ?? [] },
           staff, skills, skill_names: SKILLS, hours: STAFF_HOURS, regions: REGIONS, costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS },
           home: me != null ? { lat: S.team(me).venue?.lat ?? null, lon: S.team(me).venue?.lon ?? null, state: S.team(me).venue?.state ?? null } : null,
         };
       }
+      case route === "strategy": {
+        // Every strategic call in one place: how the staff splits its week and what each share buys.
+        const st = s.recruiting, me = s.user_team_id;
+        if (!st || me == null) return { team_id: me ?? null, available: !!st };
+        const u = st.user, time = timeSplit(u.time, true), staff = S.staff(me);
+        const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
+        const film = S.scoutReport(), plan = S.scoutingPlan()!;
+        const contact = S.schools().find((t) => t.id === me)?.hours ?? 0;
+        return {
+          available: true, team_id: me, date: s.date, in_season: S.inSeason(s.date), staff_hours: STAFF_HOURS, time, offseason: timeSplit(u.time, false), usual: SEASON_TIME,
+          staff, skills, skill_names: SKILLS,
+          recruiting: { auto: u.auto, board: (u.board ?? []).length, contact_hours: Math.round(contact), hours_set: Object.values(u.hours).reduce((a, h) => a + h, 0),
+            commits: st.prospects.filter((p) => p.commit?.team === me && p.cls === s.year + 1).length },
+          scouting: { hours: plan.hours, trips: plan.trips, region_hours: plan.region_hours, assignments: plan.assignments.length, paid: u.regions.length, spend: u.spend,
+            reports: plan.reports, last_report: plan.last_report },
+          development: { pace: labPace(time.develop), plans: Object.keys(s.lab ?? {}).length, slots: LAB_SLOTS, skill: skills.development },
+          prep: { factor: S.prepFactor(), skill: skills.game_planning },
+          film: film ? { opponent: film.opponent, knowledge: film.knowledge, found: film.insights.length } : null,
+        };
+      }
+      case route === "strategy/scouting": return S.scoutingPlan() ?? { available: false };
+      case route === "strategy/reports": return { reports: s.recruiting?.user.reports ?? [], regions: REGIONS };
       case route === "recruiting/prospect": {
         if (!s.recruiting) return null;
         const p = S.prospect(Number(url.searchParams.get("pid")));

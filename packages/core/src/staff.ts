@@ -60,25 +60,47 @@ export function staffSkill(staff: StaffMember[], k: Skill): number {
 /**
  * How the staff splits its week. About 160 hours a week across the head coach and coordinators (more
  * with the bigger recruiting staffs of power programs); in season most of it goes to the next game:
- * practice and installing the plan (prep) and film of the opponent (scouting.ts).
+ * practice and installing the plan (prep), film of the opponent (scouting.ts) and the players' individual
+ * development plans (develop: hidden.ts, the pace of every plan).
  */
-export interface StaffTime { recruiting: number; scouting: number; prep: number; /** Film of the next opponent (absent in older saves). */ opponent?: number }
-export const SEASON_TIME: StaffTime = { recruiting: 0.3, scouting: 0.1, prep: 0.45, opponent: 0.15 };
-export const OFFSEASON_TIME: StaffTime = { recruiting: 0.7, scouting: 0.3, prep: 0, opponent: 0 };
+export interface StaffTime {
+  recruiting: number; scouting: number; prep: number;
+  /** Film of the next opponent (absent in older saves). */
+  opponent?: number;
+  /** Individual development plans (absent in older saves, whose practice share included them). */
+  develop?: number;
+}
+export const SEASON_TIME: StaffTime = { recruiting: 0.3, scouting: 0.1, prep: 0.35, develop: 0.1, opponent: 0.15 };
+export const OFFSEASON_TIME: StaffTime = { recruiting: 0.7, scouting: 0.3, prep: 0, develop: 0, opponent: 0 };
 export const STAFF_HOURS = 160;
 
-/** A split normalized to add up to 1 (prep and film off in the offseason, when there is no game to prepare for). */
+/**
+ * A split normalized to add up to 1. Practice, film and development plans are in-season work: out of season
+ * there is no game to prepare for and plans run at their usual pace, so the week is recruiting and scouting.
+ */
 export function timeSplit(t: StaffTime, inSeason: boolean): Required<StaffTime> {
-  const r = Math.max(0, t.recruiting), s = Math.max(0, t.scouting), p = inSeason ? Math.max(0, t.prep) : 0;
-  // A split saved before film had its own share keeps the usual film week.
+  const r = Math.max(0, t.recruiting), s = Math.max(0, t.scouting);
+  // A split saved before film had its own share keeps the usual film week; one saved before development
+  // had its own share gave it out of practice.
+  const legacy = t.develop == null;
+  const p = inSeason ? Math.max(0, t.prep - (legacy ? SEASON_TIME.develop! : 0)) : 0;
+  const d = inSeason ? Math.max(0, t.develop ?? SEASON_TIME.develop!) : 0;
   const o = inSeason ? Math.max(0, t.opponent ?? SEASON_TIME.opponent!) : 0;
-  const sum = r + s + p + o;
+  const sum = r + s + p + d + o;
   if (sum <= 0) return timeSplit(inSeason ? SEASON_TIME : OFFSEASON_TIME, inSeason);
-  return { recruiting: r / sum, scouting: s / sum, prep: p / sum, opponent: o / sum };
+  return { recruiting: r / sum, scouting: s / sum, prep: p / sum, develop: d / sum, opponent: o / sum };
 }
 
 /**
- * What a week of preparation is worth: 1 at the usual split (45% of the staff's time on practice) with an
+ * How fast your development plans work against the usual week (10% of the staff's time in season): none
+ * with no time for them, about 1.4 times as fast at double the time, 1.6 at most. Out of season, 1.
+ */
+export function labPace(developShare: number): number {
+  return Math.round(clamp(Math.sqrt(Math.max(0, developShare) / SEASON_TIME.develop!), 0, 1.6) * 1000) / 1000;
+}
+
+/**
+ * What a week of preparation is worth: 1 at the usual split (35% of the staff's time on practice) with an
  * average game-planning staff; less when the staff spends its week recruiting, more (to a point) when it
  * doesn't, and up to about 30% more or less with the staff's skill.
  */

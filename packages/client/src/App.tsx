@@ -36,6 +36,7 @@ import { PortalScreen } from "./screens/Portal.tsx";
 import { StaffScreen } from "./screens/Staff.tsx";
 import { CoachesScreen, CoachPage } from "./screens/Coaches.tsx";
 import { StatsScreen } from "./screens/Stats.tsx";
+import { StrategyScreen } from "./screens/Strategy.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -82,10 +83,12 @@ const myPage = (label: string, screen: string): NavPage => ({
 });
 const NAV: NavSection[] = [
   { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("Inbox", "inbox", ["inbox"], true), page("News", "news"), page("Calendar", "calendar")] },
-  { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
-    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Renewals", "renewals", ["renewals"], true), page("Game day", "live", ["live"], true)] },
+  { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Retention", "retention", ["retention"], true), page("Renewals", "renewals", ["renewals"], true), page("Game day", "live", ["live"], true)] },
+  // Every call about where the staff's time and money go, each with its own screen.
+  { key: "strategy", label: "Strategy", pages: [page("Overview", "strategy/overview", ["strategy"], true), page("Scouting", "strategy/scouting", ["strategy"], true),
+    page("Scout reports", "strategy/reports", ["strategy"], true), page("Development", "development", ["development"], true), page("Game plan", "plan", ["plan"], true), page("Staff", "staff", ["staff"], true)] },
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
-    page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
+    page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"])] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "stats", label: "Stats", pages: [page("Players", "stats/players", ["stats"]), page("Teams", "stats/teams", ["stats"]), page("Leaders", "stats/leaders", ["stats"]), page("History", "stats/history", ["stats"])] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Conferences", "conferences"), page("Polls", "polls"), page("Postseason", "postseason"),
@@ -197,6 +200,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "renewals" && <RenewalsScreen />}
         {screen === "portal" && <PortalScreen />}
         {screen === "staff" && <StaffScreen />}
+        {screen === "strategy" && <StrategyScreen sub={arg ?? "overview"} />}
         {screen === "coaches" && <CoachesScreen />}
         {screen === "coach" && arg && <CoachPage key={arg} cid={Number(arg)} />}
       </main>

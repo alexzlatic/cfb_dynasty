@@ -511,6 +511,24 @@ table.stats td { white-space: nowrap; }
 .scoreboard.final .sbscore { margin-left: auto; }
 .scoreboard.final .muted, .scoreboard.final .sbmeta { color: var(--muted); }
 
+/* ---- strategy ---- */
+table.strategy td { vertical-align: middle; }
+table.strategy input[type="range"] { width: 130px; vertical-align: middle; }
+.hoursbar .track { display: flex; height: 14px; background: var(--head); border-radius: 99px; overflow: hidden; margin: 4px 0 6px; }
+.hoursbar .track span, .hoursbar .key { display: inline-block; height: 100%; }
+.hoursbar .key { width: 10px; height: 10px; border-radius: 3px; vertical-align: middle; }
+.hoursbar .trips { background: var(--accent); }
+.hoursbar .regions { background: var(--team2); }
+.hoursbar .over { background: var(--down, #c0392b); }
+.bad { color: var(--down, #c0392b); }
+tr.dim td { opacity: .55; }
+input.hrs { width: 42px; text-align: center; }
+.meter.small-meter { display: inline-block; width: 110px; height: 8px; margin: 0; vertical-align: middle; }
+.meter.small-meter span { background: var(--team2); }
+.tag.gold { color: var(--ink); background: var(--mine); border-color: var(--team2); }
+.readmove { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+
+
 /* Charts (charts.tsx): categorical slots in fixed order, recessive grid, ink-colored text */
 .chart { position: relative; }
 .chart svg { width: 100%; height: auto; display: block; overflow: visible; }
