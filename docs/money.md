@@ -74,9 +74,8 @@ price (about 1% fewer fans per 1% higher), winning, rankings and the opponent. A
 turns away, so it can charge more. You set prices per home game with `set_ticket_price`.
 
 **Facilities.** Five areas are graded 1 to 5. Today's facilities are already part of every team's ratings, so
-only upgrades change anything. Your AD approves an upgrade (`request_project`) when football's surplus covers
-its first year's payment, and builds it over one to three years. AI schools start their own projects once
-seasons chain together (M3).
+only change from the day the league started counts (development speed has always followed today's weight
+room, practice fields and medical grades). See [Facility projects](#facility-projects).
 
 ## Checks
 
@@ -134,3 +133,38 @@ donors and your AD, and three tabs:
   NFL; and each season's roster budget against what's committed, with the room left.
 - **Projections:** football's budget this year and projected for the next two.
 - **History:** each past season's record, postseason, revenue, surplus, crowds, roster budget and class.
+
+## Facility projects
+
+**Money > Budget > Facilities** shows each area against the conference and the country. Pick one to see every
+project you could take to your AD before you commit (`facilities.ts`):
+
+- **Scope.** A renovation adds a grade in a year (two for a top grade) and the space stays open. A new building
+  adds two grades for less than two renovations, takes two years (three for a top grade), and the old space is
+  closed while it goes up, so the area plays a grade lower until it opens.
+- **Cost.** A top-grade facility at a power program costs about what recent ones did (`TOP_COST`): practice
+  fields and an indoor facility $60M (Mississippi State's, opening 2028), weight room $22M (Michigan's $21M
+  performance center), academic support $20M, medical $18M (Michigan's $14.8M performance and medicine
+  center), locker room $15M (Michigan's $14M expansion). Lower grades cost less (grade^1.6) and Group of Five
+  schools build smaller for about 45% (Troy's 2025 indoor facility cost $11.6M, Coastal Carolina's $20M).
+  The estimate has a range: the real cost is set when the AD approves it, usually a little over (median +4%
+  for a renovation, +7% for a new building, a wider spread for the building).
+- **Financing.** Pay cash (football pays it while it's built), borrow (bonds: football pays 8% of the cost a
+  year for 20 years at 5%, about 1.6 times the cost in all), or run a donor campaign: boosters give about 45% at
+  a power program and 30% elsewhere, more at a big name and when they're happy, and football pays the rest in
+  cash. 30% of the gift is money boosters would have given the collective, taken from its base over the build.
+- **What it does** (judgment calls; studies find facilities move development and winning only a little and
+  recruits more): development speed +8% per grade of the weight room, practice and medical average (about
+  +0.06 overall a player a year per grade in one area); injured players back 6% sooner per medical grade gained;
+  +0.1 hidden chemistry a unit per locker-room grade gained (about 0.3 points a game); recruits rate the school
+  0.1 higher per grade gained in the locker room or academic support (about 8% likelier to pick you over an
+  equal school), on top of what development speed already adds.
+- **Your AD's answer** comes in one to three days (a news item; the inbox can show it). The AD approves when
+  football's surplus covers this year's payment, facility payments in any year stay under 15% of football's
+  revenue, fewer than two projects are underway, and for a campaign, boosters are no more than 15% below normal.
+  The screen shows the AD's view before you propose.
+
+The Budget tab's charts: football's revenue, expenses and surplus by season (history and four projected
+years), where the money comes from and goes, ticket money and crowd against price for each home game, grades
+against the conference, football's surplus with and without a project, and scheduled payments by year.
+AI schools don't start projects yet.

@@ -37,6 +37,7 @@ import { KNOWN_FRONTS, drawSchemes, fitSD, inferFronts, inferOffense, schemeRati
 import { PICKS, declareChance, draftGrade, draftPrestige, runDraft, type DraftEntrant, type DraftPick } from "./draft.ts";
 import { moods, unitMood } from "./morale.ts";
 import { AREAS, budgetFor, crowd, facilitiesFor, projectCost, type Charge, type Area, type Budget, type ExpenseLine, type Facilities, type Project, type RevenueLine } from "./finance.ts";
+import { FINANCING, SCOPES, bondPayment, effectSummary, effectiveGrades, facilityEffects, overrun, payments as projectPayments, projectOption, type Financing, type Scope } from "./facilities.ts";
 import { NEUTRAL, budgetClass, nextFortune, postseasonPayout, type FinanceYear, type Fortune, type SeasonOutcome } from "./fortunes.ts";
 import { FOCUS_MAX, RESERVE, collectiveBase, fmvCeiling, review, spend, type CollectiveState, type NilDeal, type NilTarget } from "./collective.ts";
 import { FOOTBALL_SHARE, RETENTION_FUND, activeContract, dealAmount, revenueCap, aiContracts, eligibilityLeft, footballPool, playerValue, returning, rosterBudgetYear, type Contract } from "./money.ts";
@@ -143,7 +144,13 @@ export interface SeasonState {
   /** Crowds and ticket money at each home game played. */
   gate?: Record<number, { attendance: number; price: number; revenue: number }>;
   /** Your requests to the AD for facility upgrades and the answers. */
-  requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
+  requests?: { date: ISODate; area: Area; approved: boolean; reason: string; scope?: Scope; financing?: Financing }[];
+  /** Football's scheduled facility payments by fiscal year (cash while it's built, bonds for 20 years, a campaign's remainder). */
+  facility_payments?: { team_id: number; year: number; amount: number; label: string }[];
+  /** Booster money a donor campaign takes from a school's collective, by year. */
+  facility_drag?: { team_id: number; year: number; amount: number }[];
+  /** Your project proposals waiting on the AD's answer. */
+  facility_asks?: { area: Area; scope: Scope; financing: Financing; date: ISODate; answer: ISODate }[];
   /** How generated freshmen rate (measured from the opening rosters at the first rollover), and the next new player's id. */
   fresh_model?: FreshModel;
   /** Each position's median FBS starter in the league's first season, which rollover keeps fixed (rollover.ts). */
@@ -457,7 +464,7 @@ export class Season {
     }
     const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
       transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa, anchor,
-      rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
+      rate: (tid) => devRate(this.facilityGrades(tid)) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     // Conferences for next season (moves, folds, new deals), and conference schedules for any that changed.
     const rl = this.realignNext();
@@ -509,6 +516,7 @@ export class Season {
       promises: Object.fromEntries(Object.entries(s.promises ?? {}).filter(([, x]) => x.year === ny)),
       renewal_rule: s.renewal_rule, conferences: rl.conferences, tie_ins: rl.tie_ins, realign: rl.state,
       fortunes, fin_history: history, charges: (s.charges ?? []).filter((c) => c.year >= ny),
+      facility_payments: (s.facility_payments ?? []).filter((x) => x.year >= ny), facility_drag: (s.facility_drag ?? []).filter((x) => x.year >= ny), facility_asks: s.facility_asks,
       coaching: s.coaching ? this.nextCoaching(s.coaching) : undefined,
     };
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
@@ -649,24 +657,8 @@ export class Season {
       return { year: yr, budget: budgets[i], committed, est, room: budgets[i] - committed - est };
     });
     // Football's budget: this year as it stands, and the next two at the projected fortune.
+    const lines = this.budgetProjection(teamId, 2)!;
     const now = this.fortune(teamId), f = this.projectedFortune(teamId);
-    const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
-    const inputs = s.budgets![teamId];
-    const projects = (yr: number) => (s.projects ?? []).filter((p) => p.team_id === teamId && p.done > `${yr}-08-01`).reduce((a, p) => a + p.cost / p.years, 0);
-    const pcsaRet = (yr: number) => (s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t) / now.donors * f.donors * Math.pow(1.04, yr - y))) : 0);
-    const future = [y + 1, y + 2].map((yr) => {
-      const k = Math.pow(1.04, yr - y - 1);
-      const ticketsNow = b.revenue.tickets * (inputs.attendance > 0 ? Math.min(inputs.capacity, inputs.attendance / now.fans * f.fans) / inputs.attendance : 1);
-      const revenue = {
-        media: b.revenue.media, tickets: Math.round(ticketsNow), donors: Math.round((inputs.fixed.donors / now.donors * f.donors) * k + pcsaRet(yr)),
-        support: b.revenue.support, other: Math.round(inputs.fixed.other / (1 + 0.5 * (now.donors - 1)) * (1 + 0.5 * (f.donors - 1)) * k), postseason: 0,
-      };
-      const expenses = {
-        revenue_share: this.adPool(t, yr, f.ad) + pcsaRet(yr), coaches: b.expenses.coaches, operations: inputs.fixed.operations, facilities: Math.round(inputs.fixed.facilities + projects(yr)),
-        one_time: (s.charges ?? []).filter((c) => c.team_id === teamId && c.year === yr).reduce((a, c) => a + c.amount, 0),
-      };
-      return { year: yr, revenue, expenses, surplus: sum(revenue) - sum(expenses), projected: true };
-    });
     const o = this.outcome(teamId);
     return {
       team_id: teamId, year: y, mine: teamId === s.user_team_id, conference: t.conference,
@@ -674,9 +666,36 @@ export class Season {
       fortune: { now: { fans: now.fans, donors: now.donors, ad: now.ad }, next: f }, record: { w: o.wins, l: o.losses, exp: Math.round(o.exp * 10) / 10, ratio: Math.round(o.revenue_ratio * 1000) / 1000 },
       postseason: this.postseasonMoney(teamId),
       years, players, totals,
-      lines: [{ year: y, revenue: b.revenue, expenses: b.expenses, surplus: b.surplus, projected: false }, ...future],
+      lines,
       history: s.fin_history?.[teamId] ?? [],
     };
+  }
+
+  /**
+   * Football's budget this year as it stands and projected for the next `ahead` years: a typical season from
+   * here (no postseason money until it's earned), crowds and giving at next season's projected fortune, the
+   * revenue-share cap and booster giving growing 4% a year, and the facility payments already scheduled.
+   */
+  budgetProjection(teamId: number, ahead: number) {
+    const s = this.state, t = this.team(teamId), b = this.budget(teamId), inputs = s.budgets?.[teamId];
+    if (!b || !inputs) return null;
+    const y = s.year, now = this.fortune(teamId), f = this.projectedFortune(teamId);
+    const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
+    const pcsaRet = (yr: number) => (s.settings.pcsa ? Math.round(Math.min(RETENTION_FUND * FOOTBALL_SHARE, 0.6 * this.boosters(t) / now.donors * f.donors * Math.pow(1.04, yr - y))) : 0);
+    const future = Array.from({ length: ahead }, (_, i) => y + 1 + i).map((yr) => {
+      const k = Math.pow(1.04, yr - y - 1);
+      const ticketsNow = b.revenue.tickets * (inputs.attendance > 0 ? Math.min(inputs.capacity, inputs.attendance / now.fans * f.fans) / inputs.attendance : 1);
+      const revenue = {
+        media: b.revenue.media, tickets: Math.round(ticketsNow), donors: Math.round((inputs.fixed.donors / now.donors * f.donors) * k + pcsaRet(yr)),
+        support: b.revenue.support, other: Math.round(inputs.fixed.other / (1 + 0.5 * (now.donors - 1)) * (1 + 0.5 * (f.donors - 1)) * k), postseason: 0,
+      };
+      const expenses = {
+        revenue_share: this.adPool(t, yr, f.ad) + pcsaRet(yr), coaches: b.expenses.coaches, operations: inputs.fixed.operations, facilities: Math.round(inputs.fixed.facilities + this.facilityPaid(teamId, yr)),
+        one_time: (s.charges ?? []).filter((c) => c.team_id === teamId && c.year === yr).reduce((a, c) => a + c.amount, 0),
+      };
+      return { year: yr, revenue, expenses, surplus: sum(revenue) - sum(expenses), projected: true };
+    });
+    return [{ year: y, revenue: b.revenue, expenses: b.expenses, surplus: b.surplus, projected: false }, ...future];
   }
 
   /** Close the fiscal year: every program's fortune for next year and a line in its money history. */
@@ -892,6 +911,7 @@ export class Season {
     this.filmDay(today);
     this.trackDevelopment(today);
     this.adMeetings(today, rep);
+    this.facilityDay(today, rep);
     this.collectiveMonth(today);
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
     this.recruitingDay(today, rep);
@@ -1370,7 +1390,8 @@ export class Season {
       // Under the Protect College Sports Act the retention fund is booster money the school now pays itself.
       const boosters = this.boosters(t);
       if (!boosters) continue;
-      const base = Math.max(0, boosters - (s.retention?.[t.id] ?? 0));
+      // A donor campaign for a facility takes some of what boosters would have given the collective.
+      const base = Math.max(0, boosters - (s.retention?.[t.id] ?? 0) - this.campaignDrag(t.id, s.year));
       s.collectives[t.id] = { base, reserve: base };
       this.collectiveRound(t.id, base * (1 - RESERVE), s.date);
     }
@@ -1615,42 +1636,175 @@ export class Season {
     let tickets = 0;
     for (const g of this.homeGames(teamId)) tickets += g.status === "final" ? s.gate?.[g.id]?.revenue ?? 0 : this.expectedCrowd(g) * this.ticketPrice(g);
     const pm = this.postseasonMoney(teamId), postseason = pm.own + pm.pooled;
-    const projects = (s.projects ?? []).filter((p) => p.team_id === teamId).reduce((a, p) => a + p.cost / p.years, 0);
     // The retention fund is booster money given to the school instead of the collective.
     const revenue = { media: b.fixed.media, tickets: Math.round(tickets), donors: b.fixed.donors + (s.retention?.[teamId] ?? 0), support: b.fixed.support ?? 0, other: b.fixed.other, postseason };
     // Your scouts (regional scouts and evaluation trips) come out of the operations budget.
     const scouting = teamId === s.user_team_id ? s.recruiting?.user.spend ?? 0 : 0;
-    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations + scouting, facilities: Math.round(b.fixed.facilities + projects),
+    const expenses = { revenue_share: this.payroll(teamId), coaches: b.fixed.coaches, operations: b.fixed.operations + scouting, facilities: Math.round(b.fixed.facilities + this.facilityPaid(teamId, s.year)),
       one_time: (s.charges ?? []).filter((c) => c.team_id === teamId && c.year === s.year).reduce((a, c) => a + c.amount, 0) };
     const sum = (o: Record<string, number>) => Object.values(o).reduce((a, x) => a + x, 0);
     return { revenue, expenses, surplus: sum(revenue) - sum(expenses), source: b.source };
   }
 
+  // ---- facility projects (facilities.ts) ----------------------------------------------------------
+  private baseFacilities = new Map<number, Facilities | null>();
+  /** A school's facilities the day the league started (already part of its players' ratings). */
+  facilityBase(teamId: number): Facilities | undefined {
+    if (!this.baseFacilities.has(teamId)) this.baseFacilities.set(teamId, facilitiesFor(this.team(teamId), this.state.seed));
+    return this.baseFacilities.get(teamId) ?? undefined;
+  }
+  /** A school's facilities as they play today (an area whose new building is going up plays a grade lower). */
+  facilityGrades(teamId: number): Facilities | undefined {
+    const s = this.state;
+    return effectiveGrades(s.facilities?.[teamId], (s.projects ?? []).filter((p) => p.team_id === teamId));
+  }
+  /** What a school's facilities do now against the day the league started. */
+  facilityEffect(teamId: number) {
+    return facilityEffects(this.facilityGrades(teamId), this.facilityBase(teamId));
+  }
+  /** Football's facility payments in a fiscal year: scheduled payments, and projects from before financing (cost over their years). */
+  facilityPaid(teamId: number, year: number): number {
+    const s = this.state;
+    const sched = (s.facility_payments ?? []).filter((x) => x.team_id === teamId && x.year === year).reduce((a, x) => a + x.amount, 0);
+    const legacy = (s.projects ?? []).filter((p) => p.team_id === teamId && !p.financing && (year === s.year || p.done > `${year}-08-01`)).reduce((a, p) => a + p.cost / p.years, 0);
+    return Math.round(sched + legacy);
+  }
+  /** Booster money a donor campaign takes from a school's collective in a year. */
+  campaignDrag(teamId: number, year: number): number {
+    return (this.state.facility_drag ?? []).filter((x) => x.team_id === teamId && x.year === year).reduce((a, x) => a + x.amount, 0);
+  }
+
   /**
-   * Ask your athletic director to upgrade a facility one grade. The AD approves when this year's football
-   * surplus covers the first year's payment, and builds it over one to three years.
+   * How your AD weighs a project: football's surplus this year must cover this year's payment, football's
+   * facility payments in any year can't pass 15% of its revenue, no more than two projects at once, and a
+   * donor campaign needs boosters who are in the mood to give.
    */
-  requestProject(area: Area): { approved: boolean; reason: string } {
+  private adChecks(teamId: number, opt: ReturnType<typeof projectOption>, financing: Financing) {
+    const s = this.state, b = this.budget(teamId)!, f = opt.financing.find((x) => x.financing === financing)!;
+    const $ = (x: number) => `$${(x / 1e6).toFixed(1)}M`;
+    const revenue = Object.values(b.revenue).reduce((a, x) => a + x, 0);
+    const first = f.payments.find((p) => p.year === s.year)?.amount ?? 0;
+    const years = [...new Set([...f.payments.map((p) => p.year), ...(s.facility_payments ?? []).filter((x) => x.team_id === teamId).map((x) => x.year)])];
+    const peak = Math.max(0, ...years.map((y) => this.facilityPaid(teamId, y) + (f.payments.find((p) => p.year === y)?.amount ?? 0)));
+    const underway = (s.projects ?? []).filter((p) => p.team_id === teamId).length;
+    const donors = this.fortune(teamId).donors;
+    const checks = [
+      { ok: b.surplus >= first, text: `This year's payment (${$(first)}) against football's surplus (${$(b.surplus)})` },
+      { ok: peak <= 0.15 * revenue, text: `Facility payments at their peak (${$(peak)} a year) against 15% of football's revenue (${$(0.15 * revenue)})` },
+      { ok: underway < 2, text: `Projects already underway: ${underway} (the AD runs two at a time)` },
+    ];
+    if (financing === "donors") checks.push({ ok: donors >= 0.85, text: `Booster mood: ${donors >= 1 ? "+" : ""}${Math.round((donors - 1) * 100)}% (a campaign needs donors no more than 15% below normal)` });
+    return { ok: checks.every((c) => c.ok), checks };
+  }
+
+  /**
+   * Every project you could take to your AD: for each area not already being built, a renovation and (when
+   * two grades are open) a new building, each with its estimate and range, what every kind of financing costs
+   * football by year, what your AD would say today, football's surplus with and without it, and what it does
+   * on the field.
+   */
+  facilityPlans(teamId: number) {
+    const s = this.state, t = this.team(teamId), now = s.facilities?.[teamId];
+    if (!now) return null;
+    const base = this.facilityBase(teamId) ?? now, power = isPower(t), donors = this.fortune(teamId).donors;
+    const proj = this.budgetProjection(teamId, 4)!;
+    const building = new Set((s.projects ?? []).filter((p) => p.team_id === teamId).map((p) => p.area));
+    const asked = new Set((s.facility_asks ?? []).map((a) => a.area));
+    const conf = this.teams.filter((x) => x.level === "fbs" && x.conference === t.conference && s.facilities?.[x.id]);
+    const avg = (ids: Team[], a: Area) => Math.round(ids.reduce((x, y) => x + s.facilities![y.id][a], 0) / Math.max(1, ids.length) * 10) / 10;
+    const fbs = this.teams.filter((x) => x.level === "fbs" && s.facilities?.[x.id]);
+    const areas = (Object.keys(AREAS) as Area[]).map((area) => {
+      const g = now[area];
+      const options = teamId !== s.user_team_id || building.has(area) || asked.has(area) || g >= 5 ? [] : (["renovate", "build"] as const).filter((sc) => sc === "renovate" || g <= 3).map((scope) => {
+        const opt = projectOption({ area, from: g, scope, power, prestige: t.prestige ?? 0, donors, year: s.year });
+        const after = { ...now, [area]: opt.to };
+        const during = scope === "build" ? { ...now, [area]: Math.max(1, g - 1) } : now;
+        return {
+          ...opt,
+          financing: opt.financing.map((f) => ({ ...f, ad: this.adChecks(teamId, opt, f.financing),
+            surplus: proj.map((l) => ({ year: l.year, without: l.surplus, with: l.surplus - (f.payments.find((p) => p.year === l.year)?.amount ?? 0) })) })),
+          effect: effectSummary(now, after, base),
+          during: scope === "build" ? effectSummary(now, during, base) : null,
+        };
+      });
+      return { area, label: AREAS[area], grade: g, base: base[area], conference: avg(conf, area), national: avg(fbs, area),
+        rank: 1 + fbs.filter((x) => s.facilities![x.id][area] > g).length, of: fbs.length, options };
+    });
+    return {
+      areas, effects: facilityEffects(this.facilityGrades(teamId), base),
+      projects: (s.projects ?? []).filter((p) => p.team_id === teamId),
+      asks: teamId === s.user_team_id ? s.facility_asks ?? [] : [],
+      payments: (s.facility_payments ?? []).filter((x) => x.team_id === teamId),
+      drag: (s.facility_drag ?? []).filter((x) => x.team_id === teamId),
+      scopes: SCOPES, financing: FINANCING,
+    };
+  }
+
+  /** Take a project to your athletic director; the AD answers in one to three days. */
+  proposeProject(area: Area, scope: Scope, financing: Financing): void {
     const s = this.state, me = s.user_team_id;
     if (me == null || !s.facilities?.[me]) throw new Error("your school has no facilities to upgrade");
     if (!Object.hasOwn(AREAS, area)) throw new Error(`unknown area ${area}`);
-    if ((s.projects ?? []).some((p) => p.team_id === me && p.area === area)) throw new Error(`the ${AREAS[area].toLowerCase()} is already being upgraded`);
+    if (!Object.hasOwn(SCOPES, scope) || !Object.hasOwn(FINANCING, financing)) throw new Error("unknown kind of project");
+    const name = AREAS[area].toLowerCase();
+    if ((s.projects ?? []).some((p) => p.team_id === me && p.area === area)) throw new Error(`the ${name} is already being upgraded`);
+    if ((s.facility_asks ?? []).some((a) => a.area === area)) throw new Error(`your AD is still looking at the ${name} proposal`);
     const now = s.facilities[me][area];
-    if (now >= 5) throw new Error(`the ${AREAS[area].toLowerCase()} is already among the best in the country`);
-    const t = this.team(me);
-    const { cost, years } = projectCost(area, now + 1, isPower(t));
-    const surplus = this.budget(me)!.surplus;
+    if (now >= 5) throw new Error(`the ${name} is already among the best in the country`);
+    if (scope === "build" && now > 3) throw new Error(`the ${name} is one grade from the top: renovate it`);
+    const days = 1 + (mixSeed(s.seed, s.date, area, "ad-answer") % 3);
+    s.facility_asks = [...(s.facility_asks ?? []), { area, scope, financing, date: s.date, answer: addDays(s.date, days) }];
+  }
+
+  /** Your AD answers the proposals that have waited their day or three (a news item; the inbox can pick it up). */
+  private facilityDay(today: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    if (!s.facility_asks?.length) return;
+    const due = s.facility_asks.filter((a) => a.answer <= today);
+    if (!due.length) return;
+    s.facility_asks = s.facility_asks.filter((a) => a.answer > today);
+    for (const a of due) {
+      if (me == null || !s.facilities?.[me]) continue;
+      const r = this.decideProject(me, a.area, a.scope, a.financing);
+      rep.news.push(this.news(today, "facilities", r.headline, r.reason, [me]));
+    }
+  }
+
+  private decideProject(me: number, area: Area, scope: Scope, financing: Financing): { approved: boolean; headline: string; reason: string } {
+    const s = this.state, t = this.team(me), now = s.facilities![me][area];
     const c = s.career, ad = c ? `${c.ad.first} ${c.ad.last}` : "Your athletic director";
     const $ = (x: number) => `$${(x / 1e6).toFixed(1)}M`;
-    if (surplus < cost / years) {
-      const reason = `${ad} turned down the ${AREAS[area].toLowerCase()} upgrade: it costs ${$(cost)} over ${years} year(s), and football's surplus this year is ${$(surplus)}.`;
-      s.requests = [...(s.requests ?? []), { date: s.date, area, approved: false, reason }];
-      return { approved: false, reason };
+    const name = AREAS[area].toLowerCase(), what = `${scope === "build" ? "new" : "renovated"} ${name}`;
+    const record = (approved: boolean, reason: string, headline: string) => {
+      s.requests = [...(s.requests ?? []), { date: s.date, area, approved, reason, scope, financing }];
+      return { approved, headline, reason };
+    };
+    if ((s.projects ?? []).some((p) => p.team_id === me && p.area === area) || now >= 5) return record(false, `The ${name} can't be upgraded now.`, `${ad} sets aside the ${name} proposal`);
+    const opt = projectOption({ area, from: now, scope, power: isPower(t), prestige: t.prestige ?? 0, donors: this.fortune(me).donors, year: s.year });
+    const v = this.adChecks(me, opt, financing);
+    if (!v.ok) {
+      const why = v.checks.filter((x) => !x.ok).map((x) => x.text).join("; ");
+      return record(false, `${ad} turned down the ${what} (${$(opt.estimate)}, ${FINANCING[financing].label.toLowerCase()}): ${why}.`, `${ad} turns down the ${what}`);
     }
-    s.projects = [...(s.projects ?? []), { team_id: me, area, to: now + 1, cost, years, start: s.date, done: `${s.year + years}-08-01` }];
-    const reason = `${ad} approved a ${$(cost)} ${AREAS[area].toLowerCase()} upgrade to grade ${now + 1}, ready by August ${s.year + years}.`;
-    s.requests = [...(s.requests ?? []), { date: s.date, area, approved: true, reason }];
-    return { approved: true, reason };
+    // The real cost: the estimate, over or under (facilities.ts); payments follow the real cost.
+    const k = overrun(s.seed, me, area, s.year, scope), cost = Math.round(opt.estimate * k / 10_000) * 10_000;
+    const f = opt.financing.find((x) => x.financing === financing)!;
+    const gift = financing === "donors" ? Math.round(cost * (f.share ?? 0) / 10_000) * 10_000 : 0;
+    const pay = projectPayments(cost, opt.years, financing, s.year, gift);
+    s.projects = [...(s.projects ?? []), { team_id: me, area, to: opt.to, cost, years: opt.years, start: s.date, done: opt.opens, scope, financing, from: now, estimate: opt.estimate, ...(gift ? { gift } : {}) }];
+    s.facility_payments = [...(s.facility_payments ?? []), ...pay.map((p) => ({ team_id: me, year: p.year, amount: p.amount, label: `${AREAS[area]} (${FINANCING[financing].label.toLowerCase()})` }))];
+    if (gift) {
+      // Part of the gift is booster money the collective won't get while the campaign runs.
+      const per = Math.round(gift * 0.3 / opt.years / 10_000) * 10_000;
+      s.facility_drag = [...(s.facility_drag ?? []), ...Array.from({ length: opt.years }, (_, i) => ({ team_id: me, year: s.year + i, amount: per }))];
+      const col = s.collectives?.[me];
+      if (col) s.collectives = { ...s.collectives, [me]: { ...col, base: Math.max(0, col.base - per), reserve: Math.max(0, col.reserve - per) } };
+    }
+    const over = Math.round((k - 1) * 100);
+    const money = financing === "bonds" ? `football pays ${$(bondPayment(cost))} a year for 20 years` : financing === "donors" ? `boosters give ${$(gift)} and football pays ${$(cost - gift)} over ${opt.years === 1 ? "a year" : `${opt.years} years`}` : `football pays it over ${opt.years === 1 ? "a year" : `${opt.years} years`}`;
+    const reason = `${ad} approved a ${what} (grade ${opt.to}) for ${$(cost)}${over ? `, ${Math.abs(over)}% ${over > 0 ? "over" : "under"} the ${$(opt.estimate)} estimate` : ""}: ${money}. It opens in August ${opt.opens.slice(0, 4)}.` +
+      (scope === "build" ? ` Until then the old ${name} is closed and the program makes do with a grade less.` : "");
+    return record(true, reason, `${ad} approves a ${what}`);
   }
 
   private values = new Map<number, number>();
@@ -1821,7 +1975,7 @@ export class Season {
       const f: FrozenSchool = {
         prestige: (t.prestige ?? 30) + draftPrestige(s.draft_history?.[t.id]),
         win_pct: rec && rec[0] + rec[1] > 0 ? rec[0] / (rec[0] + rec[1]) : Math.max(0.1, Math.min(0.9, 0.5 + (s.preseason_power[t.id] ?? 0) / 30)),
-        development: (devRate(s.facilities?.[t.id]) - 1) * 5 + (staffSkill(staff, "development") - 50) / 100,
+        development: (devRate(this.facilityGrades(t.id)) - 1) * 5 + (staffSkill(staff, "development") - 50) / 100 + this.facilityEffect(t.id).appeal,
         fit: (staffSkill(staff, "scheme") - 50) / 100,
         band: bandOf(st.classes[t.id], fbs ? "fbs" : "fcs"),
         target: classTarget(roster, this.seed.styles?.[t.id]?.portal_share ?? 0.45, fbs ? "fbs" : "fcs"), starter,
@@ -2304,7 +2458,9 @@ export class Season {
     // FCS rosters are generated filler, with nothing true for scouts to miss; they play their ratings.
     if (!roster.length || !s.hidden_ctx || this.teamById.get(teamId)?.level === "fcs") return null;
     const lab = teamId === s.user_team_id ? s.lab : undefined;
-    const mood = s.team_mood?.[teamId];
+    const chem = this.facilityEffect(teamId).chemistry, m0 = s.team_mood?.[teamId];
+    // A better locker room than the league started with adds chemistry to both units.
+    const mood = chem ? { off: (m0?.off ?? 0) + chem, def: (m0?.def ?? 0) + chem } : m0;
     const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}|${mood ? `${mood.off},${mood.def}` : ""}`;
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
@@ -2600,7 +2756,7 @@ export class Season {
     return {
       value, pay, ratio_away: away.ratio, demand: 1 + 0.4 * Math.max(0, Math.min(1, (o - away.bar[p.pos]) / 8)),
       start_here, start_away: best.start,
-      dev_here: frozen?.development ?? (devRate(s.facilities?.[t.id]) - 1) * 5,
+      dev_here: frozen?.development ?? (devRate(this.facilityGrades(t.id)) - 1) * 5,
       fit: Math.max(-1.5, Math.min(1.5, this.hiddenOf(p).fit)),
       win_here: winTerm(me.prestige, me.win, me.tier === 0, q), win_away: winTerm(best.tier === 0 ? 70 : best.tier === 1 ? 40 : 25, 0.55, best.tier === 0, q),
       home_here: home, home_away: homeTerm(250, false),
@@ -3051,7 +3207,7 @@ export class Season {
       const home = p.home.lat != null && p.home.lon != null && t.venue?.lat != null && t.venue?.lon != null ? miles({ lat: p.home.lat, lon: p.home.lon }, { lat: t.venue.lat, lon: t.venue.lon }) : 400;
       const offer: SchoolOffer = {
         team_id: t.id, prestige: nx.prestige, power: nx.tier === 0, win_pct: nx.win, miles: home, home_state: p.home.state != null && p.home.state === t.venue?.state,
-        money: off.amount, start_chance: start, development: (devRate(s.facilities?.[t.id]) - 1) * 5, fit: 0, chemistry: 0,
+        money: off.amount, start_chance: start, development: (devRate(this.facilityGrades(t.id)) - 1) * 5, fit: 0, chemistry: 0,
         current: t.id === e.from, morale: s.player_morale?.[p.id] ?? 0,
       };
       const pitch = t.id === s.user_team_id ? 0.25 * Math.min(4, e.pitches ?? 0) : 0;
@@ -3751,15 +3907,17 @@ export class Season {
       const side = sides.find((d) => d.team_id === x.team_id)!;
       const starters = lineup(side.depth, this.playerById, side.out).slot;
       const starter = Object.values(starters).some((p) => p?.id === x.pid);
-      const inj: Injury = { pid: x.pid, team_id: x.team_id, name: x.name, pos: x.pos, game_id: g.id, date: g.date, type: x.type, days: x.days,
-        back: addDays(g.date, Math.max(1, x.days)), starter };
+      // Better medical facilities than the league started with bring players back sooner.
+      const k = this.facilityEffect(x.team_id).injury, days = k === 1 || x.days === 0 ? x.days : Math.max(1, Math.round(x.days * k));
+      const inj: Injury = { pid: x.pid, team_id: x.team_id, name: x.name, pos: x.pos, game_id: g.id, date: g.date, type: x.type, days,
+        back: addDays(g.date, Math.max(1, days)), starter };
       s.injuries!.push(inj);
       const t = this.team(x.team_id);
       const mine = s.user_team_id === x.team_id;
       // Around the league only starting quarterbacks and ranked teams' season-ending injuries make the news.
       const notable = starter && t.level === "fbs" && (x.pos === "QB" ? x.days >= 5 : x.days >= 90 && this.rankOf(t.id) != null);
       if (x.days >= 5 && (mine || notable)) {
-        rep.news.push(this.news(g.date, "injury", `${t.school} ${POSITIONS.includes(x.pos) ? x.pos : ""} ${x.name} ${injuryOutlook(x.days)}`.replace(/\s+/g, " "),
+        rep.news.push(this.news(g.date, "injury", `${t.school} ${POSITIONS.includes(x.pos) ? x.pos : ""} ${x.name} ${injuryOutlook(days)}`.replace(/\s+/g, " "),
           `${x.name} was hurt (${x.type}) against ${this.team(x.team_id === g.home_id ? g.away_id : g.home_id).school}.`, [x.team_id]));
       }
     }

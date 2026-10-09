@@ -234,7 +234,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           attendance: g.status === "final" ? s.gate?.[g.id]?.attendance ?? null : S.expectedCrowd(g),
           revenue: g.status === "final" ? s.gate?.[g.id]?.revenue ?? null : S.expectedCrowd(g) * S.ticketPrice(g),
           // What a few other prices would draw, so you can see the trade-off.
-          options: mine && g.status !== "final" ? [0.8, 1, 1.25, 1.5].map((k) => { const price = Math.round(inputs.price * k); const a = S.expectedCrowd(g, price); return { price, attendance: a, revenue: a * price }; }) : [],
+          options: g.status !== "final" ? [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2].map((k) => { const price = Math.round(inputs.price * k); const a = S.expectedCrowd(g, price); return { price, attendance: a, revenue: a * price }; }) : [],
         }));
         const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === S.teamById.get(team)!.conference).map((x) => {
           const v = S.budget(x.id)!;
@@ -243,7 +243,9 @@ export function startServer(opts: ServerOptions, port: number): Server {
         }).sort((a, b) => b.revenue - a.revenue);
         return { team_id: team, mine, year: s.year, ...b, labels: { revenue: REVENUE_LINES, expenses: EXPENSE_LINES }, usual_price: inputs.price, capacity: inputs.capacity,
           home, conference, facilities: s.facilities?.[team] ?? null, areas: AREAS, projects: (s.projects ?? []).filter((p) => p.team_id === team),
-          requests: mine ? (s.requests ?? []).slice(-5).reverse() : [] };
+          requests: mine ? (s.requests ?? []).slice(-5).reverse() : [],
+          // Football's budget projected four years ahead, its money history, and every facility project open to it.
+          lines: S.budgetProjection(team, 4), history: s.fin_history?.[team] ?? [], plans: S.facilityPlans(team) };
       }
       case route === "recruiting": {
         // A class as your staff sees it (only the prospects it knows about), filtered and sorted, and your settings.

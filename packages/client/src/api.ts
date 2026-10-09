@@ -137,7 +137,31 @@ export interface BudgetData {
   conference: { team_id: number; revenue: number; expenses: number; surplus: number }[];
   facilities: Record<string, number> | null; areas: Record<string, string>;
   projects: { area: string; to: number; cost: number; years: number; start: string; done: string }[];
-  requests: { date: string; area: string; approved: boolean; reason: string }[];
+  requests: { date: string; area: string; approved: boolean; reason: string; scope?: string; financing?: string }[];
+  lines: BudgetLine[] | null;
+  history: FinanceYear[];
+  plans: FacilityPlans | null;
+}
+export interface BudgetLine { year: number; revenue: Record<string, number>; expenses: Record<string, number>; surplus: number; projected: boolean }
+export interface FacilityEffect { dev_pct: number; ovr_per_year: number; injury_pct: number; points: number; recruit_pct: number }
+export interface FacilityFinancing {
+  financing: "cash" | "bonds" | "donors"; payments: { year: number; amount: number }[]; total: number; gift?: number; share?: number; drag?: number;
+  ad: { ok: boolean; checks: { ok: boolean; text: string }[] };
+  surplus: { year: number; without: number; with: number }[];
+}
+export interface FacilityOption {
+  area: string; label: string; scope: "renovate" | "build"; from: number; to: number; years: number; estimate: number; range: [number, number]; opens: string;
+  financing: FacilityFinancing[]; effect: FacilityEffect; during: FacilityEffect | null;
+}
+export interface FacilityPlans {
+  areas: { area: string; label: string; grade: number; base: number; conference: number; national: number; rank: number; of: number; options: FacilityOption[] }[];
+  effects: { dev: number; injury: number; chemistry: number; appeal: number };
+  projects: { area: string; to: number; cost: number; years: number; start: string; done: string; scope?: string; financing?: string; from?: number; estimate?: number; gift?: number }[];
+  asks: { area: string; scope: string; financing: string; date: string; answer: string }[];
+  payments: { year: number; amount: number; label: string }[];
+  drag: { year: number; amount: number }[];
+  scopes: Record<string, { label: string; blurb: string }>;
+  financing: Record<string, { label: string; blurb: string }>;
 }
 
 export interface ProspectRow {
