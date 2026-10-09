@@ -15,7 +15,7 @@ import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, 
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
-  askFor, lengthPremium, maxYears,
+  askFor, lengthPremium, maxYears, renewalNudge,
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
@@ -263,6 +263,8 @@ const CROWD = 10;
 const QUIT_FCS = 0.5;
 const FULL_ROOM = (ROSTER_LIMIT - 5) / Object.values(ROOM).reduce((a, b) => a + b, 0);
 /** A player's rating next season as everyone expects it (the usual year's gain, slower past his potential). */
+/** A player's season production for his position (fantasy-style points; awards.ts). */
+const scoreOf = (pos: Pos, st: StatLine) => (OFF_POS.has(pos) ? offScore(st) : DEF_POS.has(pos) ? defScore(st) : pos === "K" ? kickScore(st) : 0);
 const ovrNext = (p: RatedPlayer) => p.ovr + YEAR_GAIN[Math.max(0, Math.min(YEAR_GAIN.length - 1, Math.floor(p.years)))] * (p.hidden.potential > p.ovr ? 1 : 0.3);
 /** Winning and exposure as recruits weigh it (valuation.ts), for a player of quality q. */
 const winTerm = (prestige: number, winPct: number, power: boolean, q: number) => {
@@ -2619,11 +2621,47 @@ export class Season {
     const deal = s.next_deals?.[p.id];
     if (deal) return deal.amount;
     const c = activeContract(s.contracts?.[p.id], s.year + 1);
+    // Your players: renewing him keeps roughly all he's paid now (revenue share and NIL), nudged by his season.
+    // Only a multi-year deal he agreed to holds as it is.
+    if (p.team_id === s.user_team_id && !c?.locked) return roundPay(this.pay(p.id) * this.renewalFactor(p).factor);
     if (c) return dealAmount(c);
-    const now = this.pay(p.id), v = this.value(p.id);
+    const now = this.pay(p.id);
+    const v = this.value(p.id);
     const vNext = playerValue({ pos: p.pos, ovr: ovrNext(p), stars: p.stars, years: p.years + 1 });
     return v > 0 ? Math.round(now * vNext / v) : 0;
   }
+
+  /**
+   * How his season moves his renewal: where his production ranks among FBS players at his position (season
+   * totals, so playing time counts; linemen and punters by games played), plus a little for his honors.
+   */
+  renewalFactor(p: RatedPlayer): { factor: number; pct: number | null; honor: "all_american" | "poy" | null } {
+    const s = this.state, st = s.player_stats?.[p.id];
+    const honors = (s.awards ?? []).filter((a) => a.year === s.year && a.pid === p.id);
+    const honor = honors.some((a) => a.type === "all_american") ? "all_american" as const : honors.some((a) => a.type === "conf_poy_off" || a.type === "conf_poy_def" || a.type === "heisman") ? "poy" as const : null;
+    if (!st || st.gp <= 0) return { factor: renewalNudge(null, honor), pct: null, honor };
+    const ranks = this.statRanks();
+    const pct = ranks.byGames.has(p.pos) ? Math.min(1, st.gp / Math.max(1, ranks.games.get(p.team_id) ?? st.gp)) * 0.6
+      : (() => { const xs = ranks.scores.get(p.pos) ?? []; const me = scoreOf(p.pos, st); let lo = 0; while (lo < xs.length && xs[lo] < me) lo++; return xs.length ? lo / xs.length : 0.5; })();
+    return { factor: renewalNudge(pct, honor), pct: Math.round(pct * 100) / 100, honor };
+  }
+  private statRanks(): { scores: Map<Pos, number[]>; games: Map<number, number>; byGames: Set<Pos> } {
+    const s = this.state;
+    if (this.rankCache?.date === s.date) return this.rankCache.v;
+    const scores = new Map<Pos, number[]>(), byGames = new Set<Pos>(["OL", "P"]);
+    for (const [id, st] of Object.entries(s.player_stats ?? {})) {
+      const p = this.playerById.get(Number(id));
+      if (!p || st.gp <= 0 || byGames.has(p.pos)) continue;
+      (scores.get(p.pos) ?? scores.set(p.pos, []).get(p.pos)!).push(scoreOf(p.pos, st));
+    }
+    for (const xs of scores.values()) xs.sort((a, b) => a - b);
+    const games = new Map<number, number>();
+    for (const g of s.games) if (g.status === "final") for (const t of [g.home_id, g.away_id]) games.set(t, (games.get(t) ?? 0) + 1);
+    const v = { scores, games, byGames };
+    this.rankCache = { date: s.date, v };
+    return v;
+  }
+  private rankCache: { date: ISODate; v: { scores: Map<Pos, number[]>; games: Map<number, number>; byGames: Set<Pos> } } | null = null;
 
   /** Whether you've talked with him: until then your staff assumes his class's typical personality. */
   private known(pid: number): boolean { return this.state.talked?.[pid] != null; }
@@ -2735,7 +2773,7 @@ export class Season {
     const open = Object.values(s.talks).filter((t) => !t.outcome && t.plan?.kind === "needs_you").length;
     const signed = Object.values(s.talks).filter((t) => t.deal?.via === "rule").length;
     rep.news.push(this.news(date, "retention", `Renewal talks open: ${open} player${open === 1 ? "" : "s"} need you`,
-      `Your standing rule re-signed ${signed} players. Talks run until January 1; anyone who wants a deal and doesn't have one enters the portal on January 2.`, [me]));
+      `Your standing rule renewed ${signed} players at about their current pay: confirm them on the Renewals screen, or revoke any you'd rather send to the portal. Talks run until January 1; anyone who wants a deal and doesn't have one enters the portal on January 2.`, [me]));
   }
 
   /** A player's status, ask and walk-away number for the talks, and your staff's plan for him under the rule. */
@@ -2753,8 +2791,10 @@ export class Season {
     const v = ctx.value;
     const important = this.importance(p) <= 30;
     if (t.status === "staying" && v === 0) t.plan = { kind: "renew", amount: 0 };
-    else if (t.ask != null && t.ask <= rule.auto_up_to * v) t.plan = { kind: "renew", amount: t.ask };
-    else if (t.ask != null && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
+    // A player happy to stay is renewed at his number (roughly his pay now); the rule's cap on value is for raises.
+    else if (t.ask != null && (t.ask <= rule.auto_up_to * v || (t.status === "staying" && t.ask <= Math.max(now, rule.auto_up_to * v)))) t.plan = { kind: "renew", amount: t.ask };
+    // (A backup happy to stay at his pay isn't let go: the staff offers him what the rule allows.)
+    else if (t.ask != null && t.status !== "staying" && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
     // Otherwise the staff offers up to the rule's share of his value; if money won't keep him, he decides for himself in January.
     else t.plan = important ? { kind: "needs_you" } : { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
     return t;
@@ -2796,8 +2836,8 @@ export class Season {
       const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : dealAmount(activeContract(s.contracts?.[t.pid], s.year + 1) ?? { amount: 0, years: 0, start: 0 }));
       if (cost > room) continue;
       room -= cost;
-      // The rule signs one-year deals: a longer one is yours to negotiate.
-      talks[t.pid] = this.sign({ ...t }, amount, 1, "rule");
+      // The rule signs one-year deals (a longer one is yours to negotiate), and nothing is official until you confirm it.
+      talks[t.pid] = { ...this.sign({ ...t }, amount, 1, "rule"), pending: true };
     }
     s.talks = talks;
   }
@@ -2805,7 +2845,19 @@ export class Season {
   private sign(t: Talk, amount: number, years: number, via: NonNullable<Talk["deal"]>["via"]): Talk {
     const s = this.state;
     if (amount > 0) s.next_deals = { ...s.next_deals, [t.pid]: { amount, years, ...(years > 1 ? { locked: true } : {}) } };
-    return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined };
+    return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined, pending: undefined };
+  }
+
+  /** Make the standing rule's renewals official: these players (all pending ones by default). */
+  confirmRenewals(pids?: number[]): number {
+    const s = this.state;
+    if (!s.talks || s.portal) throw new Error("renewal talks aren't open");
+    const want = pids ? new Set(pids) : null;
+    let n = 0;
+    const talks = { ...s.talks };
+    for (const t of Object.values(talks)) if (t.pending && (!want || want.has(t.pid))) { talks[t.pid] = { ...t, pending: undefined }; n++; }
+    s.talks = talks;
+    return n;
   }
 
   /** Change your standing rule; your staff re-plans everyone still open (and the rule signs whoever it now covers). */
@@ -2847,11 +2899,18 @@ export class Season {
   }
 
   /** Let him go (he enters the portal), or put him back in your staff's hands; "mine" keeps the staff's plan off him on December 31. */
-  setTalk(pid: number, patch: { let_go?: boolean; mine?: boolean }): void {
+  setTalk(pid: number, patch: { let_go?: boolean; mine?: boolean; reopen?: boolean }): void {
     const s = this.state, t = s.talks?.[pid];
     if (!t) throw new Error("no renewal talks with him");
-    if (t.outcome === "signed") throw new Error("he's already signed");
-    const next = { ...t };
+    if (t.outcome === "signed" && !t.pending) throw new Error("he's already signed");
+    if (s.portal) throw new Error("the talks are over");
+    let next = { ...t };
+    // An unconfirmed renewal: revoke it (let him go, or reopen talks and negotiate yourself).
+    if (t.pending && (patch.let_go || patch.reopen)) {
+      const deals = { ...s.next_deals }; delete deals[pid]; s.next_deals = deals;
+      next = { ...t, pending: undefined, deal: undefined, outcome: undefined, mine: true, plan: { kind: "needs_you" } };
+    } else if (t.pending) throw new Error("confirm or revoke his renewal first");
+    if (patch.reopen && !t.pending) throw new Error("there's no renewal to reopen");
     if (patch.let_go != null) next.outcome = patch.let_go ? "let_go" : undefined;
     if (patch.mine != null) next.mine = patch.mine;
     s.talks = { ...s.talks, [pid]: next };
@@ -2893,6 +2952,10 @@ export class Season {
     const leaving = this.leavingSet(), nfl = this.nflSlots();
     // Your open talks: the staff's plan for whatever you left to it.
     if (s.talks && me != null) {
+      const pending = Object.values(s.talks).filter((t) => t.pending);
+      for (const t of pending) s.talks[t.pid] = { ...t, pending: undefined };
+      if (pending.length) rep.news.push(this.news(date, "retention", `Your staff confirmed ${pending.length} renewal${pending.length === 1 ? "" : "s"}`,
+        "Renewals your standing rule made that you hadn't confirmed are now official.", [me]));
       for (const t of Object.values(s.talks)) {
         if (t.outcome || t.status === "graduating" || t.status === "nfl" || t.status === "contract") continue;
         if (t.mine) { if (t.status === "raise") s.talks[t.pid] = { ...t, outcome: "portal" }; continue; }
@@ -3203,8 +3266,10 @@ export class Season {
     return {
       pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
       watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
-        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null, length: this.lengthView(p) } : null,
+        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null, length: this.lengthView(p), pending: !!t.pending } : null,
       pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
+      /** How his season moves his renewal, and his season's line. */
+      renewal: this.renewalFactor(p), line: s.player_stats?.[p.id] ? lineText(s.player_stats[p.id]) : "", gp: s.player_stats?.[p.id]?.gp ?? 0,
     };
   }
 

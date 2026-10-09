@@ -57,7 +57,10 @@ and number are estimates (shown as a wider range), and it only half sees his own
 
 When talks open every player you have posts a status:
 
-- **Staying:** what staying pays him now is enough; he'll commit at that.
+- **Staying:** his renewal number is enough; he'll commit at that. The renewal number is what he's paid now
+  (revenue share and NIL together), nudged by his season: where his production ranks among FBS players at his
+  position (linemen and punters by games played) moves it from -5% to +8%, an All-American adds 5% and a
+  conference player of the year 3%, and a player who didn't play takes 3% less (`renewalNudge`).
 - **Wants a raise:** money would settle him; he asks his number plus a margin (money-first players push hardest).
 - **Testing the market / Leaving:** money won't fix it (playing time, fit, home, winning or unhappiness).
 - **Weighing the NFL / Out of eligibility:** not part of the talks.
@@ -71,11 +74,17 @@ players 4, everyone else 3); an offer under 70% of his number insults him (two r
 Out of patience, he stops talking and enters the portal. There is no arbitration: with no deal by
 December 31, a player who wanted one enters on January 2.
 
-**Your standing rule** keeps you from negotiating with a hundred players: re-sign everyone asking up to
-110% of value; for the rest the staff offers up to 100%; let reserves go when they ask more than $25K and
+**Your standing rule** keeps you from negotiating with a hundred players: re-sign everyone happy to stay
+at his renewal number, and everyone else asking up to 110% of value; for the rest the staff offers up to 100%; let reserves go when they ask more than $25K and
 won't start; keep renewals under 80% of next season's budget. Your top 30 players by value always come
 to you ("Needs you"); any you don't get to get the standard offer on December 31. Tick "I'll decide" on a
 player to keep the staff's December 31 plan off him (then no deal means the portal).
+
+**Nothing the rule signs is official until you confirm it.** The Renewals screen lists every auto-renewal
+(pay now, the renewal, the change and why), the players who need a new deal, the ones heading to the portal
+and the ones leaving anyway. Confirm them all or one at a time; revoke one and he enters the portal on
+January 2, or renegotiate and talk with him yourself. Your staff confirms whatever's left when the portal
+opens.
 
 **Promises.** You can promise a starting job next season, one per starting spot at a position. It counts as
 starting in his score. If he isn't starting by your fourth game, the promise is broken: morale drops hard.
@@ -136,6 +145,7 @@ runs in about ten seconds headless.
 - **My Team > Retention:** the portal watch for every player all season (counts by level, reasons, what
   keeps him), next season's budget, and in December the talks: your standing rule, each player's status
   and number, one-click "Pay his number", and a link to his talks.
+- **My Team > Renewals:** the end-of-season screen above (Home's "Needs you" card links to it while talks are open).
 - **Player page:** a watch chip in the header and a **Future** tab: the chance he enters with its
   reasons, what keeps him, talk and promise buttons, the negotiation card (status, his number, market,
   patience, your offer and when he answers, I'll decide, let him go) and five players like him with their

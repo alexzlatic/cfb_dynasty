@@ -52,7 +52,9 @@ export type Action =
   | { type: "renewal_offer"; payload: { pid: number; amount: number; years: number } }
   | { type: "renewal_rule"; payload: Partial<RenewalRule> }
   | { type: "renewal_promise"; payload: { pid: number; on: boolean } }
-  | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean } }
+  | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean; reopen?: boolean } }
+  /** Make the standing rule's renewals official (these players, or every one waiting). */
+  | { type: "renewal_confirm"; payload: { pids?: number[] } }
   /** The transfer portal: bid for a player (0 withdraws), or a pitch call. */
   | { type: "portal_offer"; payload: { pid: number; amount: number; years: number } }
   | { type: "portal_pitch"; payload: { pid: number } }
@@ -313,7 +315,8 @@ export class League {
       a = { type: a.type, payload: r };
     }
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
-    if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
+    if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}), ...(a.payload?.reopen ? { reopen: true } : {}) } };
+    if (a.type === "renewal_confirm") a = { type: a.type, payload: Array.isArray(a.payload?.pids) ? { pids: a.payload.pids.map(Number) } : {} };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab" || a.type === "hire_coach" || a.type === "fire_coach" || a.type === "answer_offer")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -366,6 +369,7 @@ export class League {
       if (a.type === "renewal_rule") this.season.setRenewalRule(a.payload);
       if (a.type === "renewal_promise") this.season.setPromise(a.payload.pid, a.payload.on);
       if (a.type === "renewal_talk") this.season.setTalk(a.payload.pid, a.payload);
+      if (a.type === "renewal_confirm") this.season.confirmRenewals(a.payload.pids);
       if (a.type === "portal_offer") this.season.portalOffer(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "portal_pitch") this.season.portalPitch(a.payload.pid);
       if (a.type === "hire_coach") this.season.hireCoach(a.payload.role, a.payload.coach_id);

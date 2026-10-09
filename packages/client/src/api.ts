@@ -73,8 +73,12 @@ export interface TalkView {
   plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
   /** A longer deal: how much more a year he wants per extra season, the longest he'll sign (your staff's read until you talk). */
   length: { premium: number; max: number; known: boolean };
+  /** A renewal your standing rule made that waits on your confirmation. */
+  pending: boolean;
 }
-export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
+export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null;
+  /** How his season moves his renewal (factor on his pay; pct: his production's rank at his position), his season line and games. */
+  renewal: { factor: number; pct: number | null; honor: "all_american" | "poy" | null }; line: string; gp: number }
 export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
 export interface NextBudget { total: number; committed: number; deals: number; contracts: number }
 export interface RetentionData { talks_open: boolean; portal_open: boolean; rule: RenewalRule; budget: NextBudget; rows: RetentionRow[]; talks_left: number; dates: { talks: string | null; portal: string | null } }
