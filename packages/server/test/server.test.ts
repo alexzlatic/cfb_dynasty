@@ -656,3 +656,32 @@ describe("commissioner mode", () => {
     expect(r.replayed).toBe(r.original);
   }, 120_000);
 });
+
+describe("inbox", () => {
+  it("saves messages to the user team, marks them read through the action log, and keeps them through a reopen", async () => {
+    const lg = manager.create({ name: "Inbox", user_team_id: 2509, seed: 21 });
+    const m = lg.season.mail({ category: "staff", from: "Your staff", subject: "Welcome", body: "Your first message.", links: [{ label: "Team", to: "team/2509" }] });
+    expect(m?.team_ids).toEqual([2509]);
+    lg.season.mail({ category: "injuries", from: "Trainer", subject: "Hurt", body: "", urgent: true });
+    let box = await get(`/api/leagues/${lg.id}/inbox`);
+    expect(box.unread).toBe(2);
+    expect(box.messages.map((x: { subject: string }) => x.subject)).toEqual(["Hurt", "Welcome"]);
+    expect((await get(`/api/leagues/${lg.id}/inbox?category=staff`)).messages).toHaveLength(1);
+    await post(`/api/leagues/${lg.id}/actions`, { type: "inbox_read", payload: { ids: [m!.id], read: true } });
+    box = await get(`/api/leagues/${lg.id}/inbox?unread=1`);
+    expect(box.messages.map((x: { subject: string }) => x.subject)).toEqual(["Hurt"]);
+    expect((await get(`/api/leagues/${lg.id}`)).inbox_unread).toBe(1);
+    const { League } = await import("../src/league.ts");
+    const again = League.open("inbox-check", manager.path(lg.id));
+    expect(again.inbox().messages.map((x) => [x.subject, x.read])).toEqual([["Hurt", false], ["Welcome", true]]);
+    again.close();
+    // The season sends polls, your results with box scores, opponent reports and awards.
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-16" } });
+    const all = lg.inbox().messages, cats = new Set(all.map((x) => x.category));
+    for (const c of ["polls", "games", "opponent", "awards"]) expect(cats, c).toContain(c);
+    expect(all.find((x) => x.category === "games")!.links![0].to).toMatch(/^game\/\d+$/);
+    expect(all.find((x) => x.category === "polls" && x.from === "AP poll")!.subject).toMatch(/Purdue (No\. \d+|unranked)/);
+    // No user team, no inbox.
+    expect(manager.create({ name: "No inbox", user_team_id: null, seed: 3 }).season.mail({ category: "league", from: "x", subject: "x", body: "" })).toBeNull();
+  });
+});
