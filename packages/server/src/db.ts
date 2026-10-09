@@ -53,6 +53,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE polls ADD COLUMN season INTEGER;
   ALTER TABLE news ADD COLUMN season INTEGER;
   `,
+  // 5: stats history: each finished season's player lines (with who he was then) and team totals
+  `
+  CREATE TABLE player_seasons (pid INTEGER NOT NULL, year INTEGER NOT NULL, team_id INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (pid, year, team_id));
+  CREATE INDEX player_seasons_year ON player_seasons(year);
+  CREATE TABLE team_seasons (team_id INTEGER NOT NULL, year INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (team_id, year));
+  `,
 ];
 
 export function openDb(path: string): DatabaseSync {

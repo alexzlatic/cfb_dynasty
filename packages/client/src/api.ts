@@ -1,6 +1,6 @@
-import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase } from "@cfb/core";
+import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, TeamSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
-export type { ConferenceDef, ConferenceSetup, TieIns, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
+export type { PlayerSeason, TeamSeason, ConferenceDef, ConferenceSetup, TieIns, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
 export type ConfMove = { team_id: number; from: string; to: string; announced: number; effective: number; fee: number; reason: string };
 export type ConferencesView = {
   conferences: ConferenceDef[]; tie_ins: TieIns; champs: Record<string, number>; year: number; mode: Settings["realignment"]; commissioner: boolean; can_edit: boolean;
@@ -28,6 +28,16 @@ export interface StaffData {
 export interface CoachesData { year: number; open: boolean; close: string; openings: Opening[]; moves: CoachMove[]; head_coaches: (CoachView & { hot: number | null })[]; past_years: number[] }
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
+/** A row of the Stats section: a player's season line and his team's games (`tgp`, for qualifying); past seasons have no ratings. */
+export type StatsPlayer = PlayerSeason & { pid: number; name: string; pos: string; class: string; years?: number; ovr?: number; tgp: number };
+/** A past season at a glance: champion, Heisman, your season and the national leader in each key stat. */
+export interface SeasonHistory {
+  year: number; champion: number | null; heisman: { pid: number; name: string; pos: string; team_id: number } | null; playoff: number[];
+  user: { team_id: number; w: number; l: number; rank: number | null } | null;
+  leaders: Record<string, { pid: number; name: string; pos: string; team_id: number; value: number } | null>;
+}
+/** A team's season: its box score totals (`off`) and its opponents' (`def`). */
+export type StatsTeam = TeamSeason & { team_id: number };
 export type LiveResult = LiveView & { since: number; result?: Game };
 
 export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
@@ -77,6 +87,8 @@ export interface PortalRow {
   from: number; entered: string; reasons: string[]; ask: number; offers: number; status: "open" | "committed" | "none"; to: number | null;
   top: { team_id: number; share: number }[]; mine: { amount: number; years: number } | null; pitches: number; costs_season: boolean;
   offers_list: { team_id: number; amount: number | null; years: number; date: string }[]; pitched_today: boolean;
+  /** His stats in the season he's leaving. */
+  stats: PlayerSeason | null;
 }
 export interface PortalNeed { spots: number; starter: boolean; floor: number }
 export interface PortalData { year: number | null; open: boolean; window: string | null; entries: PortalRow[]; needs: Record<string, PortalNeed>; budget: NextBudget | null; offered: number; pitches_left: number }
@@ -227,6 +239,11 @@ export const api = {
   collective: (id: string, team?: number) => req<CollectiveView>(`/api/leagues/${id}/collective` + (team != null ? `?team=${team}` : "")),
   payroll: (id: string, team?: number) => req<PayrollView>(`/api/leagues/${id}/payroll` + (team != null ? `?team=${team}` : "")),
   development: (id: string) => req<DevelopmentView>(`/api/leagues/${id}/development`),
+  statYears: (id: string) => req<number[]>(`/api/leagues/${id}/stats/years`),
+  statPlayers: (id: string, q: Record<string, string> = {}) => req<StatsPlayer[]>(`/api/leagues/${id}/stats/players?` + new URLSearchParams(q)),
+  statTeams: (id: string, q: Record<string, string> = {}) => req<StatsTeam[]>(`/api/leagues/${id}/stats/teams?` + new URLSearchParams(q)),
+  statHistory: (id: string) => req<SeasonHistory[]>(`/api/leagues/${id}/stats/history`),
+  teamHistory: (id: string, tid: number) => req<(StatsTeam & { year: number; final_rank: number | null; champion: boolean })[]>(`/api/leagues/${id}/stats/team-history?team=${tid}`),
   leaders: (id: string) => req<Record<string, StatRow[]>>(`/api/leagues/${id}/leaders`),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
@@ -235,7 +252,7 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
+    season: PlayerSeason | null; career: (PlayerSeason & { year: number })[]; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
     potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),

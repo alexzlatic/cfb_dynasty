@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
-import { useSort } from "../sort.tsx";
+import { useSort, type Col } from "../sort.tsx";
+import { StatsTable, catsWith, sumLines } from "../stats.tsx";
 import { ATTR_LABELS, ATTRS, fromZ, type Pos } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type GameRow, type Injury, type PersonaView, type RatedPlayer } from "../api.ts";
+import { api, type DepthChart, type GameRow, type Injury, type PersonaView, type PlayerSeason, type RatedPlayer } from "../api.ts";
 import { Dial, DualBar } from "./ratings.tsx";
 import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
@@ -183,7 +184,10 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
           </div>
         </div>
       )}
-      {tab === "stats" && <GameLog log={log} />}
+      {tab === "stats" && <>
+        <CareerStats rows={[...data.career, ...(data.season ? [{ ...data.season, year: state.year }] : [])]} />
+        <GameLog log={log} />
+      </>}
       {tab === "future" && (data.portal ? <PortalCard row={data.portal} /> : data.future && <FutureTab f={data.future} />)}
       {tab === "bio" && (
         <div className="cols even">
@@ -216,6 +220,28 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
         </div>
       )}
     </div>
+  );
+}
+
+type CareerRow = PlayerSeason & { year: number; total?: boolean };
+
+/** Season by season, every category he has a line in, with his career totals at the bottom. */
+function CareerStats({ rows }: { rows: CareerRow[] }) {
+  const { id, team } = useLeague();
+  const [perGame, setPerGame] = useState(false);
+  const all = useMemo(() => rows.length > 1 ? [...rows, { ...(sumLines(rows) as PlayerSeason), team_id: -1, year: 0, total: true }] : rows, [rows]);
+  // Scrimmage repeats rushing for a player with no catches.
+  const cats = catsWith(rows).filter((c) => c.key !== "scrimmage" || rows.some((r) => r.rec));
+  if (!cats.length) return null;
+  const lead: Col<CareerRow>[] = [
+    { key: "year", label: "Season", cell: (r) => (r.total ? <b>Career</b> : r.year), by: (r) => (r.total ? null : r.year), asc: true },
+    { key: "team", label: "Team", cell: (r) => (r.total ? "" : <a className="nowrap" href={`#/l/${id}/team/${r.team_id}`}><Logo team={team(r.team_id)} size={16} /> {team(r.team_id)?.abbr}</a>) },
+  ];
+  return (
+    <Panel title="Season by season" right={<span className="seg small" style={{ marginBottom: 0 }}><button className={!perGame ? "on" : ""} onClick={() => setPerGame(false)}>Totals</button><button className={perGame ? "on" : ""} onClick={() => setPerGame(true)}>Per game</button></span>}>
+      {cats.map((c) => <div key={c.key}><h4>{c.label}</h4>
+        <StatsTable rows={all} line={(r) => r} cat={c} lead={lead} rowKey={(r) => (r.total ? "total" : `${r.year}-${r.team_id}`)} rowClass={(r) => (r.total ? "total" : undefined)} rank={false} keepOrder perGame={perGame} /></div>)}
+    </Panel>
   );
 }
 

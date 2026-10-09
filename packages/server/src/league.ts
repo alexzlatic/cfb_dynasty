@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
+  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
 } from "@cfb/core";
 import type { TeamRatings } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -71,7 +71,7 @@ export type Push =
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
-  "player_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
+  "player_stats", "team_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
   "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
@@ -165,7 +165,7 @@ export class League {
     lg.season = new Season(state, { teams, ratings, players, finances: seed?.finances, styles: seed?.styles, recruiting: seed?.recruiting, coaches: lg.coaches() } as SeedBundle);
     // Leagues saved before season stats and careers: rebuild stats from the box scores, and start the
     // career the way a new league would (as the school's real head coach).
-    if (!("player_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));
+    if (!("player_stats" in meta) || !("team_stats" in meta)) lg.season.rebuildStats(all<GameDetail>("SELECT data FROM game_details"));
     // Leagues saved before the carousel: every coach starts where the league's seed put him, you among them.
     if (!meta.coaching) {
       const c = lg.season.state.career;
@@ -388,6 +388,14 @@ export class League {
   /** Roll the league into its next season (inside an action's transaction): rosters, schedule, calendar. */
   private nextSeason(): void {
     const db = this.db, old = this.season.state;
+    // Last season's stats go into the history before the season's state is replaced.
+    const ps = db.prepare("INSERT OR REPLACE INTO player_seasons (pid, year, team_id, data) VALUES (?, ?, ?, ?)");
+    for (const [pid, st] of Object.entries(old.player_stats ?? {})) {
+      const p = this.season.playerById.get(Number(pid));
+      ps.run(Number(pid), old.year, st.team_id, j({ ...st, name: p ? playerName(p) : "", pos: p?.pos ?? "", class: p?.class ?? "" }));
+    }
+    const ts = db.prepare("INSERT OR REPLACE INTO team_seasons (team_id, year, data) VALUES (?, ?, ?)");
+    for (const [tid, st] of Object.entries(old.team_stats ?? {})) ts.run(Number(tid), old.year, j(st));
     const { next, left } = this.season.nextSeason(this.coaches());
     const s = next.state;
     // Last season's rows stay in the file under its year; what's still ahead on the calendar carries over.

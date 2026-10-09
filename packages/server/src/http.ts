@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
-import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
@@ -339,6 +339,57 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const KEYS = ["pass_yds", "pass_td", "rush_yds", "rush_td", "rec", "rec_yds", "rec_td", "tkl", "tfl", "sacks", "def_int", "pd", "ff", "fgm"] as const;
         return Object.fromEntries(KEYS.map((k) => [k, rows.filter((r) => (r[k] ?? 0) > 0).sort((a, b) => (b[k] ?? 0) - (a[k] ?? 0) || a.pid - b.pid).slice(0, 10)]));
       }
+      case route === "stats/years": {
+        const past = (lg.db.prepare("SELECT DISTINCT year FROM team_seasons ORDER BY year DESC").all() as { year: number }[]).map((r) => r.year);
+        return [s.year, ...past.filter((y) => y !== s.year)];
+      }
+      case route === "stats/players": {
+        // Every player with a stat line (not just games played), this season or a past one; ?team= one school, ?level= fbs (default), fcs or all.
+        const year = Number(url.searchParams.get("year") ?? s.year), team = url.searchParams.get("team"), level = url.searchParams.get("level") ?? "fbs";
+        const ok = new Set(S.teams.filter((t) => level === "all" || t.level === level || team != null).map((t) => t.id));
+        const keep = (st: PlayerSeason) => (team == null ? ok.has(st.team_id) : st.team_id === Number(team)) && Object.keys(st).some((k) => k !== "team_id" && k !== "gp");
+        if (year === s.year) {
+          return Object.entries(s.player_stats ?? {}).filter(([, st]) => keep(st)).flatMap(([pid, st]) => {
+            const r = statRow(Number(pid), st);
+            return r ? [{ ...r, tgp: s.team_stats?.[st.team_id]?.gp ?? st.gp }] : [];
+          });
+        }
+        const tgp = new Map((lg.db.prepare("SELECT team_id, data FROM team_seasons WHERE year = ?").all(year) as { team_id: number; data: string }[]).map((r) => [r.team_id, (JSON.parse(r.data) as TeamSeason).gp]));
+        return (lg.db.prepare("SELECT pid, data FROM player_seasons WHERE year = ?").all(year) as { pid: number; data: string }[]).flatMap((r) => {
+          const st = JSON.parse(r.data) as PlayerSeason & { name: string; pos: string; class: string };
+          return keep(st) ? [{ ...st, pid: r.pid, tgp: tgp.get(st.team_id) ?? st.gp }] : [];
+        });
+      }
+      case route === "stats/history": {
+        // Past seasons, newest first: the champion, the Heisman and the national leader in each key stat.
+        const KEYS = ["pass_yds", "pass_td", "rush_yds", "rush_td", "rec", "rec_yds", "tkl", "sacks", "def_int"] as const;
+        const fbs = new Set(S.teams.filter((t) => t.level === "fbs").map((t) => t.id));
+        return [...(s.past ?? [])].sort((a, b) => b.year - a.year).map((p) => {
+          const rows = (lg.db.prepare("SELECT pid, data FROM player_seasons WHERE year = ?").all(p.year) as { pid: number; data: string }[])
+            .map((r) => ({ pid: r.pid, ...(JSON.parse(r.data) as PlayerSeason & { name: string; pos: string }) })).filter((r) => fbs.has(r.team_id));
+          const leaders = Object.fromEntries(KEYS.map((k) => {
+            const top = rows.reduce<(typeof rows)[number] | null>((a, r) => ((r[k] ?? 0) > (a?.[k] ?? 0) ? r : a), null);
+            return [k, top ? { pid: top.pid, name: top.name, pos: top.pos, team_id: top.team_id, value: top[k] ?? 0 } : null];
+          }));
+          return { year: p.year, champion: p.champion, heisman: p.heisman, user: p.user, playoff: p.playoff ?? [], leaders };
+        });
+      }
+      case route === "stats/team-history": {
+        // One school's seasons, oldest first, this season last.
+        const tid = Number(url.searchParams.get("team"));
+        const past = (lg.db.prepare("SELECT year, data FROM team_seasons WHERE team_id = ? ORDER BY year").all(tid) as { year: number; data: string }[])
+          .map((r) => ({ year: r.year, ...(JSON.parse(r.data) as TeamSeason) }));
+        const now = s.team_stats?.[tid];
+        const rank = new Map((s.past ?? []).map((p) => [p.year, p.top25.indexOf(tid) + 1 || null]));
+        return [...past, ...(now ? [{ year: s.year, ...now }] : [])].map((x) => ({ ...x, team_id: tid, final_rank: rank.get(x.year) ?? null, champion: (s.past ?? []).find((p) => p.year === x.year)?.champion === tid }));
+      }
+      case route === "stats/teams": {
+        const year = Number(url.searchParams.get("year") ?? s.year), level = url.searchParams.get("level") ?? "fbs";
+        const ok = new Set(S.teams.filter((t) => level === "all" || t.level === level).map((t) => t.id));
+        const rows: [number, TeamSeason][] = year === s.year ? Object.entries(s.team_stats ?? {}).map(([k, x]) => [Number(k), x])
+          : (lg.db.prepare("SELECT team_id, data FROM team_seasons WHERE year = ?").all(year) as { team_id: number; data: string }[]).map((r) => [r.team_id, JSON.parse(r.data)]);
+        return rows.filter(([tid, x]) => ok.has(tid) && x.gp > 0).map(([team_id, x]) => ({ team_id, ...x }));
+      }
       case route === "actions" && req.method === "POST": {
         const a = (await body(req)) as Action;
         const reps = lg.apply(a, url.searchParams.get("user"));
@@ -420,7 +471,11 @@ export function startServer(opts: ServerOptions, port: number): Server {
           return Object.keys(line).length || snaps ? [{ game: gameRow(g), line, snaps: snaps ?? 0 }] : [];
         });
         return { player: pl, team: S.team(pl.team_id), slots, log, persona: S.personaRead(pl.id), potential: S.scoutedPotential(pl), injury: S.injuryOf(pl.id), injuries: (s.injuries ?? []).filter((i) => i.pid === pl.id),
-          season: s.player_stats?.[pl.id] ?? null, awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
+          season: s.player_stats?.[pl.id] ?? null,
+          // Past seasons' lines (from the stats history), oldest first.
+          career: (lg.db.prepare("SELECT year, team_id, data FROM player_seasons WHERE pid = ? ORDER BY year").all(pl.id) as { year: number; team_id: number; data: string }[])
+            .map((r) => ({ ...(JSON.parse(r.data) as PlayerSeason), year: r.year, team_id: r.team_id })),
+          awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
           redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
           // Your staff's read on your own players (development so far, traits, his plan).
           staff: pl.team_id === s.user_team_id ? (() => {

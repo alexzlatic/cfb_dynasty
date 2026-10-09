@@ -105,6 +105,18 @@ describe("replay gate", () => {
     expect(again.digest()).toBe(lg.digest());
     expect(again.season.roster(251).map((p) => [p.id, p.ovr, p.class])).toEqual(lg.season.roster(251).map((p) => [p.id, p.ovr, p.class]));
     expect((lg.db.prepare("SELECT COUNT(*) AS n FROM games WHERE season = 2026").get() as { n: number }).n).toBe(old.state.games.length);
+    // Last season's stats stay too: every player line and team total, under 2026.
+    expect((lg.db.prepare("SELECT COUNT(*) AS n FROM player_seasons WHERE year = 2026").get() as { n: number }).n).toBe(Object.keys(old.state.player_stats!).length);
+    expect(JSON.parse((lg.db.prepare("SELECT data FROM team_seasons WHERE year = 2026 AND team_id = 251").get() as { data: string }).data).gp).toBe(old.state.team_stats![251].gp);
+    expect(await get(`/api/leagues/${lg.id}/stats/years`)).toEqual([2027, 2026]);
+    const qb = (await get(`/api/leagues/${lg.id}/stats/players?year=2026&team=251`) as { pid: number; pass_yds?: number; name: string }[]).sort((a, b) => (b.pass_yds ?? 0) - (a.pass_yds ?? 0))[0];
+    expect(qb.pass_yds).toBe(old.state.player_stats![qb.pid].pass_yds);
+    expect(qb.name).not.toBe("");
+    const hist = await get(`/api/leagues/${lg.id}/stats/history`);
+    expect(hist[0]).toMatchObject({ year: 2026, champion: champ });
+    expect(hist[0].leaders.pass_yds.value).toBeGreaterThan(3000);
+    const years = await get(`/api/leagues/${lg.id}/stats/team-history?team=251`);
+    expect(years.map((y: { year: number }) => y.year)).toEqual([2026]);
     again.apply({ type: "sim", payload: { kind: "date", date: "2027-09-15" } });
     lg.apply({ type: "sim", payload: { kind: "date", date: "2027-09-15" } });
     expect(again.digest()).toBe(lg.digest());
@@ -323,16 +335,37 @@ describe("career and season polish", () => {
     again.close();
   }, 240_000);
 
+  it("serves season stats: every player line, team totals and opponents' totals", async () => {
+    const lg = manager.create({ name: "Stats", user_team_id: 2509, seed: 13 });
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-21" } });
+    const s = lg.season.state;
+    const teams = await getR(`/api/leagues/${lg.id}/stats/teams`) as { team_id: number; gp: number; w: number; l: number; pf: number; pa: number; off: Record<string, number>; def: Record<string, number> }[];
+    const fin = s.games.filter((g) => g.status === "final");
+    const me = teams.find((t) => t.team_id === 2509)!;
+    const mine = fin.filter((g) => g.home_id === 2509 || g.away_id === 2509);
+    expect(me.gp).toBe(mine.length);
+    expect(me.pf).toBe(mine.reduce((a, g) => a + (g.home_id === 2509 ? g.home_score! : g.away_score!), 0));
+    expect(me.w + me.l).toBe(me.gp);
+    // One team's offense is its opponent's defense.
+    const g = mine[0], opp = g.home_id === 2509 ? g.away_id : g.home_id;
+    if (lg.season.team(opp).level === "fbs") expect(teams.find((t) => t.team_id === opp)!.def.rush_yards).toBeGreaterThan(0);
+    expect(teams.every((t) => lg.season.team(t.team_id).level === "fbs")).toBe(true);
+    const players = await getR(`/api/leagues/${lg.id}/stats/players?team=2509`) as { pid: number; gp: number; tgp: number; team_id: number }[];
+    expect(players.length).toBeGreaterThan(15);
+    expect(players.every((p) => p.team_id === 2509 && p.tgp === me.gp && p.gp <= p.tgp)).toBe(true);
+    expect((await getR(`/api/leagues/${lg.id}/players/${players[0].pid}`)).career).toEqual([]);
+  }, 120_000);
   it("a league saved before stats and careers rebuilds stats from its box scores and starts the real coach's career", async () => {
     const lg = manager.create({ name: "Pre-career save", user_team_id: 2509, seed: 8 });
     lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-20" } });
-    lg.db.exec("DELETE FROM meta WHERE key IN ('player_stats', 'award_week', 'awards', 'redshirts', 'career')");
+    lg.db.exec("DELETE FROM meta WHERE key IN ('player_stats', 'team_stats', 'award_week', 'awards', 'redshirts', 'career')");
     const { League } = await import("../src/league.ts");
     const again = League.open("pre-career", manager.path(lg.id));
     const was = lg.season.state.player_stats!, now = again.season.state.player_stats!;
     const qb = Object.entries(was).filter(([, x]) => x.team_id === 2509).sort((a, b) => (b[1].pass_yds ?? 0) - (a[1].pass_yds ?? 0))[0];
     expect(now[Number(qb[0])].pass_yds).toBe(qb[1].pass_yds);
     expect(now[Number(qb[0])].gp).toBe(qb[1].gp);
+    expect(again.season.state.team_stats).toEqual(lg.season.state.team_stats);
     expect(again.season.state.career).toMatchObject({ mode: "real", team_id: 2509 });
     expect(again.season.state.career!.coach.reputation).toBeGreaterThan(30);
     again.close();
