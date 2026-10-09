@@ -1,4 +1,4 @@
-import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, TeamSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase } from "@cfb/core";
+import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, TeamSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase, BoxRow, LiveBox } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
 export type { PlayerSeason, TeamSeason, ConferenceDef, ConferenceSetup, TieIns, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
 export type ConfMove = { team_id: number; from: string; to: string; announced: number; effective: number; fee: number; reason: string };
@@ -40,7 +40,7 @@ export interface SeasonHistory {
 export type StatsTeam = TeamSeason & { team_id: number };
 export type LiveResult = LiveView & { since: number; result?: Game };
 
-export type { CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
+export type { BoxRow, LiveBox, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, PlayoffState };
 export type WriterProfile = Omit<Writer, "voter"> & { homer?: number };
 export type GameRow = Game & { home_rank: number | null; away_rank: number | null };
 export type UnitRead = { development: number; fit: number; chemistry: number };
@@ -257,7 +257,7 @@ export const api = {
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
   schedule: (id: string, q: Record<string, string>) => req<GameRow[]>(`/api/leagues/${id}/schedule?` + new URLSearchParams(q)),
-  game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; defenders: Record<string, { name: string; pos: string; team_id: number } | null> }>(`/api/leagues/${id}/games/${gid}`),
+  game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; box: { home: BoxRow[]; away: BoxRow[] } | null }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
   polls: (id: string) => req<Poll[]>(`/api/leagues/${id}/polls`),
   news: (id: string, q: Record<string, string> = {}) => req<NewsItem[]>(`/api/leagues/${id}/news?` + new URLSearchParams({ limit: "300", ...q })),
@@ -265,6 +265,7 @@ export const api = {
   writer: (id: string, wid: number) => req<{ writer: WriterProfile; ballots: { date: string; team_ids: number[] }[]; stories: NewsItem[] }>(`/api/leagues/${id}/writers/${wid}`),
   ballots: (id: string, date: string) => req<{ writer_id: number; team_ids: number[] }[]>(`/api/leagues/${id}/ballots/${date}`),
   calendar: (id: string, from: string, to: string) => req<{ date: string; events: CalEvent[] }>(`/api/leagues/${id}/calendar?from=${from}&to=${to}`),
+  liveBox: (id: string, at: number) => req<LiveBox | null>(`/api/leagues/${id}/live/box?at=${at}`),
   live: (id: string, since = 0) => req<LiveResult | null>(`/api/leagues/${id}/live?since=${since}`),
   liveStart: (id: string, mode: Partial<LiveMode> = {}) => req<LiveResult>(`/api/leagues/${id}/live/start`, { method: "POST", body: JSON.stringify({ mode }) }),
   liveCall: (id: string, call: UserCall, since: number, to_end = false) => req<LiveResult>(`/api/leagues/${id}/live/call`, { method: "POST", body: JSON.stringify({ call, since, to_end }) }),

@@ -494,3 +494,16 @@ table.stats td.lead { font-weight: 700; }
 table.stats th.lead { color: var(--ink); }
 table.stats td { white-space: nowrap; }
 .stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0 14px; align-items: start; }
+
+/* Box scores: categories stacked down the page, each team's table under its name. */
+.boxscore .boxteam { max-width: 520px; }
+.boxteam-cat + .boxteam-cat { margin-top: 12px; }
+.boxteam-name { font-weight: 600; margin: 2px 0 4px; display: flex; align-items: center; gap: 6px; }
+/* Fixed columns so both teams' tables in a category line up. */
+.boxteam-cat table.stats { table-layout: fixed; }
+.boxteam-cat table.stats th:first-child { width: 34%; }
+/* A finished game's header: two team tiles over the line score (the live screen's dark scoreboard rules come later in this file). */
+.scoreboard.final { grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; background: none; color: var(--ink); padding: 0; }
+.scoreboard.final .sbteam { padding: 12px 16px; border-radius: 8px; }
+.scoreboard.final .sbscore { margin-left: auto; }
+.scoreboard.final .muted, .scoreboard.final .sbmeta { color: var(--muted); }

@@ -27,6 +27,7 @@ import {
 import { ATTRS, fromZ, overall, z as toZ, type Pos, type RatedPlayer } from "../src/players.ts";
 import { mixSeed } from "../src/hash.ts";
 import { packPlayer } from "../src/seed.ts";
+import { seedPotential } from "../src/rollover.ts";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const SEASON = Number(process.argv[2] || 2026);
@@ -315,9 +316,10 @@ for (const w of work) {
     toughness: fromZ(rng.gauss(0, 0.8)),
     discipline: p.pos === "OL" ? p.attrs.discipline : fromZ(rng.gauss(0, 0.8)),
   };
-  // Potential: where the player is expected to top out, from age and recruiting.
-  const growth = Math.max(0, 1.4 - 0.35 * p.years) + 0.25 * Math.max(0, rz) + rng.gauss(0, 0.35);
-  p.hidden = { potential: fromZ(prior + Math.max(0, growth) + 0.3), work_ethic: fromZ(rng.gauss(0, 1)) };
+  // Potential is set from his final overall once the team anchor has moved it (below). The draw that
+  // used to place it stays so work ethic keeps its value.
+  rng.gauss(0, 1);
+  p.hidden = { potential: 0, work_ethic: fromZ(rng.gauss(0, 1)) };
 
   // Tendencies.
   const l = stats.get(w.id)?.line ?? {};
@@ -466,6 +468,8 @@ for (const [tid, list] of Object.entries(rosters)) {
   const byId = new Map(ps.map((p) => [p.id, p]));
   anchor(prior, lineup(withRealQb(autoDepth(ps), Number(tid)), byId));
   for (const p of ps) p.ovr = overall(p.pos, p.attrs);
+  // Where each player tops out: room above his own overall by age, so young starters keep theirs.
+  for (const p of ps) p.hidden.potential = seedPotential(p, SEASON);
   const depth = withRealQb(autoDepth(ps), Number(tid));
   const l = lineup(depth, byId);
   const scheme = schemeFor(prior, l);

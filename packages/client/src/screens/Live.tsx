@@ -5,6 +5,7 @@ import type { PlayRecord } from "@cfb/engine";
 import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { FieldView } from "./Field.tsx";
+import { LiveBoxPanel } from "./BoxScore.tsx";
 
 /** Milliseconds per snap at each pace; the rest of the log (timeouts, subs, kicks after scores) goes quicker. */
 const PACE: Record<string, number> = { instant: 0, fast: 1300, slow: 2600 };
@@ -181,6 +182,7 @@ export function LiveScreen() {
       {err && <p className="error">{err}</p>}
       <div className="cols">
         <div>
+          {H && A && <LiveBoxPanel home={H} away={A} at={listed} />}
           <Panel title="Play-by-play">
             <table className="grid pbp"><tbody>
               {plays.slice(0, listed).slice(-60).reverse().map((p, i) => (

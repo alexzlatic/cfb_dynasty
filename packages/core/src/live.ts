@@ -1,6 +1,7 @@
-import type { ClockPlay, DecisionAnswer, DecisionRequest, FourthDownCall, GameSim, PlayRecord, Tempo } from "@cfb/engine";
+import type { ClockPlay, DecisionAnswer, DecisionRequest, FourthDownCall, GameSim, PlayRecord, TeamBox, Tempo } from "@cfb/engine";
 import { Caller, DEF_CALLS, OFF_CALLS, applyClock, isClockPlay, isDefCall, isOffCall, type Adjustment, type ClockEvent, type DefCall, type OffCall, type UserCall } from "./calls.ts";
-import type { GameDay, SidelineSlot } from "./gameday.ts";
+import type { DefLine, GameDay, SidelineSlot } from "./gameday.ts";
+import type { BoxRow } from "./awards.ts";
 import { SLOT_POS, type DepthChart, type Slot } from "./players.ts";
 import type { GameSub, Season } from "./season.ts";
 import type { Game } from "./types.ts";
@@ -39,6 +40,14 @@ export interface LiveStop {
   /** Why the game stopped when coordinators are calling. */
   alert: AlertKey | null;
   options: { id: string; label: string }[];
+}
+
+/** The box score as of a play: each team's totals and its players' lines. */
+export interface LiveBox {
+  /** Plays logged when it was taken (the client asks for the box as of the play it is showing). */
+  at: number;
+  home_box: TeamBox; away_box: TeamBox;
+  home: BoxRow[]; away: BoxRow[];
 }
 
 export interface CallStat { call: string; label: string; plays: number; yards: number; success: number }
@@ -102,9 +111,11 @@ export class LiveGame {
   private hurtAlert: AlertKey | null = null;
   private stats = { offense: new Map<string, CallStat>(), defense: new Map<string, CallStat>() };
   private tallied = 0;
+  /** Box score snapshots before each snap, so the live box can show the game as of the play on screen. */
+  private boxes: { at: number; home: [string, unknown][]; away: [string, unknown][]; home_box: TeamBox; away_box: TeamBox; defense: [number, DefLine][] }[] = [];
   mode: LiveMode;
 
-  constructor(season: Season, readonly game: Game, mode: Partial<LiveMode> = {}) {
+  constructor(private season: Season, readonly game: Game, mode: Partial<LiveMode> = {}) {
     const setup = season.gameSetup(game);
     if (!setup.caller) throw new Error("you can only call your own games");
     this.sim = setup.sim;
@@ -226,10 +237,10 @@ export class LiveGame {
     for (;;) {
       const r = this.it.next(answer);
       this.tally();
-      if (r.done) { this.done = true; return; }
+      if (r.done) { this.done = true; this.snapshot(); return; }
       const req = r.value;
       answer = undefined;
-      if (req.kind === "snap") { gdp?.(req, this.sim); this.watchInjuries(); continue; }
+      if (req.kind === "snap") { gdp?.(req, this.sim); this.watchInjuries(); this.snapshot(); continue; }
       const ai = this.caller.prepare(req, this.sim);
       if (!this.caller.isUserTurn(req)) { answer = this.caller.answer(req, this.sim, ai, undefined); continue; }
       const alert = toEnd ? undefined : this.stopFor(req);
@@ -278,6 +289,29 @@ export class LiveGame {
       if (x.pid === this.userQb) this.hurtAlert = "qb_hurt";
       else if (this.userStarters.has(x.pid) && this.hurtAlert == null) this.hurtAlert = "starter_hurt";
     }
+  }
+
+  private snapshot(): void {
+    const r = this.sim.result(), at = this.sim.plays.length;
+    const shot = { at, home: Object.entries(r.home.players), away: Object.entries(r.away.players), home_box: r.home.box, away_box: r.away.box,
+      defense: [...(this.gd?.defense ?? new Map<number, DefLine>())].map(([k, l]) => [k, { ...l }] as [number, DefLine]) };
+    if (this.boxes.at(-1)?.at === at) this.boxes[this.boxes.length - 1] = shot; else this.boxes.push(shot);
+  }
+
+  /** The box score as of play `at` (the latest snapshot taken with no more plays than that). */
+  box(at = Number.MAX_SAFE_INTEGER): LiveBox | null {
+    let shot = null;
+    for (const b of this.boxes) { if (b.at > at) break; shot = b; }
+    if (!shot) return null;
+    const mine = (side: "home" | "away") => {
+      const ids = this.gd?.sides[side].byId;
+      return Object.fromEntries(shot.defense.filter(([pid]) => ids?.has(pid)));
+    };
+    return {
+      at: shot.at, home_box: shot.home_box, away_box: shot.away_box,
+      home: this.season.boxRows(this.game.home_id, Object.fromEntries(shot.home), mine("home")),
+      away: this.season.boxRows(this.game.away_id, Object.fromEntries(shot.away), mine("away")),
+    };
   }
 
   /** Credit each snap played to the calls made on it. */

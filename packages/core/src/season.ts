@@ -1,13 +1,13 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
-import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
+import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type DefLine, type SideSetup } from "./gameday.ts";
 import {
   LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
 } from "./hidden.ts";
 import { Caller, applyClock, type ClockEvent, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
-import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
+import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine, type BoxRow } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
@@ -3234,13 +3234,36 @@ export class Season {
   // ---- stats, awards and redshirts -------------------------------------------------------------
   private names = new Map<number, Map<string, number>>();
   private pidByName(teamId: number, name: string): number | undefined {
-    let m = this.names.get(teamId);
-    if (!m) {
-      m = new Map();
+    const build = () => {
+      const m = new Map<string, number>();
       for (const p of this.roster(teamId)) if (!m.has(playerName(p))) m.set(playerName(p), p.id);
       this.names.set(teamId, m);
+      return m;
+    };
+    // Rosters change (signings, the portal, a new season): a name the cached map misses rebuilds it.
+    const m = this.names.get(teamId);
+    return m?.get(name) ?? build().get(name);
+  }
+
+  /**
+   * One team's box score lines with who each player is: the engine keeps ball carriers by name and the
+   * game day keeps defenders by id, so this joins them into one row per player (pid null when nobody on
+   * the roster has that name any more). `defense` is this team's defenders only.
+   */
+  boxRows(teamId: number, players: Record<string, unknown>, defense: Record<number, DefLine>): BoxRow[] {
+    const rows = new Map<string, BoxRow>();
+    for (const [name, l] of Object.entries(players)) {
+      const pid = this.pidByName(teamId, name) ?? null;
+      const p = pid != null ? this.playerById.get(pid) : undefined;
+      rows.set(pid != null ? `#${pid}` : name, { ...(l as StatLine), pid, name, pos: p?.pos ?? "", team_id: teamId });
     }
-    return m.get(name);
+    for (const [k, l] of Object.entries(defense)) {
+      const pid = Number(k), p = this.playerById.get(pid);
+      const row = rows.get(`#${pid}`);
+      if (row) Object.assign(row, l);
+      else rows.set(`#${pid}`, { ...l, pid: p ? pid : null, name: p ? playerName(p) : "Unknown", pos: p?.pos ?? "", team_id: teamId });
+    }
+    return [...rows.values()];
   }
 
   /** Add a game to season stats and to each player's best game of the week. */
