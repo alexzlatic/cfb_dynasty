@@ -262,8 +262,16 @@ describe("live games", () => {
     expect(subbed.sideline.find((x: any) => x.slot === "QB").options[0].id).toBe(backup.id);
     expect(v.stop).not.toBeNull();
     expect((await post(`/api/leagues/${id}/actions`, { type: "set_depth", payload: { team_id: 158, depth: null } })).error).toMatch(/live game/);
-    let since = 0, n = 0;
+    const clocked = await post(`/api/leagues/${id}/live/clock`, { tempo: "uptempo", manual_timeouts: true });
+    expect(clocked.clock_control).toMatchObject({ tempo: "uptempo", manual_timeouts: true });
+    let since = 0, n = 0, timeouts = 0;
     while (!v.final && n < 400) {
+      if (v.clock_control.can_timeout && n % 10 === 3) {
+        since += v.plays.length;
+        v = await post(`/api/leagues/${id}/live/timeout`, { since });
+        if (v.error) throw new Error(v.error);
+        timeouts++;
+      }
       since += v.plays.length;
       const call = v.stop.kind !== "playCall" ? null : v.stop.role === "offense" ? (n % 3 === 0 ? "deep" : "inside_run") : "blitz";
       v = await post(`/api/leagues/${id}/live/call`, { call, since });
@@ -271,6 +279,7 @@ describe("live games", () => {
       n++;
     }
     expect(v.final).toBe(true);
+    expect(timeouts).toBeGreaterThan(0);
     expect(v.result.status).toBe("final");
     expect([v.result.home_score, v.result.away_score]).toEqual([v.home_score, v.away_score]);
     expect(await get(`/api/leagues/${id}/live`)).toBeNull();

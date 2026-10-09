@@ -1,4 +1,4 @@
-import { LEAGUE, LEAGUE_PASS_RATE, situationBucket, type TeamRatings, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type PlayRecord, type Rng, type SnapMod } from "@cfb/engine";
+import { LEAGUE, LEAGUE_PASS_RATE, situationBucket, type ClockPlay, type Tempo, type TeamRatings, type DecisionAnswer, type DecisionProvider, type DecisionRequest, type FourthDownCall, type GameSim, type PlayCall, type PlayRecord, type Rng, type SnapMod } from "@cfb/engine";
 import { DEFAULT_PLAN, PREP_UNIT, type GamePlan, type PrepEdge } from "./plan.ts";
 import { SCHEMES, type DefScheme, type OffScheme, type TeamSchemes } from "./schemes.ts";
 
@@ -9,8 +9,27 @@ import { SCHEMES, type DefScheme, type OffScheme, type TeamSchemes } from "./sch
  */
 export type OffCall = "inside_run" | "outside_run" | "qb_run" | "screen" | "quick" | "intermediate" | "play_action" | "deep";
 export type DefCall = "base" | "load_box" | "blitz" | "cover2" | "cover3" | "man" | "prevent";
-/** A call the user made on one of their decisions; null hands that decision to the coordinator. */
-export type UserCall = OffCall | DefCall | FourthDownCall | boolean | null;
+/** A call the user made on one of their decisions (a spike or kneel in place of a play); null hands that decision to the coordinator. */
+export type UserCall = OffCall | DefCall | FourthDownCall | ClockPlay | boolean | null;
+export const isClockPlay = (x: unknown): x is ClockPlay => x === "spike" || x === "kneel";
+
+/**
+ * Clock management the user did in a live game, before their `at`-th decision: set their offense's tempo
+ * ("auto" hands it back to the coordinator), take over or hand back their timeouts, or call one.
+ */
+export interface ClockEvent { at: number; tempo?: Tempo | "auto"; manual_timeouts?: boolean; timeout?: true }
+export const TEMPOS: { id: Tempo | "auto"; label: string }[] = [
+  { id: "auto", label: "Coordinator" }, { id: "normal", label: "Normal" }, { id: "uptempo", label: "Up-tempo" },
+  { id: "hurry", label: "Hurry-up" }, { id: "milk", label: "Bleed clock" },
+];
+
+/** Apply one clock event for `side`; false when a timeout couldn't be called (none left, or the clock was stopped). */
+export function applyClock(game: GameSim, side: "home" | "away", e: ClockEvent): boolean {
+  if (e.tempo === "auto") delete game.tempo[side];
+  else if (e.tempo) game.tempo[side] = e.tempo;
+  if (e.manual_timeouts != null) game.manualTimeouts[side] = e.manual_timeouts;
+  return e.timeout ? game.callTimeout(side) : true;
+}
 
 type Cls = "run" | "short" | "medium" | "deep";
 type Mod = Omit<SnapMod, "rushers" | "receivers">;
@@ -358,6 +377,12 @@ export class Caller {
     const mine = this.isUserTurn(req) && user != null;
     if (req.kind !== "playCall") return mine ? (user as FourthDownCall | boolean) : this.coordinator(req);
     const userOnOffense = req.side === this.userSide;
+    if (mine && userOnOffense && isClockPlay(user)) {
+      // A spike or kneel replaces the play: no calls to learn from.
+      game.clockPlay = user;
+      this.last = null;
+      return req.suggestion;
+    }
     const off = mine && userOnOffense && isOffCall(user) ? user : ai!.off;
     const def = mine && !userOnOffense && isDefCall(user) ? user : ai!.def;
     const sc = this.opts.schemes;

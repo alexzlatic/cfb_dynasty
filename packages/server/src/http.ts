@@ -404,6 +404,11 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return lg.liveCall(b.call ?? null, !!b.to_end, Number(b.since ?? 0));
       }
       case route === "live/mode" && req.method === "POST": return lg.liveMode((await body(req)).mode ?? {});
+      case route === "live/clock" && req.method === "POST": {
+        const b = await body(req);
+        return lg.liveClock({ tempo: b.tempo ?? undefined, manual_timeouts: b.manual_timeouts ?? undefined });
+      }
+      case route === "live/timeout" && req.method === "POST": return lg.liveTimeout(Number((await body(req)).since ?? 0));
       case route === "live/sub" && req.method === "POST": {
         const b = await body(req);
         return lg.liveSub(b.slot, Number(b.pid));

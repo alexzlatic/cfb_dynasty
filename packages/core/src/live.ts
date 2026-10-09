@@ -1,5 +1,5 @@
-import type { DecisionAnswer, DecisionRequest, FourthDownCall, GameSim, PlayRecord, TeamBox } from "@cfb/engine";
-import { Caller, DEF_CALLS, OFF_CALLS, isDefCall, isOffCall, type Adjustment, type DefCall, type OffCall, type UserCall } from "./calls.ts";
+import type { ClockPlay, DecisionAnswer, DecisionRequest, FourthDownCall, GameSim, PlayRecord, TeamBox, Tempo } from "@cfb/engine";
+import { Caller, DEF_CALLS, OFF_CALLS, applyClock, isClockPlay, isDefCall, isOffCall, type Adjustment, type ClockEvent, type DefCall, type OffCall, type UserCall } from "./calls.ts";
 import type { DefLine, GameDay, SidelineSlot } from "./gameday.ts";
 import type { BoxRow } from "./awards.ts";
 import { SLOT_POS, type DepthChart, type Slot } from "./players.ts";
@@ -17,6 +17,7 @@ export const ALERTS = {
   starter_hurt: { label: "Any other starter is hurt", on: false },
   red_zone: { label: "Your offense reaches the red zone", on: false },
   quarter: { label: "Start of each quarter", on: false },
+  clock: { label: "Clock running late in a half, when you call your own timeouts", on: true },
 } as const;
 export type AlertKey = keyof typeof ALERTS;
 
@@ -72,6 +73,16 @@ export interface LiveView {
   sideline: SidelineSlot[];
   /** Where the coordinators have moved off their usual calls because of how this game is going. */
   adjustments: (Adjustment & { team_id: number })[];
+  /** Your clock management: your offense's tempo, who calls your timeouts, and what you can do at this stop. */
+  clock_control: {
+    tempo: Tempo | "auto";
+    manual_timeouts: boolean;
+    /** The clock is running toward the next snap: a timeout now stops it where the last play ended. */
+    running: boolean;
+    can_timeout: boolean;
+    /** Spike or kneel in place of a play (offense play calls only). */
+    plays: { id: ClockPlay; label: string }[];
+  };
 }
 
 const FOURTH: { id: FourthDownCall; label: string }[] = [{ id: "go", label: "Go for it" }, { id: "fg", label: "Field goal" }, { id: "punt", label: "Punt" }];
@@ -87,6 +98,8 @@ export class LiveGame {
   readonly calls: UserCall[] = [];
   /** Lineup changes, each before the user decision it was made at. */
   readonly subs: GameSub[] = [];
+  /** Tempo changes and timeouts, each before the user decision it was made at. */
+  readonly clock: ClockEvent[] = [];
   readonly sim: GameSim;
   private gd: GameDay | null;
   private caller: Caller;
@@ -131,7 +144,36 @@ export class LiveGame {
     if (this.done) return;
     if (!this.pending) throw new Error("the game is not waiting for a call");
     const user = this.validate(this.pending.req, call ?? null);
+    // Handing the rest of the game over hands over the clock too.
+    if (toEnd && (this.tempo !== "auto" || this.manualTimeouts)) this.setClock({ tempo: "auto", manual_timeouts: false });
     this.run(user, toEnd);
+  }
+
+  private get tempo(): Tempo | "auto" { return this.sim.tempo[this.userSide] ?? "auto"; }
+  private get manualTimeouts(): boolean { return !!this.sim.manualTimeouts[this.userSide]; }
+
+  /** Set your offense's tempo, or take over (or hand back) your timeouts, from this stop on. */
+  setClock(c: { tempo?: Tempo | "auto"; manual_timeouts?: boolean }): void {
+    if (this.done || !this.pending) throw new Error("the game is not stopped");
+    const e: ClockEvent = { at: this.calls.length };
+    if (c.tempo != null && c.tempo !== this.tempo) {
+      if (c.tempo !== "auto" && !["normal", "uptempo", "hurry", "milk"].includes(c.tempo)) throw new Error(`unknown tempo ${String(c.tempo)}`);
+      e.tempo = c.tempo;
+    }
+    if (c.manual_timeouts != null && !!c.manual_timeouts !== this.manualTimeouts) e.manual_timeouts = !!c.manual_timeouts;
+    if (e.tempo == null && e.manual_timeouts == null) return;
+    applyClock(this.sim, this.userSide, e);
+    this.clock.push(e);
+  }
+
+  /** Call a timeout now: the clock goes back to where the last play ended. */
+  timeout(): void {
+    if (this.done || !this.pending) throw new Error("the game is not stopped");
+    if ((this.userSide === "home" ? this.sim.home : this.sim.away).timeouts <= 0) throw new Error("no timeouts left");
+    if (!this.sim.clockRunning) throw new Error("the clock is already stopped");
+    const e: ClockEvent = { at: this.calls.length, timeout: true };
+    applyClock(this.sim, this.userSide, e);
+    this.clock.push(e);
   }
 
   /**
@@ -158,15 +200,27 @@ export class LiveGame {
   private validate(req: DecisionRequest, call: UserCall): UserCall {
     if (call == null) return null;
     const role = this.role(req);
-    const ok = req.kind === "playCall" ? (role === "offense" ? isOffCall(call) : isDefCall(call))
+    if (isClockPlay(call) && !this.clockPlays(req).some((x) => x.id === call)) throw new Error(`you can't ${call} here`);
+    const ok = req.kind === "playCall" ? (role === "offense" ? isOffCall(call) || isClockPlay(call) : isDefCall(call))
       : req.kind === "fourthDown" ? FOURTH.some((f) => f.id === call)
       : typeof call === "boolean";
     if (!ok) throw new Error(`not a valid call here: ${String(call)}`);
     return call;
   }
 
+  /** A spike stops a running clock before 4th down; a kneel works late in a half when you're not behind. */
+  private clockPlays(req: DecisionRequest): { id: ClockPlay; label: string }[] {
+    if (req.kind !== "playCall" || req.side !== this.userSide || req.situation.overtime) return [];
+    const s = req.situation, m = (s.offense_home ? 1 : -1) * (s.home_score - s.away_score);
+    const out: { id: ClockPlay; label: string }[] = [];
+    if (this.sim.clockRunning && s.down < 4) out.push({ id: "spike", label: "Spike it" });
+    if ((s.quarter === 2 || s.quarter === 4) && m >= 0 && s.yl < 97) out.push({ id: "kneel", label: "Kneel" });
+    return out;
+  }
+
   private role(req: DecisionRequest): LiveStop["role"] {
     if (req.kind === "playCall") return req.side === this.userSide ? "offense" : "defense";
+    if (req.kind === "timeout") return req.situation.offense_home === (this.userSide === "home") ? "offense" : "defense";
     return req.kind === "onside" ? "kick" : "offense";
   }
 
@@ -200,6 +254,17 @@ export class LiveGame {
   private stopFor(req: DecisionRequest): AlertKey | null | undefined {
     const s = req.situation, role = this.role(req);
     const on = (k: AlertKey) => this.mode.alerts[k] ?? ALERTS[k].on;
+    if (req.kind === "timeout") {
+      // Only asked when you call your own timeouts. When you're calling this side's snaps the play call
+      // stop has the timeout button, so this one stops only when the clock has run out the half.
+      const m = (this.userSide === "home" ? 1 : -1) * (s.home_score - s.away_score);
+      const ball = s.offense_home === (this.userSide === "home");
+      // Out of time: worth a stop only when one more snap could help you.
+      if (s.clock <= 0) return (s.quarter === 2 ? ball : m < 0 ? m >= -16 : m === 0 && ball) ? "clock" : undefined;
+      if ((ball ? this.mode.offense === "me" : this.mode.defense === "me") || !on("clock")) return undefined;
+      const late = (s.quarter === 2 && s.clock <= 120) || (s.quarter === 4 && Math.abs(m) <= 16 && (s.clock <= 120 || (s.clock <= 300 && m < 0)));
+      return late ? "clock" : undefined;
+    }
     if (role === "defense" ? this.mode.defense === "me" : this.mode.offense === "me") return null;
     const mine = s.offense_home === (this.userSide === "home");
     const margin = Math.abs(s.home_score - s.away_score);
@@ -279,6 +344,11 @@ export class LiveGame {
       calls_made: this.calls.filter((c) => c != null).length,
       sideline: this.done || !this.gd ? [] : this.gd.sides[this.userSide].sideline(),
       adjustments: this.caller.adjustments().map((a) => ({ ...a, team_id: a.side === "home" ? this.game.home_id : this.game.away_id })),
+      clock_control: {
+        tempo: this.tempo, manual_timeouts: this.manualTimeouts, running: !this.done && this.sim.clockRunning,
+        can_timeout: !!p && p.req.kind !== "timeout" && this.sim.clockRunning && g[this.userSide].timeouts > 0,
+        plays: p ? this.clockPlays(p.req) : [],
+      },
     };
   }
 
@@ -294,6 +364,7 @@ export class LiveGame {
       case "fourthDown": return { ...base, suggestion: req.suggestion, options: FOURTH };
       case "twoPoint": return { ...base, suggestion: (this.caller.coordinator(req) as boolean | undefined) ?? req.suggestion, options: YES_NO("Go for two", "Kick the extra point") };
       case "onside": return { ...base, suggestion: req.suggestion, options: YES_NO("Onside kick", "Kick deep") };
+      case "timeout": return { ...base, suggestion: false, options: YES_NO("Call timeout", "Let it run") };
       default: return { ...base, suggestion: req.suggestion as boolean, options: YES_NO("Kneel", "Run a play") };
     }
   }

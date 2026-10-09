@@ -227,6 +227,9 @@ a.button:hover { text-decoration: none; border-color: var(--accent); }
 .calls { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
 .calls button { padding: 12px 8px; font-weight: 600; }
 .calls button.suggested { border: 2px solid var(--accent); }
+.calls.clockrow { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.calls.clockrow button { padding: 8px; font-weight: 500; }
+.seg { flex-wrap: wrap; }
 .tag.alert { color: var(--down); border-color: var(--down); font-size: 11px; }
 button.link { border: none; background: none; color: var(--accent); padding: 0; }
 .pbp tr.hl td { font-weight: 600; }
