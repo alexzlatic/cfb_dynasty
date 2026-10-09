@@ -4,6 +4,7 @@ import { addDays, type ISODate } from "./dates.ts";
 import { mixSeed } from "./hash.ts";
 import { ATTRS, POSITIONS, fromZ, overall, z, type Pos, type RatedPlayer } from "./players.ts";
 import type { Game, ScheduledGame, Team, TeamPlayers } from "./types.ts";
+import { STARTERS } from "./valuation.ts";
 
 /**
  * Season rollover (M3 step 2): after the season ends, every roster moves on a year. Seniors out of
@@ -127,6 +128,8 @@ export function rollRosters(o: {
   lostSeason?: Set<number>;
   /** The Act's five seasons in five years: fourth-year players stay for a fifth unless they turn pro or are done. */
   fiveYears?: boolean;
+  /** The league's rating scale (starterMedians of its first season); absent: no re-centering. */
+  anchor?: Partial<Record<Pos, number>>;
 }): RosterTurn {
   const { seed, year, model } = o;
   let nextId = o.next_player_id;
@@ -212,9 +215,41 @@ export function rollRosters(o: {
     }
     const players = [...keep, ...fresh];
     added.push(...fresh);
-    out[t.id] = { scheme: tp.scheme, kicking: tp.kicking, depth: autoDepth(players), players };
+    out[t.id] = { scheme: tp.scheme, kicking: tp.kicking, depth: {}, players };
   }
+  // Ratings are relative (75 is the median FBS starter at the position), so a year of development,
+  // recruiting and walk-ons can't drift the scale: returning players move by whatever keeps each
+  // position's median FBS starter where it was in the league's first season.
+  if (o.anchor) {
+    const now = starterMedians(teams, out), shift = new Map<Pos, number>();
+    for (const ps of POSITIONS) if (o.anchor[ps] != null && now[ps] != null) shift.set(ps, o.anchor[ps]! - now[ps]!);
+    const fresh = new Set(added.map((p) => p.id));
+    for (const tp of Object.values(out)) tp.players = tp.players.map((p) => (fresh.has(p.id) || !shift.get(p.pos) ? p : rescale(p, shift.get(p.pos)!)));
+  }
+  for (const tp of Object.values(out)) tp.depth = autoDepth(tp.players);
   return { players: out, left, added, next_player_id: nextId };
+}
+
+/** Each position's median FBS starter (the best STARTERS[pos] at each FBS school): the rating scale's anchor. */
+export function starterMedians(teams: Team[], players: Record<string, TeamPlayers>): Partial<Record<Pos, number>> {
+  const by = new Map<Pos, number[]>();
+  for (const t of teams) {
+    if (t.level !== "fbs" || !players[t.id]) continue;
+    for (const ps of POSITIONS) {
+      const xs = players[t.id].players.filter((p) => p.pos === ps).map((p) => p.ovr).sort((a, b) => b - a).slice(0, STARTERS[ps]);
+      const g = by.get(ps); if (g) g.push(...xs); else by.set(ps, xs);
+    }
+  }
+  const out: Partial<Record<Pos, number>> = {};
+  for (const [ps, xs] of by) if (xs.length) out[ps] = xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  return out;
+}
+
+/** A player moved up or down the scale by d points (his ceiling with him). */
+function rescale(p: RatedPlayer, d: number): RatedPlayer {
+  const attrs: Record<string, number> = {};
+  for (const [k, v] of Object.entries(p.attrs)) attrs[k] = clamp(v + d, 20, 99);
+  return { ...p, attrs, ovr: overall(p.pos, attrs), hidden: { ...p.hidden, potential: clamp(p.hidden.potential + d, 20, 99) } };
 }
 
 /** A returning player one year on: what he was expected to gain, plus his hidden development, up to about his potential. */
