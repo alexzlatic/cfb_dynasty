@@ -599,29 +599,37 @@ const contactPull = (hours: number) => CONTACT * Math.log1p(hours / 8);
  * he's first recruited, about a third have one clear favorite and a quarter two or three, drawn from the
  * schools he'd like anyway (so mostly the home-state power or the blue blood, now and then a surprise); the
  * rest are wide open. A lone favorite pulls more than one of a few. Sizes are a judgment call (no public
- * data on early leaders); they put the leader of a typical senior's list at about a third.
+ * data on early leaders): an uncommitted senior's leader has a median share near a quarter, and one in five
+ * has a leader above half.
  */
 export const FAV_SHARE = { one: 0.35, few: 0.25 }, FAV_PULL = { one: 2.5, few: 1.5 };
+/** How sharply favorites follow his liking (1 would draw them in proportion to his chances; 3 keeps them near the top of his list). */
+const FAV_SHARP = 3;
 /**
- * Commitments: a committed prospect's school gets a bond on top of what it has earned, set the week after he
- * commits so his school stands at a share he draws: most are locked in (88-97%), a fifth are listening
- * (70-88%) and a tenth are soft verbals (45-70%). The bond grows as the commitment ages, and other schools
- * can still work their way back in. Each week a commitment may come apart, with a chance of FLIP_RATE times
- * the other schools' combined share on his considering list, so flip threats are exactly the commits whose
- * list shows another school close: he flips to the school that drew him if it has offered, else reopens.
- * Calibrated so about 15-19% of commitments to power programs come apart in a cycle (247Sports: 18.8% of the
- * 2024 class's power-program commitments ended in a decommitment).
+ * Commitments. Each commitment draws how firm it is: 70% are locked in, 20% listening and 10% soft verbals.
+ * His loyalty (logit points another school's offer has to beat his school by) is 0.8, 0.4 or 0 by that draw,
+ * plus 0.7 as the commitment ages over 120 days. While no school that has offered him beats his school by
+ * that much, his school also gets a bond that puts it at a share drawn for his firmness (88-97%, 70-88%,
+ * 45-70%) on his considering list. When one does he's a flip threat: the bond is off, his list shows the
+ * school that's close or ahead, and each week he may look again (FLIP_LOOK) and go (half the time). The
+ * tiers' sizes are a judgment call; flips stay well below 247Sports' count (18.8% of the 2024 class's
+ * power-program commitments ended in a decommitment), see docs/recruiting.md.
  */
-export const BOND_FIRM: [number, number, number][] = [[0.7, 0.88, 0.97], [0.9, 0.7, 0.88], [1, 0.45, 0.7]];
-export const BOND_GROW = 0.6, FLIP_RATE = 0.13;
+export const FIRMNESS: { q: number; loyal: number; share: [number, number] }[] = [
+  { q: 0.7, loyal: 0.8, share: [0.88, 0.97] }, { q: 0.9, loyal: 0.4, share: [0.7, 0.88] }, { q: 1, loyal: 0, share: [0.45, 0.7] }];
+export const LOYAL_GROW = 0.7, FLIP_LOOK = 0.2;
 const logit = (x: number) => Math.log(x / (1 - x));
-/** The share his school starts at when he commits (drawn once per commitment). */
-export function commitTarget(seed: number, p: Prospect): number {
+/** How firm his commitment is, and the share his school starts at (drawn once per commitment). */
+export function firmness(seed: number, p: Prospect): { loyal: number; share: number } {
   const c = p.commit!;
   const u = mixSeed(seed, p.id, c.team, c.date, "bond") / 4294967296, v = mixSeed(seed, p.id, c.team, c.date, "bond2") / 4294967296;
-  const [, lo, hi] = BOND_FIRM.find(([q]) => u < q)!;
-  return lo + (hi - lo) * v;
+  const f = FIRMNESS.find(({ q }) => u < q)!;
+  return { loyal: f.loyal, share: f.share[0] + (f.share[1] - f.share[0]) * v };
 }
+/** How much better another offer has to look before he'd flip. */
+export const loyaltyOf = (seed: number, p: Prospect, date: ISODate) =>
+  firmness(seed, p).loyal + LOYAL_GROW * Math.min(1, Math.max(0, daysBetween(p.commit!.date, date)) / 120);
+
 /** What a school has with him beyond its base score and his commitment: contact, an offer and being a favorite. */
 export function pullFor(p: Prospect, id: number, fav: number[] | undefined): number {
   let u = contactPull(p.interest[id] ?? 0);
@@ -629,8 +637,6 @@ export function pullFor(p: Prospect, id: number, fav: number[] | undefined): num
   if (fav?.includes(id)) u += fav.length === 1 ? FAV_PULL.one : FAV_PULL.few;
   return u;
 }
-/** What his commitment adds for his school: its bond, growing as the commitment ages. */
-export const commitPull = (c: { date: ISODate }, bond: number, date: ISODate) => bond + BOND_GROW * Math.min(1, Math.max(0, daysBetween(c.date, date)) / 120);
 
 /** Any prospect would rather play in FBS (scholarship level, exposure); the choice fit only saw FBS schools. */
 const FBS_PULL = 1.2;
@@ -774,18 +780,18 @@ export class RecruitWeek {
   }
 
   /**
-   * His favorites (FAV_SHARE): the number from a draw of his own, the schools by his liking for each plus a
-   * draw (so the schools he likes most are the likeliest). A committed prospect's school is among them.
+   * His favorites (FAV_SHARE): the number from a draw of his own, the schools mostly the ones he likes best
+   * (his liking, sharpened, plus a draw). A committed prospect's favorite can be another school: his dream
+   * school offering later is how many flips happen.
    */
   private favorites(p: Prospect, list: Considered, schools: School[]): number[] {
     if (p.fav) return p.fav;
     const u0 = mixSeed(this.seed, p.id, "fav") / 4294967296;
     const n = u0 < FAV_SHARE.one ? 1 : u0 < FAV_SHARE.one + FAV_SHARE.few / 2 ? 2 : u0 < FAV_SHARE.one + FAV_SHARE.few ? 3 : 0;
     if (!n) return [];
-    const g = Array.from(list.t, (t, k) => ({ id: schools[t].id, v: list.base[k] - Math.log(-Math.log((mixSeed(this.seed, p.id, schools[t].id, "fav") + 0.5) / 4294967296)) }))
+    const g = Array.from(list.t, (t, k) => ({ id: schools[t].id, v: FAV_SHARP * list.base[k] - Math.log(-Math.log((mixSeed(this.seed, p.id, schools[t].id, "fav") + 0.5) / 4294967296)) }))
       .sort((a, b) => b.v - a.v || a.id - b.id).map((x) => x.id);
-    const mine = p.commit && !p.commit.signed ? p.commit.team : null;
-    return (mine != null ? [mine, ...g.filter((id) => id !== mine)] : g).slice(0, n);
+    return g.slice(0, n);
   }
 
   /**
@@ -793,25 +799,27 @@ export class RecruitWeek {
    * bond. The first time he's worked (store), his favorites and a new commitment's bond are kept on him;
    * before then they're worked out the same way for the view.
    */
-  private utilities(p: Prospect, list: Considered, schools: School[], idx: Map<number, number>, date: ISODate, store: boolean): Float64Array {
+  private utilities(p: Prospect, list: Considered, schools: School[], idx: Map<number, number>, date: ISODate, store: boolean): { u: Float64Array; bond: number; own: number | undefined } {
     const fav = this.favorites(p, list, schools);
     if (store) p.fav ??= fav;
     const u = list.base.slice();
     for (let k = 0; k < u.length; k++) u[k] += pullFor(p, schools[list.t[k]].id, fav);
     const c = p.commit;
     const own = c && !c.signed ? list.at.get(idx.get(c.team) ?? -1) : undefined;
-    if (c && own != null) {
-      let bond = c.bond;
-      if (bond == null) {
-        // Set so his school stands at his drawn share against the rest of his list.
-        let z = 0;
-        for (let k = 0; k < u.length; k++) if (k !== own) z += Math.exp(u[k] - u[own]);
-        bond = Math.round(Math.max(0.5, logit(commitTarget(this.seed, p)) + Math.log(z || 1e-9)) * 1000) / 1000;
-        if (store) c.bond = bond;
-      }
-      u[own] += commitPull(c, bond, date);
+    if (!c || own == null) return { u, bond: 0, own };
+    let bond = c.bond;
+    if (bond == null) {
+      // Set so his school stands at his drawn share against the rest of his list.
+      let z = 0;
+      for (let k = 0; k < u.length; k++) if (k !== own) z += Math.exp(u[k] - u[own]);
+      bond = Math.round(Math.max(0, logit(firmness(this.seed, p).share) + Math.log(z || 1e-9)) * 1000) / 1000;
+      if (store) c.bond = bond;
     }
-    return u;
+    // A flip threat (an offer that beats his school by more than his loyalty) takes the bond off.
+    const bar = u[own] + loyaltyOf(this.seed, p, date);
+    for (let k = 0; k < u.length; k++) if (k !== own && u[k] >= bar && p.offers.includes(schools[list.t[k]].id)) return { u, bond: 0, own };
+    u[own] += bond;
+    return { u, bond, own };
   }
 
   /**
@@ -823,7 +831,7 @@ export class RecruitWeek {
     if (!p.svc || g < 1 || p.commit?.signed) return [];
     const idx = new Map(schools.map((t, i) => [t.id, i]));
     const list = this.withCommit(this.considered(year, st.rerate, schools, user, p), p, schools, idx);
-    const u = Array.from(this.utilities(p, list, schools, idx, date, false));
+    const u = Array.from(this.utilities(p, list, schools, idx, date, false).u);
     const m = Math.max(...u);
     const e = u.map((x) => Math.exp(x - m)), z = e.reduce((a, x) => a + x, 0);
     return Array.from(list.t, (t, k) => ({ team: schools[t].id, share: e[k] / z, offered: p.offers.includes(schools[t].id), hours: Math.round(p.interest[schools[t].id] ?? 0) }))
@@ -847,19 +855,21 @@ export class RecruitWeek {
     }
     const room = (i: number, pos: Pos, g: number) => ((schools[i].target[pos] ?? 0) - ((g >= 3 ? have : haveJr)[i][pos] ?? 0));
     // 1. Who is in play, and how much he likes each school that would recruit him.
-    type Cand = { p: Prospect; g: number; list: Considered; u: Float64Array; z: number; lz: number; m: number; pub: PublicRead };
+    type Cand = { p: Prospect; g: number; list: Considered; u: Float64Array; z: number; lz: number; lzx: number; m: number; bond: number; pub: PublicRead };
     const cands: Cand[] = [];
     for (const p of st.prospects) {
       const g = gradeOf(p, year);
       if (p.commit?.signed || !p.svc || g < 1) continue;
       if (!inPlay(p, g) && !(o.user != null && (p.offers.includes(o.user) || p.interest[o.user]))) continue;
       const list = this.withCommit(this.considered(year, st.rerate, schools, o.user, p), p, schools, idx);
-      const u = this.utilities(p, list, schools, idx, date, true);
+      const { u, bond, own } = this.utilities(p, list, schools, idx, date, true);
       let m = -Infinity;
       for (let k = 0; k < u.length; k++) if (u[k] > m) m = u[k];
       let z = 0;
       for (let k = 0; k < u.length; k++) { u[k] -= m; z += Math.exp(u[k]); }
-      cands.push({ p, g, list, u, z, lz: Math.log(z), m, pub: publicRead(p, date, this.seed) });
+      // Schools trying to flip him judge their chance by how he likes them apart from his commitment's bond.
+      const lzx = own != null ? Math.log(z - Math.exp(u[own]) + Math.exp(u[own] - bond)) : Math.log(z);
+      cands.push({ p, g, list, u, z, lz: Math.log(z), lzx, m, bond, pub: publicRead(p, date, this.seed) });
     }
     // 2. Each school works its board: priority = what he'd be worth x need x its chance with him. A prospect
     // committed elsewhere is only worked by the few schools he likes best (they try to flip him).
@@ -894,7 +904,7 @@ export class RecruitWeek {
         const open = room(t, p.pos, c.g);
         if (open <= 0) continue;
         // What he is worth to the school, times its chance of landing him (schools offer where they can win).
-        const share = Math.exp(0.8 * (c.u[k] - c.lz));
+        const share = Math.exp(0.8 * (c.u[k] - c.lzx));
         // Each school values him by its own scouts' read (the more time it has put in, the closer to the truth),
         // and some by his stars: a class's ranking sells.
         const read = schoolRead(s, p, date, this.seed, looksOf(p, s.id, s.id === o.user ? st.user.evals[p.id] ?? 0 : 0), c.pub, this.ownRead(s, p)).est;
@@ -982,28 +992,19 @@ export class RecruitWeek {
         events.push({ kind: "commit", pid: p.id, team: schools[pick.t].id });
         continue;
       }
-      // A verbal can come apart: a chance each week of FLIP_RATE times the share the other schools hold on his
-      // list. He goes to one of them by their shares: one that has offered him (with room) gets him, otherwise
-      // he reopens his recruitment.
+      // A verbal can flip: now and then he looks again, and goes if another offer beats his school by more
+      // than his loyalty (his school's utility here is without the bond).
+      if (rng.random() >= FLIP_LOOK) continue;
       const cur = idx.get(p.commit.team);
-      const own = cur != null ? c.list.at.get(cur) : undefined;
-      if (own == null) continue;
-      if (rng.random() >= FLIP_RATE * (1 - Math.exp(c.u[own]) / c.z)) continue;
-      const ks: number[] = [], us: number[] = [];
-      for (let k = 0; k < c.u.length; k++) if (k !== own) { ks.push(k); us.push(c.u[k]); }
-      if (!ks.length) continue;
-      const to = c.list.t[ks[choose(us, rng.random())]];
+      const mine = opts.find((x) => x.t === cur);
+      const best = opts.filter((x) => x.t !== cur).sort((a, b) => b.u - a.u || a.t - b.t)[0];
+      if (!best || !mine || best.u < mine.u - c.bond + loyaltyOf(this.seed, p, date)) continue;
+      if (rng.random() >= 0.5 || (room(best.t, p.pos, c.g) <= 0 && !schools[best.t].manual)) continue;
       const from = p.commit.team;
-      const h = (c.g >= 3 ? have : haveJr)[cur!];
-      h[p.pos] = (h[p.pos] ?? 1) - 1;
-      if (!p.offers.includes(schools[to].id) || (room(to, p.pos, c.g) <= 0 && !schools[to].manual)) {
-        p.commit = null;
-        events.push({ kind: "decommit", pid: p.id, team: from });
-        continue;
-      }
-      p.commit = { team: schools[to].id, signed: false, date };
-      ((c.g >= 3 ? have : haveJr)[to])[p.pos] = (((c.g >= 3 ? have : haveJr)[to])[p.pos] ?? 0) + 1;
-      events.push({ kind: "flip", pid: p.id, team: schools[to].id, from });
+      if (cur != null) { const h = (c.g >= 3 ? have : haveJr)[cur]; h[p.pos] = (h[p.pos] ?? 1) - 1; }
+      p.commit = { team: schools[best.t].id, signed: false, date };
+      ((c.g >= 3 ? have : haveJr)[best.t])[p.pos] = (((c.g >= 3 ? have : haveJr)[best.t])[p.pos] ?? 0) + 1;
+      events.push({ kind: "flip", pid: p.id, team: schools[best.t].id, from });
     }
     // Relationships fade a little each week.
     for (const p of st.prospects) {

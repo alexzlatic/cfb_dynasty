@@ -146,7 +146,7 @@ than playing time pushes him away. Each program also has a slow up-and-down cycl
 recruits see it (a stand-in for coaching changes until the carousel).
 
 Prospects with offers commit at the real pace by month (most in June and July and in December), wait
-while a school they like better is still recruiting them, and sometimes flip or reopen (see Interest). The early signing period
+while a school they like better is still recruiting them, and sometimes flip (see Interest). The early signing period
 in December signs most commits; on national signing day (the first Wednesday of February) the rest
 sign, and schools with room make late offers to the prospects left. The season ends the day after.
 
@@ -156,36 +156,38 @@ school fills from the portal (its real style).
 ## Interest
 
 A prospect's interest in each school (his page and the big board: his chance of picking it if he chose
-today) is his base score for it plus what the school has built with him (`pullFor`, `commitPull` in
-`recruiting.ts`): contact hours, an offer (a bit more than contact: 0.45 logit points, up from 0.3), being
-one of his favorites, and his commitment.
+today) is his base score for it plus what the school has built with him (`pullFor` in `recruiting.ts`):
+contact hours, an offer (0.45 logit points, up from 0.3), being one of his favorites, and his commitment.
 
 - **Favorites.** When he is first recruited about a third of prospects have one clear favorite and a
-  quarter two or three, drawn from the schools he'd like anyway (usually the home-state power or a blue
-  blood, now and then a surprise); the rest are wide open. A lone favorite adds 2.5, one of a few 1.5.
-- **Commitments.** The week after he commits his school gets a bond that puts it at a share he draws: 70%
-  are locked in (88-97%), 20% listening (70-88%) and 10% soft verbals (45-70%). The bond grows a little
-  over his first 120 days. Other schools can still work their way back in with contact and offers.
-- **Flips and decommitments.** Each week a commitment comes apart with a chance of 0.13 times the share
-  the other schools hold on his list, toward one of them by their shares: if it has offered (with room) he
-  flips there, otherwise he reopens. So a flip threat is exactly a commit whose list shows another school
-  close.
+  quarter two or three, mostly the schools near the top of his list anyway (the home-state power, a blue
+  blood), now and then a surprise; the rest are wide open. A lone favorite adds 2.5, one of a few 1.5.
+- **Commitments.** Each commitment draws how firm it is: 70% locked in, 20% listening, 10% soft. While no
+  school that has offered him beats his school by more than his loyalty (0.8, 0.4 or 0 by firmness, plus
+  0.7 as the commitment ages over 120 days), his school gets a bond that puts it at a share drawn for his
+  firmness (88-97%, 70-88% or 45-70%). A commitment to a school outside his list now puts it on the list.
+- **Flip threats.** When an offer does beat his school by more than his loyalty (often his dream school
+  offering late), the bond comes off and his list shows that school close or ahead. Each week he looks
+  again one time in five and goes half the time, as before.
 
 `npx tsx packages/core/scripts/interest-check.ts [seed]` measures it. Seed 7, 2027 seniors ranked in the top
-1,500:
+1,500, on October 15:
 
 | | before | now |
 |---|---|---|
-| Committed: own school first | 26% | 100% |
-| Committed: own school's share, 10th/50th/90th pct (Oct 15) | 0% / 3% / 19% | 79% / 93% / 97% |
-| Uncommitted seniors: leader's share, 10th/50th/90th pct (Oct 15) | 5% / 9% / 18% | 7% / 16% / 46% |
-| Uncommitted rated juniors: leader's share, 90th pct | 27% | 62% |
-| Commitments to power programs flipped or reopened, Aug 24 to Dec 1 (real: 18.8% over a whole cycle, 247Sports, 2024 class) | 3.6% (all schools) | 14.4% |
-| Five-, four- and three-stars flipped or reopened | 0%, 0.7%, 4% | 15%, 17%, 15% |
+| Committed: own school first | 26% | 98% |
+| Committed: own school's share, 10th/50th/90th pct | 0% / 3% / 19% | 68% / 91% / 96% |
+| Uncommitted seniors: leader's share, 10th/50th/90th pct | 5% / 9% / 18% | 6% / 23% / 63% |
+| Uncommitted seniors with a leader above 50% | 0% | 22% |
+| Uncommitted rated juniors: leader's share, 90th pct | 27% | 76% |
+| Committed seniors who flipped by Dec 1 | 3.6% | 4.0% |
 
-Before, a commitment added nothing to his interest (and a commit to a school outside his list didn't show it
-at all), so most committed prospects looked uncommitted. The flip rate is calibrated to the 247Sports count;
-the favorites' shares and sizes, and the bond's draws, are judgment calls (no public data on early leaders).
+Before, a commitment added nothing to his interest, so most committed prospects looked uncommitted. Sizes
+are judgment calls: there's no public data on how early leaders form. Flips stay well below the real rate
+(247Sports: 18.8% of the 2024 class's power-program commitments ended in a decommitment, over the whole
+cycle): in the game few power-program commits flip (about 2% from August to December) because the schools
+that could pull them have usually filled that position. Lowering loyalty barely raised that and spread
+five-stars wider, so it's left as before.
 
 ## Gates
 
@@ -210,6 +212,11 @@ Three-stars lean a little toward power programs and signees stay a little closer
 ones; both are within a few points. Five-stars spread a little wider than real ones: the game had already
 slipped to 63-69% before schools scouted for themselves (the carousel and the portal came after the first
 measure), and schools that read a five-star lower than the service does now pass on some of them.
+
+With the interest changes (favorites, commitment bonds, a bigger offer bump), against main on seeds 7, 11 and
+23 (classes 2028-2029): five-stars to top-10 classes 46-69% (main 40-63%); four-stars to power programs
+97.9-99.8% (97.1-98.7%); signees within 300 miles 56-60% (57-60%); class sizes and year-to-year
+correlation unchanged.
 
 ## Busts and sleepers
 

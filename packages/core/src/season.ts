@@ -2323,8 +2323,7 @@ export class Season {
       const mine = me != null && (e.team === me || e.from === me);
       if (!top && !mine) continue;
       const school = this.team(e.team).school;
-      if (e.kind === "decommit") rep.news.push(this.news(date, "recruiting", `${who(p)} decommits from ${school}`, `${p.cls} class${p.svc ? `, No. ${p.svc.rank} nationally` : ""}. His recruitment is open again.`, [e.team]));
-      else if (e.kind === "commit") rep.news.push(this.news(date, "recruiting", `${who(p)} commits to ${school}`, `${p.cls} class${p.svc ? `, No. ${p.svc.rank} nationally` : ""}.`, [e.team]));
+      if (e.kind === "commit") rep.news.push(this.news(date, "recruiting", `${who(p)} commits to ${school}`, `${p.cls} class${p.svc ? `, No. ${p.svc.rank} nationally` : ""}.`, [e.team]));
       else rep.news.push(this.news(date, "recruiting", `${p.first} ${p.last} flips from ${this.team(e.from!).school} to ${school}`, `${who(p)}, ${p.cls} class.`, [e.team, e.from!]));
     }
   }

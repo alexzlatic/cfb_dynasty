@@ -65,7 +65,7 @@ const p4 = new Set(seed.teams.filter((t) => t.level === "fbs" && (P4.has(t.confe
 const com = st.prospects.filter((p: Prospect) => p.cls === year + 1 && first.has(p.id) && p.svc);
 const by = (f: (p: Prospect) => boolean) => { const xs = com.filter(f); return [xs.filter((p) => flipped.has(p.id)).length, xs.length]; };
 console.log(JSON.stringify({
-  "flipped or decommitted (ever) of committed seniors by Dec 1": pct(com.filter((p) => flipped.has(p.id)).length, com.length),
+  "flipped (ever) of committed seniors by Dec 1": pct(com.filter((p) => flipped.has(p.id)).length, com.length),
   "... first committed to a power program (real 18.8%)": by((p) => p4.has(first.get(p.id)!)),
   "5*/4*/3* flipped": [by((p) => starsOf(p.svc!.r) === 5), by((p) => starsOf(p.svc!.r) === 4), by((p) => starsOf(p.svc!.r) === 3)],
 }));
