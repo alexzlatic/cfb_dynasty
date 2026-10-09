@@ -16,6 +16,10 @@ the next sim starts the next season. In the app the sim bar shows **Start the 20
   1.5 points by year, from how each class rates above the one before it on the 2026 rosters at every
   level), faster at schools with better weight rooms, practice fields and medical facilities, plus the
   hidden development he actually had last season (hidden.ts). Past his potential, growth slows.
+  The opening rosters' potentials sit above each player's own overall by what his remaining years would
+  add plus some upside (`ceilingRoom`): about 13.5 points for a true freshman, 10 for a sophomore, 7.5
+  for a junior, 3.5 for a senior and 1 for a fifth-year, more for unfulfilled high recruits, with noise.
+  Nearly no underclassman starts at his ceiling; about a third of fifth-years do.
 - **Rosters are refilled.** Each team goes back to its usual size, never over 105. The least-rated
   players at over-full positions are released first, then freshmen fill the positions furthest below
   their share. The freshmen are the school's signees (docs/recruiting.md), rated from their true
