@@ -3,32 +3,24 @@ import { useLeague, useData } from "../App.tsx";
 import { api, type Player, type StatRow } from "../api.ts";
 import { Logo, heightStr, onColor } from "../util.tsx";
 import { GameTable, NewsList, Panel } from "./common.tsx";
+import { CatTabs, StatsTable, catsWith } from "../stats.tsx";
 import { RosterTable, outUntil, playerLink } from "./Players.tsx";
 
 const POS_ORDER = ["QB", "RB", "WR", "TE", "OL", "DL", "EDGE", "LB", "DB", "CB", "S", "K", "P", "LS", "ATH"];
 const ROLE = { HC: "Head coach", OC: "Offensive coordinator", DC: "Defensive coordinator", STC: "Special teams coordinator" } as const;
 
-const CATS: { title: string; key: keyof StatRow; cols: [keyof StatRow, string][] }[] = [
-  { title: "Passing", key: "pass_yds", cols: [["cmp", "Cmp"], ["att", "Att"], ["pass_yds", "Yds"], ["pass_td", "TD"], ["int", "Int"]] },
-  { title: "Rushing", key: "rush_yds", cols: [["car", "Car"], ["rush_yds", "Yds"], ["rush_td", "TD"], ["rush_long", "Long"]] },
-  { title: "Receiving", key: "rec_yds", cols: [["rec", "Rec"], ["rec_yds", "Yds"], ["rec_td", "TD"], ["rec_long", "Long"]] },
-  { title: "Defense", key: "tkl", cols: [["tkl", "Tkl"], ["tfl", "TFL"], ["sacks", "Sck"], ["def_int", "Int"], ["pd", "PD"], ["ff", "FF"]] },
-];
-
-/** The team's season stat leaders by category. */
+/** The team's season stats by category, sortable. */
 function TeamStats({ rows }: { rows: StatRow[] }) {
   const { id } = useLeague();
+  const cats = catsWith(rows);
+  const [cat, setCat] = useState("passing");
+  const cur = cats.find((x) => x.key === cat) ?? cats[0];
+  if (!cur) return null;
   return (
     <Panel title="Season stats">
-      {CATS.map((c) => {
-        const top = rows.filter((r) => ((r[c.key] as number) ?? 0) > 0).sort((a, b) => ((b[c.key] as number) ?? 0) - ((a[c.key] as number) ?? 0)).slice(0, c.key === "tkl" ? 8 : 4);
-        if (!top.length) return null;
-        return (
-          <table key={c.title} className="grid tight"><thead><tr><th>{c.title}</th><th className="num">G</th>{c.cols.map(([k, l]) => <th key={k} className="num">{l}</th>)}</tr></thead>
-            <tbody>{top.map((r) => <tr key={r.pid}><td><a href={`#/l/${id}/player/${r.pid}`}>{r.name}</a> <span className="muted small">{r.pos}</span></td><td className="num muted">{r.gp}</td>
-              {c.cols.map(([k]) => <td key={k} className="num">{(r[k] as number) ?? 0}</td>)}</tr>)}</tbody></table>
-        );
-      })}
+      <CatTabs cats={cats} cat={cur.key} setCat={setCat} />
+      <StatsTable rows={rows} line={(r) => r} cat={cur} rowKey={(r) => r.pid} rank={false} limit={12}
+        lead={[{ key: "name", label: "Player", cell: (r) => <><a href={`#/l/${id}/player/${r.pid}`}>{r.name}</a> <span className="muted small">{r.pos}</span></>, by: (r) => r.name }]} />
     </Panel>
   );
 }

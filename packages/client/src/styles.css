@@ -483,3 +483,10 @@ select.dadd { width: 100%; margin-top: 4px; font-size: 12px; }
 .tieins select { font-size: 11px; }
 .chip { padding: 1px 6px; margin: 0 4px 2px 0; }
 ul.warn, p.warn { color: #c44; }
+
+/* Stats tables (stats.tsx) */
+.stat-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stat-tabs .seg { margin-bottom: 8px; }
+table.stats td.lead { font-weight: 700; }
+table.stats th.lead { color: var(--ink); }
+table.stats td { white-space: nowrap; }
