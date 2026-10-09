@@ -165,6 +165,8 @@ export interface Talk {
   /** The deal (signed), or what happened. */
   deal?: { amount: number; years: number; via: "rule" | "talks" | "staff" };
   outcome?: "signed" | "let_go" | "portal" | "stayed";
+  /** A renewal your standing rule made that you haven't confirmed yet (your staff confirms it when the portal opens). */
+  pending?: boolean;
   /** You'll decide yourself (the staff plan doesn't apply on December 31). */
   mine?: boolean;
   /** The staff's plan for him: renew at his ask, offer up to an amount, or let him go. */
@@ -185,6 +187,16 @@ export interface RenewalRule {
   budget_share: number;
 }
 export const DEFAULT_RULE: RenewalRule = { auto_up_to: 1.1, offer_up_to: 1, release_over: 25_000, budget_share: 0.8 };
+
+/**
+ * What a player who's happy to stay asks to be renewed for: roughly what he's paid now, nudged by his season.
+ * `pct` is where his production ranks among players at his position (0 worst, 1 best; null when he didn't
+ * play), and an All-American or conference player of the year asks a little more.
+ */
+export function renewalNudge(pct: number | null, honor: "all_american" | "poy" | null = null): number {
+  const base = pct == null ? 0.97 : 0.95 + 0.13 * Math.max(0, Math.min(1, pct));
+  return Math.round((base + (honor === "all_american" ? 0.05 : honor === "poy" ? 0.03 : 0)) * 1000) / 1000;
+}
 
 // ---- deal length ------------------------------------------------------------------------------------
 /**

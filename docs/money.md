@@ -159,7 +159,7 @@ project you could take to your AD before you commit (`facilities.ts`):
   +0.1 hidden chemistry a unit per locker-room grade gained (about 0.3 points a game); recruits rate the school
   0.1 higher per grade gained in the locker room or academic support (about 8% likelier to pick you over an
   equal school), on top of what development speed already adds.
-- **Your AD's answer** comes in one to three days (a news item; the inbox can show it). The AD approves when
+- **Your AD's answer** comes in one to three days, in your inbox. The AD approves when
   football's surplus covers this year's payment, facility payments in any year stay under 15% of football's
   revenue, fewer than two projects are underway, and for a campaign, boosters are no more than 15% below normal.
   The screen shows the AD's view before you propose.

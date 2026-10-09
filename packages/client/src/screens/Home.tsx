@@ -84,7 +84,9 @@ function NeedsYou({ keep }: { keep: RetentionData }) {
   const portal = state.upcoming.find((e) => e.type === "portal_window");
   const items: { text: string; href: string }[] = [];
   if (keep.talks_open) {
-    if (open.length) items.push({ text: `${open.length} player${open.length === 1 ? "" : "s"} in renewal talks need${open.length === 1 ? "s" : ""} your decision`, href: `#/l/${id}/retention` });
+    const pending = keep.rows.filter((r) => r.talk?.pending).length;
+    if (pending) items.push({ text: `Confirm ${pending} auto-renewal${pending === 1 ? "" : "s"} (or revoke one to send him to the portal)`, href: `#/l/${id}/renewals` });
+    if (open.length) items.push({ text: `${open.length} player${open.length === 1 ? "" : "s"} in renewal talks need${open.length === 1 ? "s" : ""} your decision`, href: `#/l/${id}/renewals` });
     if (answers.length) items.push({ text: `${answers.length} answer${answers.length === 1 ? "" : "s"} to your offers due by tomorrow`, href: `#/l/${id}/retention` });
     items.push({ text: `Talks close December 31; the portal opens ${portal ? shortDate(portal.date) : "January 2"}`, href: `#/l/${id}/retention` });
   } else if (keep.portal_open) {

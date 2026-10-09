@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useData, useLeague } from "../App.tsx";
 import { api, type PayrollPlayer } from "../api.ts";
-import { Logo, money } from "../util.tsx";
+import { Logo, money, shortDate } from "../util.tsx";
 
 /** A player's morale about pay and playing time, in words (as in core's morale.ts). */
 const moodWord = (m: number) => (m >= 0.25 ? "Happy" : m > -0.25 ? "Content" : m > -0.8 ? "Unhappy" : "Angry");
@@ -26,24 +26,33 @@ export function PayrollScreen({ tid }: { tid?: number }) {
   if (data.team_id == null) return <Panel title="Payroll"><p className="muted">Pick a team in Settings to run its payroll.</p></Panel>;
   const t = team(data.team_id);
   const pool = data.pool;
-  const sign = async (pid: number, amount: number, years: number) => {
+  const send = async (type: string, payload: unknown) => {
     setBusy(true); setErr(null);
-    try { await api.act(id, "sign_contract", { pid, amount, years }); setEdit(null); } catch (e) { setErr((e as Error).message); }
+    try { await api.act(id, type, payload); setEdit(null); } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
+  const sign = (pid: number, amount: number, years: number) => send("sign_contract", { pid, amount, years });
   const editor = (p: PayrollPlayer) => {
     if (!edit || edit.pid !== p.pid) return null;
     const amount = Math.round(Number(edit.amount) * 1000);
+    const want = p.demand?.find((d) => d.years === edit.years);
     return (
-      <span className="nowrap">
-        $<input className="num" style={{ width: "6em" }} value={edit.amount} onChange={(e) => setEdit({ ...edit, amount: e.target.value })} />K a year for{" "}
-        <select value={edit.years} onChange={(e) => setEdit({ ...edit, years: Number(e.target.value) })}>
-          {Array.from({ length: p.eligibility }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} {y === 1 ? "season" : "seasons"}{y > 1 ? " (locks him in)" : ""}</option>)}
-        </select>{" "}
-        <button disabled={busy || !Number.isFinite(amount)} onClick={() => sign(p.pid, amount, edit.years)}>Sign</button>{" "}
-        <button className="link small" disabled={busy} onClick={() => sign(p.pid, 0, 1)}>End deal</button>{" "}
-        <button className="link" onClick={() => setEdit(null)}>Cancel</button>
-      </span>
+      <div className="offerbox">
+        <div className="nowrap">
+          $<input className="num" style={{ width: "6em" }} value={edit.amount} onChange={(e) => setEdit({ ...edit, amount: e.target.value })} />K a year for{" "}
+          <select value={edit.years} onChange={(e) => setEdit({ ...edit, years: Number(e.target.value) })}>
+            {Array.from({ length: p.eligibility }, (_, i) => i + 1).map((y) => <option key={y} value={y}>{y} {y === 1 ? "season" : "seasons"}{y > 1 ? " (locks him in)" : ""}</option>)}
+          </select>{" "}
+          <button className="primary" disabled={busy || !Number.isFinite(amount) || amount <= 0} onClick={() => send("contract_offer", { pid: p.pid, amount, years: edit.years })}>Make offer</button>{" "}
+          {want?.amount != null && <button disabled={busy} onClick={() => send("contract_offer", { pid: p.pid, amount: want.amount, years: edit.years })}>Offer his demand</button>}{" "}
+          {(p.contract?.amount ?? 0) + (p.nil?.amount ?? 0) > 0 && <button className="link small danger" disabled={busy} onClick={() => confirm(`End ${p.name}'s deal? He stops being paid now.`) && sign(p.pid, 0, 1)}>End deal</button>}{" "}
+          <button className="link" onClick={() => setEdit(null)}>Cancel</button>
+        </div>
+        <div className="small">{!want ? "" : want.amount == null ? <span className="loss">He {want.why}.</span>
+          : edit.years === 1 ? <>He wants: <b>no pay cut</b> ({money(want.amount)} now). Any raise this season is fine with him.</>
+          : <>He wants: <b>{money(want.amount)}</b> a year for {edit.years} seasons.</>}
+          <span className="muted"> He answers in a day or two, in your inbox. An offer well under what he wants insults him.</span></div>
+      </div>
     );
   };
   return (
@@ -89,7 +98,8 @@ export function PayrollScreen({ tid }: { tid?: number }) {
                 <td className={"num " + (pct == null ? "" : pct < 0.5 && p.starter ? "loss" : pct > 1.2 ? "win" : "muted")}>{pct == null ? "" : `${Math.round(pct * 100)}%`}</td>
                 <td className="muted small">{p.contract ? `${p.contract.start + p.contract.years - 1}-${String(p.contract.start + p.contract.years).slice(2)}` : ""}{p.contract?.locked && <span title="A multi-year deal he agreed to: no renegotiating until it ends"> 🔒</span>}</td>
                 <td className={"small " + (p.morale <= -0.25 ? "loss" : p.morale >= 0.25 ? "win" : "muted")}>{moodWord(p.morale)}</td>
-                {data.mine && <td>{editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay + nil || p.value) / 1000)), years: p.contract?.locked ? Math.min(p.eligibility, p.contract.start + p.contract.years - data.year) : 1 })}>{pay + nil ? "Change" : "Offer"}</button>}</td>}
+                {data.mine && <td>{p.offer ? <span className="small">Offer out: {money(p.offer.amount)}{p.offer.years > 1 ? ` × ${p.offer.years}` : ""}, answer by {shortDate(p.offer.answer)}{" "}
+                  <button className="link small" disabled={busy} onClick={() => send("contract_withdraw", { pid: p.pid })}>Withdraw</button></span> : editor(p) ?? <button className="link small" onClick={() => setEdit({ pid: p.pid, amount: String(Math.round((pay + nil || p.value) / 1000)), years: p.contract?.locked ? Math.min(p.eligibility, p.contract.start + p.contract.years - data.year) : 1 })}>{pay + nil ? "Change" : "Offer"}</button>}</td>}
               </tr>
             );
           })}</tbody>

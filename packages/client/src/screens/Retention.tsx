@@ -63,6 +63,19 @@ function Negotiation({ f }: { f: FutureData }) {
   if (t.status === "graduating" || t.status === "nfl" || t.status === "contract") {
     return <p>{t.label}{t.status === "contract" && f.next_deal ? `: ${money(f.next_deal.amount)} next season.` : "."}</p>;
   }
+  if (t.pending) {
+    return (
+      <div>
+        <p>Your standing rule renewed him at <b>{money(t.deal!.amount)}</b> for next season ({f.pay ? `${Math.round((t.deal!.amount / f.pay - 1) * 100)}% on this season` : "new"}). It isn't official until you confirm it.</p>
+        <div className="row-actions">
+          <button className="primary" disabled={busy} onClick={() => act("renewal_confirm", { pids: [f.pid] })}>Confirm</button>
+          <button disabled={busy} onClick={() => act("renewal_talk", { pid: f.pid, reopen: true })}>Renegotiate</button>
+          <button className="link small danger" disabled={busy} onClick={() => confirm("Revoke his renewal? He enters the portal on January 2.") && act("renewal_talk", { pid: f.pid, let_go: true })}>Revoke</button>
+        </div>
+        {err && <p className="error small">{err}</p>}
+      </div>
+    );
+  }
   if (t.outcome) {
     return <p>{t.outcome === "signed" ? <>He's staying: <b>{money(t.deal!.amount)}</b> a year for {t.deal!.years} season{t.deal!.years === 1 ? "" : "s"} ({t.deal!.via === "rule" ? "your standing rule" : t.deal!.via === "staff" ? "your staff" : "your offer"}).</>
       : t.outcome === "let_go" ? "You let him go: he enters the portal on January 2." : "He's done talking: he enters the portal on January 2. You can still bid for him there."}</p>;
@@ -185,7 +198,7 @@ export function RetentionScreen() {
           </div>
           <p className="small muted">Every player weighs staying against what he'd get elsewhere: pay, playing time, development, scheme fit, winning and home, plus how happy he is here.
             Your staff reads him like a typical player until you talk with him (five talks a week). Money problems are the easiest to fix: pay him what he'd commit to stay for.
-            {data.talks_open ? ` ${needYou} player${needYou === 1 ? "" : "s"} need you; ${waiting} offer${waiting === 1 ? "" : "s"} waiting on an answer.` : ""}</p>
+            {data.talks_open ? <> {needYou} player{needYou === 1 ? "" : "s"} need you; {waiting} offer{waiting === 1 ? "" : "s"} waiting on an answer. <a href={`#/l/${id}/renewals`}>Renewals: confirm auto-renewals and see who's leaving</a>.</> : ""}</p>
         </Panel>
         <Panel title="Next season's roster budget">
           <div className="budgetbar"><span style={{ width: `${pct}%` }} /></div>
@@ -235,6 +248,7 @@ function Row({ r, talksOpen, busy, act }: { r: RetentionRow; talksOpen: boolean;
 
 function talkCell(t: TalkView | null) {
   if (!t) return <span className="muted">-</span>;
+  if (t.pending) return <span>Renewal {money(t.deal!.amount)}, <b className="needs">confirm</b></span>;
   if (t.outcome === "signed") return <span className="win">Signed {money(t.deal!.amount)}</span>;
   if (t.outcome) return <span className="loss">{t.outcome === "let_go" ? "Let go" : "To the portal"}</span>;
   if (t.status === "graduating" || t.status === "nfl" || t.status === "contract") return <span className="muted">{t.label}</span>;

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HS_COLS, REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Pos, type Prospect, type Skill } from "@cfb/core";
-import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, eligibilityYears, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
@@ -127,7 +127,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
           champion: s.champion, upcoming, my_next_game: myGames.find((g) => g.status !== "final") ?? null,
           ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], playoff: s.playoff,
-          news: s.news.slice(-12).reverse(), career: career(), past: s.past ?? [],
+          news: s.news.slice(-12).reverse(), career: career(), past: s.past ?? [], inbox_unread: lg.inbox({ unread: true, limit: 1 }).unread,
         };
       }
       case route === "career": {
@@ -194,7 +194,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const pcsa = !!s.settings.pcsa;
         const players = S.roster(team).map((pl) => ({ pid: pl.id, name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, class: pl.class, years: pl.years, ovr: pl.ovr,
           value: S.value(pl.id), contract: activeContract(s.contracts?.[pl.id], s.year), nil: s.nil?.[pl.id] ?? null, morale: s.player_morale?.[pl.id] ?? 0, eligibility: eligibilityLeft(pl), starter: starters.has(pl.id),
-          gp: s.player_stats?.[pl.id]?.gp ?? 0, returning: S.returningHere(pl), ceiling: fmvCeiling(S.value(pl.id), pcsa) }));
+          gp: s.player_stats?.[pl.id]?.gp ?? 0, returning: S.returningHere(pl), ceiling: fmvCeiling(S.value(pl.id), pcsa),
+          ...(team === s.user_team_id ? { demand: S.contractDemand(pl.id), offer: s.contract_offers?.[pl.id] ?? null } : {}) }));
         const conference = S.teams.filter((x) => x.level === "fbs" && x.conference === t.conference).map((x) => ({ team_id: x.id, ...S.rosterPool(x.id)! })).filter((x) => x.total != null)
           .sort((a, b) => b.signed - a.signed);
         return { team_id: team, year: s.year, cap: revenueCap(s.year), football_share: FOOTBALL_SHARE, pcsa, pool: S.rosterPool(team),
@@ -490,7 +491,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           career: (lg.db.prepare("SELECT year, team_id, data FROM player_seasons WHERE pid = ? ORDER BY year").all(pl.id) as { year: number; team_id: number; data: string }[])
             .map((r) => ({ ...(JSON.parse(r.data) as PlayerSeason), year: r.year, team_id: r.team_id })),
           awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
-          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
+          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES, eligibility: eligibilityYears(pl.years, !!s.settings.pcsa),
           // Your staff's read on your own players (development so far, traits, his plan).
           staff: pl.team_id === s.user_team_id ? (() => {
             const t = S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), r = S.developmentReport(pl.team_id), d = r.players.find((x) => x.pid === pl.id);
@@ -540,6 +541,10 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return s.news.filter((n) => (!kind || n.kind === kind) && (!author || n.author === Number(author)) &&
           (!team || n.team_ids.includes(Number(team))) && (!skipStories || n.kind !== "story"))
           .slice(-Number(url.searchParams.get("limit") || 100)).reverse();
+      }
+      case route === "inbox": {
+        const q = url.searchParams, year = q.get("year");
+        return lg.inbox({ year: year ? Number(year) : undefined, category: q.get("category") || undefined, unread: q.get("unread") === "1", limit: q.get("limit") ? Number(q.get("limit")) : undefined });
       }
       case route === "writers": return s.writers.map(({ voter, ...w }) => ({ ...w, homer: voter.homer }));
       case p[2] === "writers" && p.length === 4: {

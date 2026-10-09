@@ -412,6 +412,8 @@ button.danger, .link.danger { color: var(--down); }
 .nego-head b { font-size: 16px; }
 .dots { letter-spacing: 2px; color: var(--accent); }
 .offer-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.offerbox { display: flex; flex-direction: column; gap: 4px; max-width: 520px; white-space: normal; }
+.offerbox > .nowrap { white-space: normal; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .watchcounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
 .watchcounts div { border-radius: 8px; padding: 8px; color: #fff; display: flex; flex-direction: column; }
 .watchcounts div b { font-size: 26px; font-family: var(--display); line-height: 1; }
@@ -574,3 +576,34 @@ table.stats td { white-space: nowrap; }
 .checks li { margin: 3px 0; }
 .progress { height: 6px; background: var(--head); border-radius: 3px; overflow: hidden; margin-top: 4px; }
 .progress span { display: block; height: 100%; background: var(--series-3); }
+/* Inbox: folders, message list and the open message, side by side */
+.nav .badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 99px; background: #e0463b; color: #fff; font: 700 11px/18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align: center; letter-spacing: 0; vertical-align: 2px; }
+.inbox { display: grid; grid-template-columns: 190px minmax(260px, 380px) 1fr; gap: 12px; align-items: start; }
+.inbox > * { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.inbox .folders { padding: 8px; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 96px; }
+.inbox .folders .sep { height: 1px; background: var(--line); margin: 6px 4px; }
+.inbox .folder { display: flex; justify-content: space-between; align-items: center; border: none; text-align: left; padding: 6px 10px; border-radius: 6px; color: var(--muted); }
+.inbox .folder.has { color: var(--ink); font-weight: 600; }
+.inbox .folder.on { background: var(--team); color: var(--onteam); }
+.inbox .folder .count { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.inbox .folder.on .count { background: rgba(255,255,255,.22); color: inherit; }
+.inbox .msglist { overflow: hidden; }
+.inbox .listhead { display: flex; align-items: baseline; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--head); }
+.inbox .listhead .right { margin-left: auto; }
+.inbox .msglist ul { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 210px); overflow-y: auto; }
+.inbox .msglist li { padding: 8px 12px 8px 14px; border-bottom: 1px solid var(--line); cursor: pointer; position: relative; }
+.inbox .msglist li:hover { background: var(--head); }
+.inbox .msglist li.on { background: color-mix(in srgb, var(--team) 10%, var(--panel)); }
+.inbox .msglist li.unread::before { content: ""; position: absolute; left: 4px; top: 14px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.inbox .msglist li.unread .subj, .inbox .msglist li.unread .from { font-weight: 700; }
+.inbox .msglist .row1 { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.inbox .msglist .subj { margin: 2px 0; line-height: 1.3; }
+.inbox .flag { display: inline-block; width: 16px; height: 16px; margin-right: 6px; border-radius: 50%; background: #e0463b; color: #fff; font-size: 11px; font-weight: 800; line-height: 16px; text-align: center; vertical-align: 1px; }
+.inbox .pad { padding: 12px; }
+.inbox .reader { padding: 16px 20px; min-height: 260px; position: sticky; top: 96px; }
+.inbox .reader h2 { margin: 4px 0 6px; }
+.inbox .msgbody { white-space: pre-wrap; line-height: 1.55; margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.inbox .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.inbox .actions .btn { padding: 5px 14px; border-radius: 6px; background: var(--team); color: var(--onteam); font-weight: 600; }
+.inbox .actions .btn:hover { text-decoration: none; filter: brightness(1.1); }
+@media (max-width: 900px) { .inbox { grid-template-columns: 1fr; } .inbox .folders, .inbox .reader { position: static; } .inbox .folders { flex-direction: row; flex-wrap: wrap; } .inbox .folders .sep { display: none; } }

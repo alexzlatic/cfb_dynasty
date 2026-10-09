@@ -36,3 +36,4 @@ export * from "./schemes.ts";
 export * from "./scouting.ts";
 export * from "./carousel.ts";
 export * from "./facilities.ts";
+export * from "./inbox.ts";

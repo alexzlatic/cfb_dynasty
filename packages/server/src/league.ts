@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
+  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -54,7 +54,12 @@ export type Action =
   | { type: "renewal_offer"; payload: { pid: number; amount: number; years: number } }
   | { type: "renewal_rule"; payload: Partial<RenewalRule> }
   | { type: "renewal_promise"; payload: { pid: number; on: boolean } }
-  | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean } }
+  | { type: "renewal_talk"; payload: { pid: number; let_go?: boolean; mine?: boolean; reopen?: boolean } }
+  /** Offer one of your players a deal (he answers in a day or two), or take back an offer he hasn't answered. */
+  | { type: "contract_offer"; payload: { pid: number; amount: number; years: number } }
+  | { type: "contract_withdraw"; payload: { pid: number } }
+  /** Make the standing rule's renewals official (these players, or every one waiting). */
+  | { type: "renewal_confirm"; payload: { pids?: number[] } }
   /** The transfer portal: bid for a player (0 withdraws), or a pitch call. */
   | { type: "portal_offer"; payload: { pid: number; amount: number; years: number } }
   | { type: "portal_pitch"; payload: { pid: number } }
@@ -62,7 +67,9 @@ export type Action =
   | { type: "hire_coach"; payload: { role: Role; coach_id: number } }
   | { type: "fire_coach"; payload: { role: Role } }
   /** Take a job offer, or turn it down. */
-  | { type: "answer_offer"; payload: { team_id: number; accept: boolean } };
+  | { type: "answer_offer"; payload: { team_id: number; accept: boolean } }
+  /** Mark inbox messages read or unread (ids null = every message). */
+  | { type: "inbox_read"; payload: { ids: string[] | null; read: boolean } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -76,7 +83,7 @@ const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", 
   "player_stats", "team_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "facility_payments", "facility_drag", "facility_asks", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
-  "talks", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
+  "talks", "contract_offers", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
 
 /** A league file plus its in-memory season. All changes go through `apply`, which logs them first. */
 export class League {
@@ -149,7 +156,7 @@ export class League {
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
       declared: meta.declared ?? undefined, draft_pool: meta.draft_pool ?? undefined, draft: meta.draft ?? null, draft_history: meta.draft_history ?? undefined,
-      talks: meta.talks ?? undefined, renewal_rule: meta.renewal_rule ?? undefined, next_deals: meta.next_deals ?? undefined, promises: meta.promises ?? undefined,
+      talks: meta.talks ?? undefined, contract_offers: meta.contract_offers ?? undefined, renewal_rule: meta.renewal_rule ?? undefined, next_deals: meta.next_deals ?? undefined, promises: meta.promises ?? undefined,
       talked: meta.talked ?? undefined, watch: meta.watch ?? undefined, portal: meta.portal ?? undefined, moves: meta.moves ?? undefined, arrived: meta.arrived ?? undefined,
       writers: all("SELECT data FROM writers ORDER BY id"),
       // This season's rows; past seasons' are tagged with their year.
@@ -157,6 +164,7 @@ export class League {
       events: all<CalEvent>("SELECT data FROM events WHERE season IS NULL ORDER BY date, id"),
       polls: all("SELECT data FROM polls WHERE season IS NULL ORDER BY id"),
       news: all("SELECT data FROM news WHERE season IS NULL ORDER BY rowid"),
+      inbox: all("SELECT data FROM inbox WHERE season IS NULL ORDER BY rowid"),
     };
     // Anything saved that the list above doesn't name comes back as it was.
     for (const k of META_KEYS) if (meta[k] != null && (state as unknown as Record<string, unknown>)[k] === undefined) (state as unknown as Record<string, unknown>)[k] = meta[k];
@@ -304,6 +312,11 @@ export class League {
       if (role !== "OC" && role !== "DC" && role !== "STC") throw new Error("you hire and fire coordinators (OC, DC, STC)");
       a = a.type === "hire_coach" ? { type: a.type, payload: { role, coach_id: Number(a.payload.coach_id) } } : { type: a.type, payload: { role } };
     }
+    if (a.type === "inbox_read") {
+      const ids = a.payload?.ids;
+      if (ids != null && (!Array.isArray(ids) || ids.length > 5000 || ids.some((x) => typeof x !== "string"))) throw new Error("ids must be a list of message ids");
+      a = { type: a.type, payload: { ids: ids ?? null, read: a.payload?.read !== false } };
+    }
     if (a.type === "answer_offer") a = { type: a.type, payload: { team_id: Number(a.payload?.team_id), accept: !!a.payload?.accept } };
     if (a.type === "talk_player" || a.type === "portal_pitch") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
     if (a.type === "renewal_offer" || a.type === "portal_offer") {
@@ -322,7 +335,10 @@ export class League {
       a = { type: a.type, payload: r };
     }
     if (a.type === "renewal_promise") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
-    if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}) } };
+    if (a.type === "renewal_talk") a = { type: a.type, payload: { pid: Number(a.payload?.pid), ...(a.payload?.let_go != null ? { let_go: !!a.payload.let_go } : {}), ...(a.payload?.mine != null ? { mine: !!a.payload.mine } : {}), ...(a.payload?.reopen ? { reopen: true } : {}) } };
+    if (a.type === "contract_offer") a = { type: a.type, payload: { pid: Number(a.payload?.pid), amount: Math.round(Number(a.payload?.amount)), years: Math.max(1, Math.round(Number(a.payload?.years) || 1)) } };
+    if (a.type === "contract_withdraw") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
+    if (a.type === "renewal_confirm") a = { type: a.type, payload: Array.isArray(a.payload?.pids) ? { pids: a.payload.pids.map(Number) } : {} };
     // A live game is played from today's lineups and settings; changing them would make it a different game.
     if (this.live && (a.type === "set_depth" || a.type === "update_settings" || a.type === "set_conferences" || a.type === "set_user_team" || a.type === "set_game_plan" || a.type === "set_redshirt" || a.type === "set_lab" || a.type === "hire_coach" || a.type === "fire_coach" || a.type === "answer_offer")) throw new Error("finish or leave your live game first");
     if (this.live && a.type === "sim") this.live = null;
@@ -376,16 +392,21 @@ export class League {
       if (a.type === "renewal_rule") this.season.setRenewalRule(a.payload);
       if (a.type === "renewal_promise") this.season.setPromise(a.payload.pid, a.payload.on);
       if (a.type === "renewal_talk") this.season.setTalk(a.payload.pid, a.payload);
+      if (a.type === "renewal_confirm") this.season.confirmRenewals(a.payload.pids);
+      if (a.type === "contract_offer") this.season.contractOffer(a.payload.pid, a.payload.amount, a.payload.years);
+      if (a.type === "contract_withdraw") this.season.withdrawOffer(a.payload.pid);
       if (a.type === "portal_offer") this.season.portalOffer(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "portal_pitch") this.season.portalPitch(a.payload.pid);
       if (a.type === "hire_coach") this.season.hireCoach(a.payload.role, a.payload.coach_id);
       if (a.type === "fire_coach") this.season.fireCoach(a.payload.role);
       if (a.type === "answer_offer") this.season.answerOffer(a.payload.team_id, a.payload.accept);
+      if (a.type === "inbox_read") this.markRead(a.payload.ids, a.payload.read);
       if (a.type === "sim") {
         // A sim after the season has ended starts the next one.
         if (this.season.done) this.nextSeason();
         reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       }
+      this.writeInbox();
       this.writeMeta();
       return l;
     });
@@ -417,6 +438,8 @@ export class League {
     db.prepare("UPDATE games SET season = ? WHERE season IS NULL").run(old.year);
     db.prepare("UPDATE polls SET season = ? WHERE season IS NULL").run(old.year);
     db.prepare("UPDATE news SET season = ? WHERE season IS NULL").run(old.year);
+    this.writeInbox();
+    db.prepare("UPDATE inbox SET season = ? WHERE season IS NULL").run(old.year);
     const keep = db.prepare("SELECT id FROM events WHERE season IS NULL").all() as { id: string }[];
     const tag = db.prepare("UPDATE events SET season = ? WHERE id = ?");
     for (const r of keep) if (!ahead.has(r.id)) tag.run(old.year, r.id);
@@ -510,6 +533,41 @@ export class League {
       }
       st.run(k, j(s[k] ?? null));
     }
+  }
+
+  /** Messages saved so far this season (the inbox is append-only within a season). */
+  private savedInbox: { season: Season; n: number } | null = null;
+
+  /** New inbox messages into the file. */
+  private writeInbox(): void {
+    const box = this.season.state.inbox ?? [];
+    if (this.savedInbox?.season !== this.season) {
+      this.savedInbox = { season: this.season, n: (this.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE season IS NULL").get() as { n: number }).n };
+    }
+    if (this.savedInbox.n >= box.length) return;
+    const st = this.db.prepare("INSERT OR IGNORE INTO inbox (id, date, category, data) VALUES (?, ?, ?, ?)");
+    for (const m of box.slice(this.savedInbox.n)) st.run(m.id, m.date, m.category, j(m));
+    this.savedInbox.n = box.length;
+  }
+
+  private markRead(ids: string[] | null, read: boolean): void {
+    this.writeInbox();
+    if (ids == null) { this.db.prepare("UPDATE inbox SET read = ?").run(read ? 1 : 0); return; }
+    const st = this.db.prepare("UPDATE inbox SET read = ? WHERE id = ?");
+    for (const id of ids) st.run(read ? 1 : 0, id);
+  }
+
+  /** Inbox messages, newest first, with whether each has been read; `year` reads a past season's. */
+  inbox(opts: { year?: number; category?: string; unread?: boolean; limit?: number } = {}): { messages: (InboxMessage & { read: boolean })[]; unread: number } {
+    this.writeInbox();
+    const s = this.season.state, past = opts.year != null && opts.year !== s.year;
+    const where = [past ? "season = ?" : "season IS NULL"], args: (string | number)[] = past ? [opts.year!] : [];
+    if (opts.category) { where.push("category = ?"); args.push(opts.category); }
+    if (opts.unread) where.push("read = 0");
+    const rows = this.db.prepare(`SELECT read, data FROM inbox WHERE ${where.join(" AND ")} ORDER BY date DESC, rowid DESC LIMIT ?`)
+      .all(...args, Math.max(1, Math.min(opts.limit ?? 500, 5000))) as { read: number; data: string }[];
+    const unread = (this.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE read = 0 AND season IS NULL").get() as { n: number }).n;
+    return { messages: rows.map((r) => ({ ...(JSON.parse(r.data) as InboxMessage), read: !!r.read })), unread };
   }
 
   private persistDay(r: DayReport): void {

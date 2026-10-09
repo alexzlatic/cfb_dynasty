@@ -15,7 +15,7 @@ import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, 
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
-  askFor, lengthPremium, maxYears,
+  askFor, lengthPremium, maxYears, renewalNudge,
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
@@ -50,6 +50,7 @@ import {
   DEFAULT_SETTINGS, type Ballot, type CalEvent, type Coach, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
+import { newsToInbox, URGENT_NEWS, type InboxMessage, type InboxPost } from "./inbox.ts";
 
 export interface Seeded { seed: number; team_id: number }
 
@@ -73,6 +74,8 @@ export interface SeasonState {
   events: CalEvent[];
   polls: Poll[];
   news: NewsItem[];
+  /** This season's messages to the user team (inbox.ts); absent in leagues saved before the inbox. */
+  inbox?: InboxMessage[];
   power: Record<number, number>;
   preseason_power: Record<number, number>;
   poll_memory: Record<string, PanelMemory>;
@@ -169,6 +172,8 @@ export interface SeasonState {
   draft_history?: Record<string, number[]>;
   /** Your renewal talks this winter (from the end of the regular season to January 1), by player id, and your standing rule. */
   talks?: Record<number, Talk>;
+  /** Your contract offers to your players during the season (this season's pay or an extension), waiting on their answer, by player id. */
+  contract_offers?: Record<number, { amount: number; years: number; made: ISODate; answer: ISODate }>;
   renewal_rule?: RenewalRule;
   /** Next season's deals you've signed (renewals and transfers): dollars a year and seasons. */
   next_deals?: Record<number, { amount: number; years: number; locked?: boolean }>;
@@ -236,6 +241,7 @@ export interface DayReport {
   polls: Poll[];
   ballots: Ballot[];
   news: NewsItem[];
+  inbox: InboxMessage[];
   stop: string | null;
 }
 
@@ -270,6 +276,8 @@ const CROWD = 10;
 const QUIT_FCS = 0.5;
 const FULL_ROOM = (ROSTER_LIMIT - 5) / Object.values(ROOM).reduce((a, b) => a + b, 0);
 /** A player's rating next season as everyone expects it (the usual year's gain, slower past his potential). */
+/** A player's season production for his position (fantasy-style points; awards.ts). */
+const scoreOf = (pos: Pos, st: StatLine) => (OFF_POS.has(pos) ? offScore(st) : DEF_POS.has(pos) ? defScore(st) : pos === "K" ? kickScore(st) : 0);
 const ovrNext = (p: RatedPlayer) => p.ovr + YEAR_GAIN[Math.max(0, Math.min(YEAR_GAIN.length - 1, Math.floor(p.years)))] * (p.hidden.potential > p.ovr ? 1 : 0.3);
 /** Winning and exposure as recruits weigh it (valuation.ts), for a player of quality q. */
 const winTerm = (prestige: number, winPct: number, power: boolean, q: number) => {
@@ -408,7 +416,7 @@ export class Season {
     const state: SeasonState = {
       year: seed.season, seed: opts.seed >>> 0, date: seed.start_date, settings,
       user_team_id: opts.user_team_id ?? null, games, events: seasonEvents(seed.season, seed.start_date, seed.schedule, settings.playoff),
-      polls: [], news: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      polls: [], news: [], inbox: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: 9_000_001, writers: generateWriters(placeTeams(seed.teams, confs), seed.rosters, opts.seed >>> 0), stars: {},
       conferences: confs, tie_ins: tieInsFor(confs, setup?.tie_ins),
     };
@@ -499,7 +507,7 @@ export class Season {
     const { fortunes, history } = this.closeBooks();
     const state: SeasonState = {
       year: ny, seed: s.seed, date: s.date, settings: s.settings, user_team_id: s.user_team_id, games, events: sortEvents([...ahead, ...events]),
-      polls: [], news: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      polls: [], news: [], inbox: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: Math.max(s.next_game_id + base.schedule.length, ...schedule.map((g) => g.id + 1)), writers: s.writers, stars: {},
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
       requests: s.requests, fresh_model: model, rating_anchor: anchor, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
@@ -895,7 +903,7 @@ export class Season {
   advanceDay(): DayReport {
     const s = this.state;
     const today = s.date;
-    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], ballots: [], news: [], stop: null };
+    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], ballots: [], news: [], inbox: [], stop: null };
 
     // 1. Morning: scheduled events fire.
     for (const e of s.events) {
@@ -916,6 +924,7 @@ export class Season {
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
     this.recruitingDay(today, rep);
     if (s.talks && !s.portal) this.talksDay(today, rep);
+    if (s.contract_offers) this.contractAnswers(today, rep);
     if (s.coaching?.open) this.carouselDay(today, rep);
     if (s.portal?.year === s.year) this.portalDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
@@ -1345,6 +1354,82 @@ export class Season {
     setNil(fromNil);
   }
 
+  /**
+   * What one of your players wants to sign for, by length (OOTP-style): a one-year change is anything that
+   * isn't a pay cut; a longer deal locks him in, so he wants at least the least he'd commit for at that
+   * length (his premium per extra season on top), half his value, and no less than he makes now. Null: he
+   * won't sign that long (or not for money alone).
+   */
+  contractDemand(pid: number): { years: number; amount: number | null; why?: string }[] {
+    const s = this.state, p = this.playerById.get(pid);
+    if (!p) return [];
+    const w = persona(s.seed, pid), pay = this.pay(pid), most = Math.min(maxYears(w), eligibilityLeft(p));
+    const out: { years: number; amount: number | null; why?: string }[] = [{ years: 1, amount: pay }];
+    let walk: number | null | undefined;
+    for (let y = 2; y <= eligibilityLeft(p); y++) {
+      if (y > most) { out.push({ years: y, amount: null, why: most === 1 ? "wants one-year deals so he can test the market" : `will sign for up to ${most} seasons` }); continue; }
+      walk ??= payFor(this.stayContext(p, pay), w, COMMIT);
+      if (walk == null) { out.push({ years: y, amount: null, why: "won't commit past this season for money alone" }); continue; }
+      out.push({ years: y, amount: roundPay(Math.max(askFor(walk, w, y), this.value(pid) * 0.5, pay)) });
+    }
+    return out;
+  }
+
+  /** Offer one of your players a deal: he answers in a day or two (your inbox). */
+  contractOffer(pid: number, amount: number, years: number): void {
+    const s = this.state, p = this.playerById.get(pid), me = s.user_team_id;
+    if (me == null || !p || p.team_id !== me) throw new Error("you can only make offers to your own players");
+    if (s.contract_offers?.[pid]) throw new Error("he hasn't answered your last offer yet");
+    if (!(amount > 0)) throw new Error("make an offer above zero (or end his deal)");
+    if (years < 1 || years > eligibilityLeft(p)) throw new Error(`${playerName(p)} has ${eligibilityLeft(p)} season(s) of eligibility left`);
+    const pool = this.rosterPool(me);
+    if (pool && amount - this.pay(pid) > pool.room) throw new Error(`that's over your roster budget: ${money(Math.max(0, pool.room + this.pay(pid)))} left for him`);
+    const n = Object.keys(s.contract_offers ?? {}).length + years;
+    s.contract_offers = { ...s.contract_offers, [pid]: { amount: roundPay(amount), years, made: s.date, answer: addDays(s.date, answerDays(s.seed, pid, 101 + n)) } };
+  }
+
+  /** Take back an offer he hasn't answered. */
+  withdrawOffer(pid: number): void {
+    const s = this.state;
+    if (!s.contract_offers?.[pid]) throw new Error("no offer to him is waiting");
+    const o = { ...s.contract_offers }; delete o[pid];
+    s.contract_offers = Object.keys(o).length ? o : undefined;
+  }
+
+  /** Players answer your offers that have waited a day or two: they sign at or above what they want, else they name it. */
+  private contractAnswers(date: ISODate, rep: DayReport): void {
+    const s = this.state, me = s.user_team_id;
+    const offers = { ...s.contract_offers };
+    for (const [id, o] of Object.entries(offers)) {
+      if (o.answer > date) continue;
+      const pid = Number(id), p = this.playerById.get(pid);
+      delete offers[pid];
+      if (!p || p.team_id !== me) continue;
+      const name = playerName(p), len = `${o.years} season${o.years === 1 ? "" : "s"}`;
+      const d = this.contractDemand(pid).find((x) => x.years === o.years);
+      const link = [{ label: "Payroll", to: "payroll" }, { label: "His page", to: `player/${pid}` }];
+      if (!d || d.amount == null) {
+        this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} turns down your offer`, body: `He ${d?.why ?? "won't sign that deal"}.`, links: link, urgent: true }, rep);
+        continue;
+      }
+      if (o.amount >= d.amount) {
+        try {
+          this.setContract(pid, o.amount, o.years);
+          this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} accepts: ${money(o.amount)} a year for ${len}`,
+            body: o.years > 1 ? `He's locked in through ${s.year + o.years - 1}: no renegotiating until it ends.` : "His new pay starts now.", links: link }, rep);
+        } catch (e) {
+          this.mail({ date, category: "contracts", from: "Your staff", subject: `The deal with ${p.pos} ${name} fell through`, body: `He said yes, but ${(e as Error).message}.`, links: link, urgent: true }, rep);
+        }
+        continue;
+      }
+      const insulted = o.amount < 0.7 * d.amount;
+      if (insulted) s.player_morale = { ...s.player_morale, [pid]: Math.round(((s.player_morale?.[pid] ?? 0) - 0.2) * 100) / 100 };
+      this.mail({ date, category: "contracts", from: name, subject: `${p.pos} ${name} turns down ${money(o.amount)} for ${len}`,
+        body: `He wants ${money(d.amount)} a year for ${len}.${insulted ? " The offer insulted him, and it's hurt his mood." : ""} Make another offer on the Payroll screen.`, links: link, urgent: true }, rep);
+    }
+    s.contract_offers = Object.keys(offers).length ? offers : undefined;
+  }
+
   /** He has completed a season at his school (the retention fund can pay him): not a freshman, not a first-year transfer. */
   returningHere(p: RatedPlayer): boolean {
     return returning(p) && this.state.arrived?.[p.id] !== this.state.year;
@@ -1756,7 +1841,7 @@ export class Season {
     s.facility_asks = [...(s.facility_asks ?? []), { area, scope, financing, date: s.date, answer: addDays(s.date, days) }];
   }
 
-  /** Your AD answers the proposals that have waited their day or three (a news item; the inbox can pick it up). */
+  /** Your AD answers the proposals that have waited their day or three (a news item that reaches your inbox). */
   private facilityDay(today: ISODate, rep: DayReport): void {
     const s = this.state, me = s.user_team_id;
     if (!s.facility_asks?.length) return;
@@ -2775,11 +2860,47 @@ export class Season {
     const deal = s.next_deals?.[p.id];
     if (deal) return deal.amount;
     const c = activeContract(s.contracts?.[p.id], s.year + 1);
+    // Your players: renewing him keeps roughly all he's paid now (revenue share and NIL), nudged by his season.
+    // Only a multi-year deal he agreed to holds as it is.
+    if (p.team_id === s.user_team_id && !c?.locked) return roundPay(this.pay(p.id) * this.renewalFactor(p).factor);
     if (c) return dealAmount(c);
-    const now = this.pay(p.id), v = this.value(p.id);
+    const now = this.pay(p.id);
+    const v = this.value(p.id);
     const vNext = playerValue({ pos: p.pos, ovr: ovrNext(p), stars: p.stars, years: p.years + 1 });
     return v > 0 ? Math.round(now * vNext / v) : 0;
   }
+
+  /**
+   * How his season moves his renewal: where his production ranks among FBS players at his position (season
+   * totals, so playing time counts; linemen and punters by games played), plus a little for his honors.
+   */
+  renewalFactor(p: RatedPlayer): { factor: number; pct: number | null; honor: "all_american" | "poy" | null } {
+    const s = this.state, st = s.player_stats?.[p.id];
+    const honors = (s.awards ?? []).filter((a) => a.year === s.year && a.pid === p.id);
+    const honor = honors.some((a) => a.type === "all_american") ? "all_american" as const : honors.some((a) => a.type === "conf_poy_off" || a.type === "conf_poy_def" || a.type === "heisman") ? "poy" as const : null;
+    if (!st || st.gp <= 0) return { factor: renewalNudge(null, honor), pct: null, honor };
+    const ranks = this.statRanks();
+    const pct = ranks.byGames.has(p.pos) ? Math.min(1, st.gp / Math.max(1, ranks.games.get(p.team_id) ?? st.gp)) * 0.6
+      : (() => { const xs = ranks.scores.get(p.pos) ?? []; const me = scoreOf(p.pos, st); let lo = 0; while (lo < xs.length && xs[lo] < me) lo++; return xs.length ? lo / xs.length : 0.5; })();
+    return { factor: renewalNudge(pct, honor), pct: Math.round(pct * 100) / 100, honor };
+  }
+  private statRanks(): { scores: Map<Pos, number[]>; games: Map<number, number>; byGames: Set<Pos> } {
+    const s = this.state;
+    if (this.rankCache?.date === s.date) return this.rankCache.v;
+    const scores = new Map<Pos, number[]>(), byGames = new Set<Pos>(["OL", "P"]);
+    for (const [id, st] of Object.entries(s.player_stats ?? {})) {
+      const p = this.playerById.get(Number(id));
+      if (!p || st.gp <= 0 || byGames.has(p.pos)) continue;
+      (scores.get(p.pos) ?? scores.set(p.pos, []).get(p.pos)!).push(scoreOf(p.pos, st));
+    }
+    for (const xs of scores.values()) xs.sort((a, b) => a - b);
+    const games = new Map<number, number>();
+    for (const g of s.games) if (g.status === "final") for (const t of [g.home_id, g.away_id]) games.set(t, (games.get(t) ?? 0) + 1);
+    const v = { scores, games, byGames };
+    this.rankCache = { date: s.date, v };
+    return v;
+  }
+  private rankCache: { date: ISODate; v: { scores: Map<Pos, number[]>; games: Map<number, number>; byGames: Set<Pos> } } | null = null;
 
   /** Whether you've talked with him: until then your staff assumes his class's typical personality. */
   private known(pid: number): boolean { return this.state.talked?.[pid] != null; }
@@ -2891,7 +3012,7 @@ export class Season {
     const open = Object.values(s.talks).filter((t) => !t.outcome && t.plan?.kind === "needs_you").length;
     const signed = Object.values(s.talks).filter((t) => t.deal?.via === "rule").length;
     rep.news.push(this.news(date, "retention", `Renewal talks open: ${open} player${open === 1 ? "" : "s"} need you`,
-      `Your standing rule re-signed ${signed} players. Talks run until January 1; anyone who wants a deal and doesn't have one enters the portal on January 2.`, [me]));
+      `Your standing rule renewed ${signed} players at about their current pay: confirm them on the Renewals screen, or revoke any you'd rather send to the portal. Talks run until January 1; anyone who wants a deal and doesn't have one enters the portal on January 2.`, [me]));
   }
 
   /** A player's status, ask and walk-away number for the talks, and your staff's plan for him under the rule. */
@@ -2909,8 +3030,10 @@ export class Season {
     const v = ctx.value;
     const important = this.importance(p) <= 30;
     if (t.status === "staying" && v === 0) t.plan = { kind: "renew", amount: 0 };
-    else if (t.ask != null && t.ask <= rule.auto_up_to * v) t.plan = { kind: "renew", amount: t.ask };
-    else if (t.ask != null && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
+    // A player happy to stay is renewed at his number (roughly his pay now); the rule's cap on value is for raises.
+    else if (t.ask != null && (t.ask <= rule.auto_up_to * v || (t.status === "staying" && t.ask <= Math.max(now, rule.auto_up_to * v)))) t.plan = { kind: "renew", amount: t.ask };
+    // (A backup happy to stay at his pay isn't let go: the staff offers him what the rule allows.)
+    else if (t.ask != null && t.status !== "staying" && !important && ctx.start_here < 0.4 && t.ask > rule.release_over && t.ask > v) t.plan = { kind: "let_go" };
     // Otherwise the staff offers up to the rule's share of his value; if money won't keep him, he decides for himself in January.
     else t.plan = important ? { kind: "needs_you" } : { kind: "offer", amount: roundPay(rule.offer_up_to * v) };
     return t;
@@ -2952,8 +3075,8 @@ export class Season {
       const amount = t.plan!.amount ?? 0, cost = amount - (s.next_deals?.[t.pid] ? 0 : dealAmount(activeContract(s.contracts?.[t.pid], s.year + 1) ?? { amount: 0, years: 0, start: 0 }));
       if (cost > room) continue;
       room -= cost;
-      // The rule signs one-year deals: a longer one is yours to negotiate.
-      talks[t.pid] = this.sign({ ...t }, amount, 1, "rule");
+      // The rule signs one-year deals (a longer one is yours to negotiate), and nothing is official until you confirm it.
+      talks[t.pid] = { ...this.sign({ ...t }, amount, 1, "rule"), pending: true };
     }
     s.talks = talks;
   }
@@ -2961,7 +3084,19 @@ export class Season {
   private sign(t: Talk, amount: number, years: number, via: NonNullable<Talk["deal"]>["via"]): Talk {
     const s = this.state;
     if (amount > 0) s.next_deals = { ...s.next_deals, [t.pid]: { amount, years, ...(years > 1 ? { locked: true } : {}) } };
-    return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined };
+    return { ...t, deal: { amount, years, via }, outcome: "signed", offer: undefined, pending: undefined };
+  }
+
+  /** Make the standing rule's renewals official: these players (all pending ones by default). */
+  confirmRenewals(pids?: number[]): number {
+    const s = this.state;
+    if (!s.talks || s.portal) throw new Error("renewal talks aren't open");
+    const want = pids ? new Set(pids) : null;
+    let n = 0;
+    const talks = { ...s.talks };
+    for (const t of Object.values(talks)) if (t.pending && (!want || want.has(t.pid))) { talks[t.pid] = { ...t, pending: undefined }; n++; }
+    s.talks = talks;
+    return n;
   }
 
   /** Change your standing rule; your staff re-plans everyone still open (and the rule signs whoever it now covers). */
@@ -3003,11 +3138,18 @@ export class Season {
   }
 
   /** Let him go (he enters the portal), or put him back in your staff's hands; "mine" keeps the staff's plan off him on December 31. */
-  setTalk(pid: number, patch: { let_go?: boolean; mine?: boolean }): void {
+  setTalk(pid: number, patch: { let_go?: boolean; mine?: boolean; reopen?: boolean }): void {
     const s = this.state, t = s.talks?.[pid];
     if (!t) throw new Error("no renewal talks with him");
-    if (t.outcome === "signed") throw new Error("he's already signed");
-    const next = { ...t };
+    if (t.outcome === "signed" && !t.pending) throw new Error("he's already signed");
+    if (s.portal) throw new Error("the talks are over");
+    let next = { ...t };
+    // An unconfirmed renewal: revoke it (let him go, or reopen talks and negotiate yourself).
+    if (t.pending && (patch.let_go || patch.reopen)) {
+      const deals = { ...s.next_deals }; delete deals[pid]; s.next_deals = deals;
+      next = { ...t, pending: undefined, deal: undefined, outcome: undefined, mine: true, plan: { kind: "needs_you" } };
+    } else if (t.pending) throw new Error("confirm or revoke his renewal first");
+    if (patch.reopen && !t.pending) throw new Error("there's no renewal to reopen");
     if (patch.let_go != null) next.outcome = patch.let_go ? "let_go" : undefined;
     if (patch.mine != null) next.mine = patch.mine;
     s.talks = { ...s.talks, [pid]: next };
@@ -3049,6 +3191,10 @@ export class Season {
     const leaving = this.leavingSet(), nfl = this.nflSlots();
     // Your open talks: the staff's plan for whatever you left to it.
     if (s.talks && me != null) {
+      const pending = Object.values(s.talks).filter((t) => t.pending);
+      for (const t of pending) s.talks[t.pid] = { ...t, pending: undefined };
+      if (pending.length) rep.news.push(this.news(date, "retention", `Your staff confirmed ${pending.length} renewal${pending.length === 1 ? "" : "s"}`,
+        "Renewals your standing rule made that you hadn't confirmed are now official.", [me]));
       for (const t of Object.values(s.talks)) {
         if (t.outcome || t.status === "graduating" || t.status === "nfl" || t.status === "contract") continue;
         if (t.mine) { if (t.status === "raise") s.talks[t.pid] = { ...t, outcome: "portal" }; continue; }
@@ -3359,8 +3505,10 @@ export class Season {
     return {
       pid: p.id, name: playerName(p), pos: p.pos, ovr: p.ovr, years: p.years, cls: p.class, starter: starters.has(p.id), importance: this.importance(p),
       watch: w, talk: t ? { status: t.status, label: STATUS_WORDS[t.status], ask: t.ask, patience: t.patience, offer: t.offer ?? null, counter: t.counter ?? null,
-        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null, length: this.lengthView(p) } : null,
+        deal: t.deal ?? null, outcome: t.outcome ?? null, mine: !!t.mine, plan: t.plan ?? null, market: t.market ?? null, length: this.lengthView(p), pending: !!t.pending } : null,
       pay: this.pay(p.id), next_deal: s.next_deals?.[p.id] ?? null,
+      /** How his season moves his renewal, and his season's line. */
+      renewal: this.renewalFactor(p), line: s.player_stats?.[p.id] ? lineText(s.player_stats[p.id]) : "", gp: s.player_stats?.[p.id]?.gp ?? 0,
     };
   }
 
@@ -3832,6 +3980,18 @@ export class Season {
     if (!s.film || s.film.game_id !== g.id) s.film = { game_id: g.id, hours: 0 };
     const share = timeSplit(s.recruiting.user.time, true).opponent;
     s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(staffSkill(this.staff(me), "scouting"))) * 10) / 10;
+    // The night before the game, the staff's opponent report reaches your inbox.
+    if (daysBetween(today, g.date) === 1) this.opponentMail(today);
+  }
+
+  private opponentMail(date: ISODate): void {
+    const r = this.scoutReport();
+    if (!r) return;
+    const opp = this.team(r.opponent), found = r.insights;
+    const lines = found.map((x) => `${x.side === "offense" ? "Their offense" : x.side === "defense" ? "Their defense" : "Personnel"}: ${x.text}${x.counter ? ` ${x.counter}` : ""}`);
+    this.mail({ date, category: "opponent", from: "Your staff", subject: `Opponent report: ${opp.school} (${Math.round(r.knowledge * 100)}% known)`,
+      body: [`${r.hours} hours of film this week (a usual week is ${Math.round(r.usual)}).`, ...(lines.length ? lines : ["Nothing on film stands out yet."])].join("\n"),
+      team_ids: [r.opponent], links: [{ label: "Game plan", to: "plan" }, { label: opp.school, to: `team/${opp.id}` }] });
   }
 
   /** How well a team's staff knows its opponent in a game (0 to 1): your film this week, or a usual week for everyone else. */
@@ -3944,12 +4104,45 @@ export class Season {
     else if (rw && rl) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     else if (mine) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     if (headline) rep.news.push(this.news(g.date, kind, headline, this.scoreLine(g), [g.home_id, g.away_id]));
+    if (mine) {
+      const won = (s.user_team_id === g.home_id) === homeWon, opp = s.user_team_id === g.home_id ? a : h;
+      const r = records(s.games, this.teams).get(s.user_team_id!);
+      this.mail({ date: g.date, category: "games", from: g.label ?? "Final", subject: `${won ? "Win" : "Loss"} ${won ? "over" : "to"} ${opp.school}: ${this.scoreLine(g)}`,
+        body: r ? `You're ${r.w}-${r.l}.` : "", team_ids: [g.home_id, g.away_id], links: [{ label: "Box score", to: `game/${g.id}` }] }, rep);
+    }
+  }
+
+  /** Post a message to the user team's inbox (none without a user team); returns it. */
+  mail(m: InboxPost, rep?: DayReport | null): InboxMessage | null {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return null;
+    s.inbox ??= [];
+    const date = m.date ?? s.date;
+    const msg: InboxMessage = { ...m, id: `${s.year}:${date}:${s.inbox.length}`, date, team_ids: m.team_ids ?? [me] };
+    s.inbox.push(msg);
+    rep?.inbox.push(msg);
+    return msg;
   }
 
   private news(date: ISODate, kind: string, headline: string, body: string, team_ids: number[]): NewsItem {
     const n = { id: `${date}:${this.state.news.length}`, date, kind, headline, body, team_ids };
     this.state.news.push(n);
+    this.newsMail(n);
     return n;
+  }
+
+  /** The news the user team's coach should see, into the inbox (inbox.ts says which). */
+  private newsMail(n: NewsItem): void {
+    const me = this.state.user_team_id;
+    if (me == null) return;
+    const r = newsToInbox(n.kind, n.team_ids, me);
+    if (!r) return;
+    let subject = n.headline;
+    if (n.kind === "poll") {
+      const rk = this.latestPoll("ap")?.ranks.findIndex((x) => x.team_id === me) ?? -1;
+      subject += rk >= 0 && rk < 25 ? ` · ${this.team(me).school} No. ${rk + 1}` : ` · ${this.team(me).school} unranked`;
+    }
+    this.mail({ ...r, date: n.date, subject, body: n.body, team_ids: n.team_ids.length ? n.team_ids : [me], news_id: n.id, urgent: URGENT_NEWS.test(n.headline) || undefined });
   }
 
   private addGame(rep: DayReport, g: Omit<Game, "id" | "status" | "home_score" | "away_score" | "overtime" | "kickoff_et" | "week" | "conference_game">): Game {

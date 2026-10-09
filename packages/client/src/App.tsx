@@ -11,6 +11,7 @@ import { Conferences } from "./screens/Conferences.tsx";
 import { Polls } from "./screens/Polls.tsx";
 import { Writers, WriterPage } from "./screens/Writers.tsx";
 import { News } from "./screens/News.tsx";
+import { Inbox } from "./screens/Inbox.tsx";
 import { TeamPage } from "./screens/Team.tsx";
 import { GamePage } from "./screens/Game.tsx";
 import { Postseason } from "./screens/Postseason.tsx";
@@ -30,6 +31,7 @@ import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
 import { RetentionScreen } from "./screens/Retention.tsx";
+import { RenewalsScreen } from "./screens/Renewals.tsx";
 import { PortalScreen } from "./screens/Portal.tsx";
 import { StaffScreen } from "./screens/Staff.tsx";
 import { CoachesScreen, CoachPage } from "./screens/Coaches.tsx";
@@ -79,9 +81,9 @@ const myPage = (label: string, screen: string): NavPage => ({
   label, mine: true, href: (id, my) => `#/l/${id}/${screen}/${my}`, on: (s, arg, my) => s === screen && Number(arg) === my,
 });
 const NAV: NavSection[] = [
-  { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("News", "news"), page("Calendar", "calendar")] },
+  { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("Inbox", "inbox", ["inbox"], true), page("News", "news"), page("Calendar", "calendar")] },
   { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
-    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
+    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Renewals", "renewals", ["renewals"], true), page("Game day", "live", ["live"], true)] },
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
@@ -160,7 +162,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         <div className="today"><div className="date">{fmtDate(state.date, true)}</div><div className="small">{state.name}</div></div>
         <SimControls busy={busy} done={state.done} year={state.year} onSim={sim} date={state.date} />
       </header>
-      <Nav id={id} screen={screen} arg={arg} my={my?.id ?? null} gameday={state.my_next_game?.date === state.date} />
+      <Nav id={id} screen={screen} arg={arg} my={my?.id ?? null} gameday={state.my_next_game?.date === state.date} unread={state.inbox_unread ?? 0} />
       <main className="page">
         {screen === "home" && <Home />}
         {screen === "calendar" && <CalendarScreen />}
@@ -172,6 +174,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "writers" && <Writers />}
         {screen === "writer" && arg && <WriterPage wid={Number(arg)} />}
         {screen === "news" && <News />}
+        {screen === "inbox" && <Inbox />}
         {screen === "team" && arg && <TeamPage key={arg} tid={Number(arg)} tab={sub} />}
         {screen === "game" && arg && <GamePage gid={Number(arg)} />}
         {screen === "settings" && <SettingsScreen />}
@@ -191,6 +194,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "stats" && <StatsScreen key={`${arg}/${sub}`} sub={arg ?? "players"} year={sub ? Number(sub) : undefined} />}
         {screen === "draft" && <DraftScreen />}
         {screen === "retention" && <RetentionScreen />}
+        {screen === "renewals" && <RenewalsScreen />}
         {screen === "portal" && <PortalScreen />}
         {screen === "staff" && <StaffScreen />}
         {screen === "coaches" && <CoachesScreen />}
@@ -202,7 +206,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
 }
 
 /** The two-level menu: sections across the top, the open section's pages underneath. */
-function Nav({ id, screen, arg, my, gameday }: { id: string; screen: string; arg?: string; my: number | null; gameday: boolean }) {
+function Nav({ id, screen, arg, my, gameday, unread }: { id: string; screen: string; arg?: string; my: number | null; gameday: boolean; unread: number }) {
   const cur = sectionOf(screen, arg, my);
   const visible = (p: NavPage) => (!p.mine || my != null) && (p.label !== "Game day" || gameday || screen === "live");
   const sec = NAV.find((x) => x.key === cur)!;
@@ -211,11 +215,11 @@ function Nav({ id, screen, arg, my, gameday }: { id: string; screen: string; arg
       <div className="sections">
         {NAV.filter((x) => x.pages.some(visible)).map((x) => {
           const first = x.pages.find(visible)!;
-          return <a key={x.key} href={first.href(id, my)} className={x.key === cur ? "on" : ""}>{x.label}{x.key === "team" && gameday && <span className="dot" title="Game day" />}</a>;
+          return <a key={x.key} href={first.href(id, my)} className={x.key === cur ? "on" : ""}>{x.label}{x.key === "team" && gameday && <span className="dot" title="Game day" />}{x.key === "home" && my != null && unread > 0 && <span className="badge" title="Unread messages">{unread}</span>}</a>;
         })}
       </div>
       <div className="pages">
-        {sec.pages.filter(visible).map((p) => <a key={p.label} href={p.href(id, my)} className={(p.on(screen, arg, my) ? "on" : "") + (p.label === "Game day" ? " gameday" : "")}>{p.label}</a>)}
+        {sec.pages.filter(visible).map((p) => <a key={p.label} href={p.href(id, my)} className={(p.on(screen, arg, my) ? "on" : "") + (p.label === "Game day" ? " gameday" : "")}>{p.label}{p.label === "Inbox" && unread > 0 && <span className="badge">{unread}</span>}</a>)}
       </div>
     </nav>
   );

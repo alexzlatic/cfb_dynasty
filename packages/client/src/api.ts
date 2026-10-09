@@ -73,8 +73,12 @@ export interface TalkView {
   plan: { kind: "renew" | "offer" | "let_go" | "needs_you"; amount?: number } | null; market: number | null;
   /** A longer deal: how much more a year he wants per extra season, the longest he'll sign (your staff's read until you talk). */
   length: { premium: number; max: number; known: boolean };
+  /** A renewal your standing rule made that waits on your confirmation. */
+  pending: boolean;
 }
-export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null }
+export interface RetentionRow { pid: number; name: string; pos: string; ovr: number; years: number; cls: string; starter: boolean; importance: number; watch: WatchView; talk: TalkView | null; pay: number; next_deal: { amount: number; years: number } | null;
+  /** How his season moves his renewal (factor on his pay; pct: his production's rank at his position), his season line and games. */
+  renewal: { factor: number; pct: number | null; honor: "all_american" | "poy" | null }; line: string; gp: number }
 export interface RenewalRule { auto_up_to: number; offer_up_to: number; release_over: number; budget_share: number }
 export interface NextBudget { total: number; committed: number; deals: number; contracts: number }
 export interface RetentionData { talks_open: boolean; portal_open: boolean; rule: RenewalRule; budget: NextBudget; rows: RetentionRow[]; talks_left: number; dates: { talks: string | null; portal: string | null } }
@@ -113,6 +117,9 @@ export interface PayrollPlayer {
   contract: { amount: number; years: number; start: number; retention?: number; locked?: boolean } | null; nil: NilDeal | null; morale: number; eligibility: number; starter: boolean; gp: number;
   /** Completed a season here (can be paid from the retention fund); the most the NIL review approves for him. */
   returning: boolean; ceiling: number;
+  /** Your players: what he wants to sign for, by length (null: he won't sign that long), and your offer waiting on his answer. */
+  demand?: { years: number; amount: number | null; why?: string }[];
+  offer?: { amount: number; years: number; made: string; answer: string } | null;
 }
 /** A school's one roster pool: the AD's revenue share (and retention fund) plus the collective's money. */
 export interface RosterPool { revenue_share: number; retention: number; collective: number; total: number; signed: number; room: number }
@@ -217,7 +224,7 @@ export interface ClassRank { team_id: number; points: number; commits: number; f
 export interface LeagueState {
   id: string; name: string; year: number; date: string; user_team_id: number | null; settings: Settings; done: boolean;
   champion: number | null; upcoming: CalEvent[]; my_next_game: Game | null; ap: { team_id: number; points: number }[];
-  playoff: PlayoffState | null; news: NewsItem[]; career: CareerView | null; past: SeasonSummary[];
+  playoff: PlayoffState | null; news: NewsItem[]; career: CareerView | null; past: SeasonSummary[]; inbox_unread?: number;
 }
 
 export type { RatedPlayer, SeasonSummary } from "@cfb/core";
@@ -284,7 +291,7 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; career: (PlayerSeason & { year: number })[]; awards: Award[]; redshirt: boolean; redshirt_games: number; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
+    season: PlayerSeason | null; career: (PlayerSeason & { year: number })[]; awards: Award[]; redshirt: boolean; redshirt_games: number; eligibility: Eligibility; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
     potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
@@ -292,6 +299,7 @@ export const api = {
   game: (id: string, gid: number) => req<{ game: GameRow; detail: GameDetail | null; box: { home: BoxRow[]; away: BoxRow[] } | null }>(`/api/leagues/${id}/games/${gid}`),
   standings: (id: string) => req<{ conference: string; rows: { team_id: number; w: number; l: number; cw: number; cl: number }[] }[]>(`/api/leagues/${id}/standings`),
   polls: (id: string) => req<Poll[]>(`/api/leagues/${id}/polls`),
+  inbox: (id: string, q: Record<string, string> = {}) => req<{ messages: InboxMessage[]; unread: number }>(`/api/leagues/${id}/inbox?` + new URLSearchParams({ limit: "2000", ...q })),
   news: (id: string, q: Record<string, string> = {}) => req<NewsItem[]>(`/api/leagues/${id}/news?` + new URLSearchParams({ limit: "300", ...q })),
   writers: (id: string) => req<WriterProfile[]>(`/api/leagues/${id}/writers`),
   writer: (id: string, wid: number) => req<{ writer: WriterProfile; ballots: { date: string; team_ids: number[] }[]; stories: NewsItem[] }>(`/api/leagues/${id}/writers/${wid}`),
@@ -328,3 +336,9 @@ export function subscribe(league: string, onChange: (msg: any) => void): () => v
   connect();
   return () => { closed = true; ws?.close(); };
 }
+
+/** Seasons of eligibility: which season in college this is, seasons left (this one included), whether a fifth year may follow. */
+export interface Eligibility { year: number; left: number; fifth: boolean }
+
+export type { InboxCategory } from "@cfb/core";
+export type InboxMessage = import("@cfb/core").InboxMessage & { read: boolean };
