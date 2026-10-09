@@ -185,15 +185,17 @@ the first made of classes the game generated and recruited).
 
 | | real | game |
 |---|---|---|
-| First-rounders who were top-25 recruits | 21% | 16% |
-| ... No. 26-100 | 18% | 25% |
-| ... No. 101-300 | 17% | 25% |
+| First-rounders who were top-25 recruits | 21% | 21% |
+| ... No. 26-100 | 18% | 30% |
+| ... No. 101-300 | 17% | 21% |
 | ... No. 301-1,000 | 26% | 19% |
-| ... below 1,000 or unranked | 18% | 15% |
-| Top-25 recruits ever drafted | 53% | 56% |
-| Top-25 recruits drafted in the first round | 19% | 21% |
+| ... below 1,000 or unranked | 18% | 9% |
+| Top-25 recruits ever drafted | 53% | 62% |
+| Top-25 recruits drafted in the first round | 19% | 26% |
 
-The game's first round still leans a little to the top 300 (66% against 56%). The rest of the real gap is
+One seed's drafts swing a lot from year to year (a top-25 share of 6% to 38% in single drafts). The game's
+first round still leans to the top 300 (72% against 56%), and top recruits pan out a little more often
+than real ones. The rest of the real gap is
 college development (late bloomers, walk-ons and junior college players), which the game models more
 tamely than real life. Before this, the game's rosters were filled out with generated freshmen rated like
 the school's own recruits, so elite programs' filler linemen were five-star talents who went in the first
