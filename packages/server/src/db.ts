@@ -59,6 +59,11 @@ const MIGRATIONS: string[] = [
   CREATE INDEX player_seasons_year ON player_seasons(year);
   CREATE TABLE team_seasons (team_id INTEGER NOT NULL, year INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (team_id, year));
   `,
+  // 6: the user's inbox: messages to the user team, with whether they've been read (past seasons' tagged with their year)
+  `
+  CREATE TABLE inbox (id TEXT PRIMARY KEY, date TEXT NOT NULL, category TEXT NOT NULL, season INTEGER, read INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
+  CREATE INDEX inbox_date ON inbox(date);
+  `,
 ];
 
 export function openDb(path: string): DatabaseSync {

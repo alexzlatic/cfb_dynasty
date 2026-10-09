@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { answerDays, askFor, lengthPremium, maxYears, openingAsk, payFor, reasonsOf, respond, stayScore, watchOf, type StayContext } from "../src/portal.ts";
+import { answerDays, askFor, renewalNudge, lengthPremium, maxYears, openingAsk, payFor, reasonsOf, respond, stayScore, watchOf, type StayContext } from "../src/portal.ts";
 import type { Persona } from "../src/valuation.ts";
 import { loadSeed } from "../src/seed.ts";
+import { Season } from "../src/season.ts";
 import { freshModel, rollRosters } from "../src/rollover.ts";
 
 const avg: Persona = { kind: "steady", money: 1, playing: 1, development: 1, fit: 1, winning: 1, home: 1, loyalty: 1 };
@@ -127,4 +128,66 @@ describe("multi-year deals", () => {
     // A loyal player signs for three at about his one-year number.
     expect(respond(t, 505_000, 3, steady).accepted).toBe(true);
   });
+});
+
+describe("renewals", () => {
+  it("a renewal is about his pay now: a little more after a big season, a little less after a quiet one", () => {
+    expect(renewalNudge(1)).toBeGreaterThan(1.05);
+    expect(renewalNudge(0.5)).toBeCloseTo(1.015, 3);
+    expect(renewalNudge(0)).toBeGreaterThanOrEqual(0.95);
+    expect(renewalNudge(null)).toBeLessThan(1);
+    expect(renewalNudge(0.5, "all_american")).toBeGreaterThan(renewalNudge(0.5));
+  });
+
+  it("the standing rule renews players at about their pay, waiting on you; you confirm, renegotiate or revoke", () => {
+    const seed = loadSeed();
+    const me = seed.teams.find((t) => t.school === "UCLA")!.id;
+    const season = Season.create(seed, { seed: 7, user_team_id: me, settings: { keep_pbp: "none" } as never });
+    while (!season.state.talks) season.advanceDay();
+    const talks = Object.values(season.state.talks!);
+    const pending = talks.filter((t) => t.pending);
+    expect(pending.length).toBeGreaterThan(10);
+    // Renewals of players happy to stay hold their pay (revenue share and NIL), give or take their season.
+    for (const t of pending) {
+      const was = season.pay(t.pid);
+      if (was > 50_000 && t.status === "staying") { expect(t.deal!.amount).toBeGreaterThan(0.93 * was); expect(t.deal!.amount).toBeLessThan(1.15 * was); }
+    }
+    const [a, b, c] = pending;
+    season.setTalk(b.pid, { reopen: true });
+    expect(season.state.talks![b.pid].outcome).toBeUndefined();
+    expect(season.state.next_deals?.[b.pid]).toBeUndefined();
+    season.setTalk(c.pid, { let_go: true });
+    expect(season.state.talks![c.pid].outcome).toBe("let_go");
+    expect(season.confirmRenewals([a.pid])).toBe(1);
+    expect(season.state.talks![a.pid].pending).toBeUndefined();
+    expect(() => season.setTalk(a.pid, { let_go: true })).toThrow();
+    // The rest are confirmed by your staff when the portal opens; the one you revoked enters it.
+    while (!season.state.portal) season.advanceDay();
+    expect(Object.values(season.state.talks!).some((t) => t.pending)).toBe(false);
+    expect(season.state.portal!.entries.some((e) => e.pid === c.pid)).toBe(true);
+  }, 120_000);
+});
+
+describe("contract offers", () => {
+  it("you see his demand, make an offer, and he answers in your inbox in a day or two", () => {
+    const seed = loadSeed();
+    const me = seed.teams.find((t) => t.school === "UCLA")!.id;
+    const season = Season.create(seed, { seed: 7, user_team_id: me, settings: { keep_pbp: "none" } as never });
+    const roster = season.roster(me).filter((p) => season.pay(p.id) > 100_000).sort((a, b) => a.id - b.id);
+    const [a, b] = roster;
+    // One season: anything that isn't a pay cut.
+    expect(season.contractDemand(a.id)[0]).toEqual({ years: 1, amount: season.pay(a.id) });
+    const raise = season.pay(a.id) + 20_000;
+    season.contractOffer(a.id, raise, 1);
+    expect(() => season.contractOffer(a.id, raise, 1)).toThrow();
+    // A lowball pay cut is turned down, with his number.
+    season.contractOffer(b.id, Math.round(season.pay(b.id) * 0.5), 1);
+    const before = season.state.inbox?.length ?? 0;
+    for (let i = 0; i < 3; i++) season.advanceDay();
+    expect(season.state.contract_offers).toBeUndefined();
+    expect(season.pay(a.id)).toBe(raise);
+    const mail = (season.state.inbox ?? []).slice(before).filter((m) => m.category === "contracts");
+    expect(mail.some((m) => m.subject.includes("accepts"))).toBe(true);
+    expect(mail.some((m) => m.subject.includes("turns down") && m.urgent)).toBe(true);
+  }, 60_000);
 });

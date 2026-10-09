@@ -3,7 +3,7 @@ import { useSort, type Col } from "../sort.tsx";
 import { StatsTable, catsWith, sumLines } from "../stats.tsx";
 import { ATTR_LABELS, ATTRS, fromZ, type Pos } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type DepthChart, type GameRow, type Injury, type PersonaView, type PlayerSeason, type RatedPlayer } from "../api.ts";
+import { api, type DepthChart, type GameRow, type Injury, type PersonaView, type PlayerSeason, type RatedPlayer, type Eligibility } from "../api.ts";
 import { Dial, DualBar } from "./ratings.tsx";
 import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
@@ -112,6 +112,16 @@ const AWARD_LABEL: Record<string, string> = {
 };
 
 /** A player's page, laid out like OOTP's: a header card, then tabs for ratings, stats and his background. */
+const ordinal = (n: number) => `${n}${n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th"}`;
+/** "2 years of eligibility left", "Final year of eligibility" */
+const eligShort = (e: Eligibility) => (e.left <= 1 ? (e.fifth ? "Final year, a fifth possible" : "Final year of eligibility") : `${e.left} years of eligibility left`);
+/** Further along in college than his class says: he has sat out a season (a redshirt). */
+const CLASS_YEAR: Record<string, number> = { FR: 0, SO: 1, JR: 2, SR: 3 };
+const redshirted = (p: { class: string; years: number }) => p.class in CLASS_YEAR && Math.floor(p.years) > CLASS_YEAR[p.class];
+const eligNote = (e: Eligibility) => (e.left <= 1
+  ? (e.fifth ? "His fourth season; some players stay for a fifth (a redshirt year)." : "His last season of college football.")
+  : `This season and ${e.left - 1} more${e.fifth ? ", plus a possible fifth year" : ""}.`);
+
 export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string }) {
   const { id, state } = useLeague();
   const data = useData(() => api.player(id, pid), [pid]);
@@ -127,12 +137,13 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
         <div className="jersey">{p.jersey ?? p.pos}</div>
         <Logo team={t} size={84} />
         <div className="who">
-          <div className="kicker">{p.pos} · {p.class}{data.redshirt ? " (redshirt)" : ""} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school} {t.mascot}</a></div>
+          <div className="kicker">{p.pos} · {redshirted(p) ? "RS " : ""}{p.class}{data.redshirt ? " (redshirt)" : ""} · <a href={`#/l/${id}/team/${t.id}`} style={{ color: "inherit" }}>{t.school} {t.mascot}</a></div>
           <h1>{p.first} {p.last}</h1>
           <div className="bio">{[heightStr(p.height), p.weight ? `${p.weight} lb` : null, [p.home.city, p.home.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
           <div className="chips">
             {data.slots.length > 0 && <span className="chip">{data.slots.join(", ")}</span>}
             <span className="chip" title={data.persona.label}>{data.persona.name}</span>
+            <span className="chip" title={eligNote(data.eligibility)}>{eligShort(data.eligibility)}</span>
             {p.stars ? <span className="chip">{"★".repeat(p.stars)} recruit{p.natl_rank ? `, No. ${p.natl_rank}` : ""}</span> : null}
             {injury && <span className="chip bad">Injured: {injury.type}, {outUntil(injury)}</span>}
             {data.awards.some((a) => a.type === "heisman") && <span className="chip gold">Heisman winner</span>}
@@ -195,7 +206,8 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
           <Panel title="Background">
             <table className="grid tight"><tbody>
               <tr><td>Recruiting</td><td>{p.stars ? `${"★".repeat(p.stars)} (${p.composite?.toFixed(4)})` : "Unranked"}{p.natl_rank ? `, #${p.natl_rank} nationally` : ""}</td></tr>
-              <tr><td>Seasons in college</td><td>{Math.floor(p.years)}</td></tr>
+              <tr><td>Season in college</td><td>{ordinal(data.eligibility.year)}{redshirted(p) ? ` (redshirt ${p.class === "FR" ? "freshman" : p.class === "SO" ? "sophomore" : p.class === "JR" ? "junior" : "senior"})` : ""}</td></tr>
+              <tr><td>Eligibility</td><td>{eligShort(data.eligibility)}<div className="small muted">{eligNote(data.eligibility)}</div></td></tr>
               <tr><td>Listed position</td><td>{p.listed}</td></tr>
               <tr><td>Hometown</td><td>{[p.home.city, p.home.state].filter(Boolean).join(", ") || "Unknown"}</td></tr>
             </tbody></table>
