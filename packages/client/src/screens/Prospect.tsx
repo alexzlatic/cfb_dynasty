@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ATTR_LABELS } from "@cfb/core/players";
 import { useData, useLeague } from "../App.tsx";
-import { api, type Considering } from "../api.ts";
+import { api, type Considering, type HsCol, type HsSeason } from "../api.ts";
+import { SortTable, type Col } from "../sort.tsx";
 import { Logo, heightStr, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { Dial, DualBar, recruitStars } from "./ratings.tsx";
@@ -60,6 +61,9 @@ export function ProspectPage({ pid }: { pid: number }) {
           <span className="muted small">{p.evals} evaluation{p.evals === 1 ? "" : "s"} · {Math.round(p.interest)} contact hours so far</span>
         </div>
       )}
+      <Panel title="High school stats" right={<span className="small muted">{p.home.city ? `${p.home.city}, ${p.home.state ?? ""}` : ""}</span>}>
+        <HsTable seasons={p.hs_seasons} cols={p.hs_cols} />
+      </Panel>
       <div className="cols">
         <div>
           <Panel title="Ratings" right={<span className="small muted">now / on arrival, as your staff projects them</span>}>
@@ -84,6 +88,28 @@ export function ProspectPage({ pid }: { pid: number }) {
           </Panel>
         </div>
       </div>
+    </div>
+  );
+}
+
+const LEVEL = { varsity: "Varsity", backup: "Varsity (backup)", jv: "JV" } as const;
+
+/** His high school seasons, one line each, with his position's stats; a season still going is marked. */
+function HsTable({ seasons, cols }: { seasons: HsSeason[]; cols: HsCol[] }) {
+  if (!seasons.length) return <p className="muted">His first high school season hasn't started.</p>;
+  const run = (s: HsSeason) => (s.champion ? "State champion" : s.playoffs ? `Playoffs, ${s.playoffs} game${s.playoffs === 1 ? "" : "s"}` : s.final ? "Missed playoffs" : "");
+  const table: Col<HsSeason>[] = [
+    { key: "year", label: "Season", cell: (s) => <span className="nowrap">{s.year} {GRADE[s.grade]}{s.final ? "" : <span className="muted small"> (in progress)</span>}</span>, by: (s) => s.year, asc: true },
+    { key: "level", label: "Level", cell: (s) => <span className="small">{LEVEL[s.level]}</span> },
+    { key: "g", label: "G", className: "num", cell: (s) => (s.level === "jv" ? "" : s.g), by: (s) => s.g },
+    ...cols.map((c): Col<HsSeason> => ({ key: c.key, label: c.label, title: c.title, className: "num", cell: (s) => (s.level === "jv" ? "" : (s.stats[c.key] ?? 0).toLocaleString()), by: (s) => (s.level === "jv" ? null : s.stats[c.key] ?? 0) })),
+    { key: "notes", label: "", cell: (s) => <span className="small muted nowrap">{[run(s), s.injured ? `missed ${s.injured} game${s.injured === 1 ? "" : "s"} hurt` : ""].filter(Boolean).join(" · ")}</span> },
+  ];
+  return (
+    <div className="scrollx">
+      <SortTable rows={seasons} cols={table} rowKey={(s) => s.year} />
+      <p className="small muted">What he has actually done, not anyone's read of him. Numbers depend on his competition and his team's scheme as well as his talent, and early bloomers pile them up young,
+        so they're a noisy signal; your staff gives them a little weight. A prospect whose production outruns his rating is worth a closer look.</p>
     </div>
   );
 }

@@ -24,6 +24,7 @@ import {
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import { HS_COLS, HS_LEAD, hsLatest, hsSeasons, hsSummary } from "./hsstats.ts";
 import {
   CAROUSEL_CLOSE, ROLE_NAMES, buyout, candidates, coachName, contractYears, hire, jobOf, marketDay, openCarousel, release, salaryFor, staffBudget, staffPay, staffRecs,
   newCoach, startCoaching, toMember, willing, type CoachRec, type CoachingState, type Job, type MarketCtx, type Role, type TeamYear,
@@ -1946,8 +1947,15 @@ export class Season {
       scouting: st.user.scout.includes(p.id), lat: p.home.lat, lon: p.home.lon,
       commit: p.commit ? { team_id: p.commit.team, signed: p.commit.signed, date: p.commit.date } : null,
       offers: p.offers, interest: me != null ? p.interest[me] ?? 0 : 0,
+      hs: this.hsView(p),
       top_schools: Object.entries(p.interest).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 6).map(([id, h]) => ({ team_id: Number(id), hours: Math.round(h), offered: p.offers.includes(Number(id)) })),
     };
+  }
+
+  /** His latest high school season for lists (JV or varsity): the line, a few words and the number his position is sorted by. */
+  private hsView(p: Prospect) {
+    const last = hsLatest(this.state.seed, p, this.state.date);
+    return last ? { year: last.year, grade: last.grade, final: last.final, g: last.g, level: last.level, summary: hsSummary(p.pos, last), lead: last.stats[HS_LEAD[p.pos]] ?? 0, stats: last.stats } : null;
   }
 
   /**
@@ -1977,7 +1985,9 @@ export class Season {
       const nowGap = arrivalOvr(view.potential.est) - (view.ovr ? (view.ovr.lo + view.ovr.hi) / 2 : arrivalOvr(view.potential.est));
       ratings = ATTRS[p.pos].map((a) => { const arrival = fromZ(zz + 0.47 * rng.gauss(0, 1)); return { attr: a, now: Math.max(15, Math.round(arrival - nowGap)), arrival }; });
     }
-    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id) };
+    // His high school seasons so far (true production: nobody's read filters it) and his position's columns.
+    const hs_seasons = hsSeasons(s.seed, p, s.date);
+    return { ...view, considering, history, ratings, years_out: Math.round(yearsOut(p, s.date) * 10) / 10, persona: this.personaRead(p.id), hs_seasons, hs_cols: HS_COLS[p.pos] };
   }
 
   /** The schools a prospect is considering, best first (see RecruitWeek.considering). */

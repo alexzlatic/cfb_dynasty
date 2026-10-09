@@ -26,6 +26,7 @@ export * from "./finance.ts";
 export * from "./valuation.ts";
 export * from "./rollover.ts";
 export * from "./recruiting.ts";
+export * from "./hsstats.ts";
 export * from "./staff.ts";
 export * from "./draft.ts";
 export * from "./portal.ts";

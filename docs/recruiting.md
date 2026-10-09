@@ -68,6 +68,43 @@ Your staff's read of a prospect is its own evaluation combined with the service'
 Early scouting can pay off or backfire: a sophomore you love may stall and one you passed on may grow.
 Scouting costs come out of your operations budget.
 
+## High school stats
+
+Every prospect plays a high school season each fall (games on Fridays from late August, ten in the regular
+season and up to five in the playoffs), and his stats build game by game. Code: `packages/core/src/hsstats.ts`.
+
+- **Varsity or JV.** About 14% of freshmen start on varsity, 56% of sophomores, 93% of juniors and 98% of
+  seniors; the better he is for his age, the sooner. Once on varsity he stays there.
+- **Production follows the truth.** His numbers come from his true ability at the time (his true potential plus
+  his own form), not anyone's read of him, with noise on top: his situation (competition, his team and its
+  scheme, the same every year), the season itself (role, health, luck), and his age (a freshman produces less
+  than the same player as a senior). Early bloomers pile up numbers young; late bloomers' numbers undersell them.
+- **Your staff's read.** Scouts give stats a little weight, trusting them less than they deserve (they know numbers
+  lie), so a sophomore's read moves about a point on average, a senior's under a tenth. Seasons count as they're
+  played, so no date moves everyone. The service's ratings ignore stats, and the AI recruits on the service.
+
+Sizes are a judgment call: there is no public table of high school production for college recruits, so an average
+starter in a class has a normal good varsity season and the best reach what top recruits post. Seed 7, seniors'
+senior seasons (starters): median / 90th percentile / best, from `npx tsx packages/core/scripts/hsstats-check.ts`:
+
+| | median | 90th pct | best |
+|---|---|---|---|
+| QB passing yards, TD | 1,871, 16 | 3,020, 30 | 5,608, 51 |
+| RB rushing yards, TD | 807, 11 | 1,407, 22 | 2,288, 40 |
+| WR receiving yards | 520 | 953 | 2,121 |
+| LB tackles | 80 | 113 | 167 |
+| DE sacks | 5 | 10 | 27 |
+| CB interceptions | 3 | 5 | 13 |
+
+How much they tell you (correlation of a prospect's stats with where he truly arrives at college, against your
+staff's read): sophomores 0.43 vs 0.63, juniors 0.53 vs 0.89, seniors 0.64 vs 0.97. Outside the service's top 300,
+the sophomores whose stats run 6+ points above the service's read are truly 3+ points better three times as often
+as the rest (22% vs 7%); juniors 19% vs 15%, seniors 8% vs 6%. Stats find the most among the young and the
+unrated, where reads are wide; by senior year the scouts have mostly caught up.
+
+The prospect list shows each one's latest season; pick a position to see and sort by every stat. A prospect's
+page has his season-by-season table, and the big board shows his latest line.
+
 ## Staff
 
 Every coach has five skills, 25 to 95 with 50 average: recruiting, scouting, development, game planning

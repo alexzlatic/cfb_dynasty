@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
+import { HS_COLS, REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Pos, type Prospect, type Skill } from "@cfb/core";
 import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
@@ -272,6 +272,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
         else if (sort === "pos") rows.sort((a, b) => a.pos.localeCompare(b.pos) || byRank(a, b));
         else if (sort === "home") rows.sort((a, b) => (a.home.state ?? "~").localeCompare(b.home.state ?? "~") || (a.home.city ?? "").localeCompare(b.home.city ?? "") || byRank(a, b));
         else if (sort === "now") rows.sort((a, b) => (b.ovr?.hi ?? 0) - (a.ovr?.hi ?? 0) || byRank(a, b));
+        else if (sort === "stat" || sort.startsWith("stat:")) {
+          // His latest season: his position's lead number, or one stat (with a position chosen). JV and no season go last.
+          const key = sort.slice(5);
+          const v = (r: typeof rows[number]) => (!r.hs ? -Infinity : r.hs.level === "jv" ? -1 : key ? r.hs.stats[key] ?? 0 : r.hs.lead);
+          rows.sort((a, b) => v(b) - v(a) || byRank(a, b));
+        }
         else if (sort === "status") rows.sort((a, b) => (a.commit ? (a.commit.signed ? 2 : 1) : 0) - (b.commit ? (b.commit.signed ? 2 : 1) : 0) || byRank(a, b));
         else rows.sort(byRank);
         // A second click on a column header flips it.
@@ -286,7 +292,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         });
         return {
           available: true, team_id: me, year: s.year, date: s.date, cls, classes,
-          total: rows.length, prospects: rows.slice(offset, offset + limit),
+          total: rows.length, prospects: rows.slice(offset, offset + limit), hs_cols: pos ? HS_COLS[pos as Pos] ?? [] : null,
           settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: u.time, split: time, board: u.board ?? [] },
           staff, skills, skill_names: SKILLS, hours: STAFF_HOURS, regions: REGIONS, costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS },
           home: me != null ? { lat: S.team(me).venue?.lat ?? null, lon: S.team(me).venue?.lon ?? null, state: S.team(me).venue?.state ?? null } : null,

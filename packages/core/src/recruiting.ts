@@ -4,6 +4,7 @@ import { mixSeed } from "./hash.ts";
 import { ATTRS, POSITIONS, fromZ, overall, z, type Pos, type RatedPlayer } from "./players.ts";
 import { RECRUIT_FIT, STARTERS, choose, miles, offerScore, persona, type Persona, type SchoolOffer } from "./valuation.ts";
 import type { StaffTime } from "./staff.ts";
+import { statRead } from "./hsstats.ts";
 
 /**
  * High school recruiting (M3 step 3). Four classes are live at once: in August 2026 the 2027 class are
@@ -326,8 +327,8 @@ export function readSd(eye: SchoolEye, p: Prospect, date: ISODate, evals = 0): n
 }
 
 /**
- * A school's estimate of a prospect's potential and how sure it is: its own read, combined with the service's
- * when he's rated. The service's public ratings change on its re-rate dates, but what the staff takes from
+ * A school's estimate of a prospect's potential and how sure it is: its own read, combined with what his high
+ * school stats say and with the service's when he's rated. The service's public ratings change on its re-rate dates, but what the staff takes from
  * it follows the service's evaluators day by day (the same error, at its everyday width), so no date moves
  * every estimate at once.
  */
@@ -336,11 +337,17 @@ export function schoolRead(eye: SchoolEye, p: Prospect, date: ISODate, seed: num
   const sd = readSd(eye, p, date, evals);
   // His error drifts with time, and each trip adds what it saw, so the read narrows smoothly toward the truth.
   const own = truthAt(p, date) + sd * smoothError(seed, eye.id, p.id, t);
-  if (!p.svc) return { est: own, sd };
-  const ssd = svcSd(t);
-  const svc = p.svc.real ? p.svc.read : truthAt(p, date) + ssd * smoothError(seed, p.id, 0, t);
-  const w1 = 1 / (sd * sd), w2 = 1 / (ssd * ssd);
-  return { est: (own * w1 + svc * w2) / (w1 + w2), sd: 1 / Math.sqrt(w1 + w2) };
+  // His high school stats, which the staff trusts only a little (hsstats.ts).
+  const st = statRead(seed, p, date);
+  let w = 1 / (sd * sd), est = own * w;
+  if (st) { const ws = 1 / (st.sd * st.sd); est += st.est * ws; w += ws; }
+  if (p.svc) {
+    const ssd = svcSd(t);
+    const svc = p.svc.real ? p.svc.read : truthAt(p, date) + ssd * smoothError(seed, p.id, 0, t);
+    const ws = 1 / (ssd * ssd);
+    est += svc * ws; w += ws;
+  }
+  return { est: est / w, sd: 1 / Math.sqrt(w) };
 }
 
 // ---- discovery: which prospects a staff knows about ----------------------------------------------------
