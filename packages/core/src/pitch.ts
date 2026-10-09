@@ -40,8 +40,12 @@ const POINT_CAP = 0.6;
 /** Visits: an official visit is worth 0.14 to 0.3 by how the campus shows; a head coach visit 0.06 to 0.14 by the staff's recruiting skill; both fade with a 20-week half-life. */
 const VISIT_HALF_LIFE = 20;
 export const MAX_COACH_VISITS = 2;
-export const COACH_VISITS_PER_WEEK = 3;
-export const OFFICIAL_VISITS_PER_WEEK = 4;
+/**
+ * Hours a visit takes. A home visit is the head coach's own day on the road (near home or a flight away);
+ * an official visit is a weekend on campus run by the staff, two hours of it the head coach's. Both come out
+ * of the week's recruiting hours, so they leave fewer contact hours for your board.
+ */
+export const VISIT_HOURS = { coach_near: 6, coach_far: 10, official: 8, official_hc: 2 };
 export const VISIT_COST = { official_near: 3_000, official_far: 8_000, coach_near: 1_500, coach_far: 4_000 };
 /** What breaking your word on an agreed deal (or exhausting his patience) costs with him. */
 const PULLED_PENALTY = 0.2, DONE_PENALTY = 0.1;

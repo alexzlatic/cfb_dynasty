@@ -646,6 +646,10 @@ table.pitchpoints td { vertical-align: middle; }
 .heardbar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: var(--series-1); }
 .heardbar i { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); }
 .visits { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.weekhours { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.weekhours > div { display: flex; flex-direction: column; gap: 2px; }
+.weekhours b { font-size: 1.15em; }
+@media (max-width: 700px) { .weekhours { grid-template-columns: 1fr 1fr; } }
 .visit p { margin: 6px 0; }
 table.pitchparts { margin-top: 10px; }
 table.pitchparts tr.total td { font-weight: 700; border-top: 2px solid var(--line); }

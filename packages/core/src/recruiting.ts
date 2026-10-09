@@ -339,6 +339,8 @@ const REGION_OF = new Map(Object.entries(REGIONS).flatMap(([k, v]) => v.states.m
 export const SCOUT_COST = { region: 95_000, trip_near: 2_500, trip_far: 7_500 };
 /** Staff hours an evaluation takes. */
 export const TRIP_HOURS = { near: 6, far: 9 };
+/** Contact hours a week one prospect can take: about an hour and a half a day of calls, texts and messages from your staff. */
+export const MAX_CONTACT = 10;
 
 export interface SchoolEye {
   id: number; lat: number; lon: number; state: string | null;
@@ -504,8 +506,10 @@ export function classTarget(roster: { pos: Pos; years: number }[], portalShare: 
 export interface UserRecruiting {
   /** Your staff works your board (on) or you set every hour and offer yourself (off). */
   auto: boolean;
-  /** Weekly contact hours on each prospect, by prospect id (your board when auto is off). */
+  /** Weekly contact hours on each prospect, by prospect id (your board when auto is off), MAX_CONTACT at most. */
   hours: Record<string, number>;
+  /** Your off-field recruiting staff (absent: the usual for your program, usualStaffers). */
+  staffers?: number;
   /** Prospects your scouts go to see, in order (each at most once a week). */
   scout: number[];
   /** Regions you pay a scout to cover. */

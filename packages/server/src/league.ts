@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage, SELLING_POINTS, type SellingPoint,
+  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage, SELLING_POINTS, type SellingPoint, MAX_CONTACT,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -36,6 +36,8 @@ export type Action =
   | { type: "propose_project"; payload: { area: Area; scope: Scope; financing: Financing } }
   /** Let your staff run your recruiting board (on), or run it yourself (off). */
   | { type: "recruit_auto"; payload: { on: boolean } }
+  /** How many off-field recruiting staffers you carry (your program's usual and up). */
+  | { type: "recruit_staffers"; payload: { count: number } }
   /** Your contact hours a week on a prospect (0 takes him off your board). */
   | { type: "recruit_hours"; payload: { pid: number; hours: number } }
   /** Offer a prospect a scholarship, or pull the offer. */
@@ -293,9 +295,10 @@ export class League {
       a = { type: a.type, payload: { area: a.payload.area, scope: a.payload.scope, financing: a.payload.financing } };
     }
     if (a.type === "recruit_auto") a = { type: a.type, payload: { on: !!a.payload?.on } };
+    if (a.type === "recruit_staffers") a = { type: a.type, payload: { count: Number(a.payload?.count) } };
     if (a.type === "recruit_hours") {
       const hours = Math.round(Number(a.payload?.hours));
-      if (!Number.isFinite(hours) || hours < 0 || hours > 40) throw new Error("contact hours are 0 to 40 a week");
+      if (!Number.isFinite(hours) || hours < 0 || hours > MAX_CONTACT) throw new Error(`contact hours are 0 to ${MAX_CONTACT} a week on one prospect`);
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), hours } };
     }
     if (a.type === "recruit_offer") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
@@ -418,6 +421,7 @@ export class League {
       if (a.type === "request_project") this.season.proposeProject(a.payload.area, "renovate", "cash");
       if (a.type === "propose_project") this.season.proposeProject(a.payload.area, a.payload.scope, a.payload.financing);
       if (a.type === "recruit_auto") this.season.setRecruitAuto(a.payload.on);
+      if (a.type === "recruit_staffers") this.season.setStaffers(a.payload.count);
       if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
       if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);
       if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on, a.payload.trips, a.payload.at);

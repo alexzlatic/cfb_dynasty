@@ -18,10 +18,10 @@ import {
   askFor, lengthPremium, maxYears, renewalNudge,
 } from "./portal.ts";
 import {
-  RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
+  MAX_CONTACT, RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, regionArea, reportSees, publicRead, REGIONS, REGION_REPORT_HOURS, DEFAULT_TRIPS, type ScoutLine, type ScoutReport, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
-import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, labPace, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
+import { HC_HOURS, MAX_STAFFERS, OFFSEASON_TIME, SEASON_TIME, STAFFER_HOURS, STAFFER_PAY, STAFF_HOURS, coachSkills, recruitHours, staffHours, usualStaffers, devSkillRate, labPace, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, traitLevel, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { HS_COLS, HS_LEAD, hsLatest, hsSeasons, hsSummary } from "./hsstats.ts";
@@ -51,7 +51,7 @@ import {
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
 import { newsToInbox, URGENT_NEWS, type InboxMessage, type InboxPost } from "./inbox.ts";
-import { COACH_VISITS_PER_WEEK, HEARD_HOURS, KNOW_HOURS, MAX_COACH_VISITS, MAX_POINTS, OFFICIAL_VISITS_PER_WEEK, SELLING_POINTS, VISIT_COST, coachWorth, moneyPull, nilAnswer, nilWalk, officialWorth, pitchPull, pointEffect, pointStrengths, recruitValue, type NilTalk, type Pitch, type SellingPoint } from "./pitch.ts";
+import { HEARD_HOURS, KNOW_HOURS, MAX_COACH_VISITS, MAX_POINTS, SELLING_POINTS, VISIT_COST, VISIT_HOURS, coachWorth, moneyPull, nilAnswer, nilWalk, officialWorth, pitchPull, pointEffect, pointStrengths, recruitValue, type NilTalk, type Pitch, type SellingPoint } from "./pitch.ts";
 
 export interface Seeded { seed: number; team_id: number }
 
@@ -2042,11 +2042,13 @@ export class Season {
       const staff = this.staff(t.id);
       const fbs = t.level === "fbs", power = isPower(t);
       const time = timeSplit(t.id === me ? st.user.time : inSeason ? SEASON_TIME : OFFSEASON_TIME, inSeason);
+      // Your visits this week come out of your contact hours.
+      const hours = t.id === me ? this.recruitLedger(date).contact : recruitHours(t.level, time.recruiting, usualStaffers(power));
       return {
         id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null,
         regions: t.id === me ? st.user.regions : [], national: power, width: scoutWidth(staffSkill(staff, "scouting")),
         level: fbs ? "fbs" : "fcs", power, ...frozen[t.id],
-        hours: STAFF_HOURS * time.recruiting * (power ? 1.5 : fbs ? 1 : 0.6), eff: recruitEff(staffSkill(staff, "recruiting")),
+        hours, eff: recruitEff(staffSkill(staff, "recruiting")),
         manual: t.id === me && !st.user.auto,
         ...(since.has(t.id) ? { tenure: Math.max(0, s.year - since.get(t.id)!) } : {}),
       };
@@ -2102,7 +2104,7 @@ export class Season {
     // Your own board (when you run it): your hours on the prospects you chose.
     if (me != null && !st.user.auto) {
       const mine = schools.find((t) => t.id === me)!;
-      const want = Object.entries(st.user.hours).filter(([, h]) => h > 0);
+      const want = Object.entries(st.user.hours).filter(([, h]) => h > 0).map(([pid, h]) => [pid, Math.min(MAX_CONTACT, h)] as const);
       const total = want.reduce((a, [, h]) => a + h, 0);
       const scale = total > mine.hours ? mine.hours / total : 1;
       const byId = new Map(st.prospects.map((p) => [p.id, p]));
@@ -2153,6 +2155,8 @@ export class Season {
     if (me == null) return;
     const u = st.user;
     u.spend += Math.round(u.regions.length * SCOUT_COST.region / 52);
+    // Recruiting staff beyond your program's usual are paid out of the same operations budget.
+    u.spend += Math.round(Math.max(0, this.staffers() - this.usualStaffers()) * STAFFER_PAY / 52);
     let hours = STAFF_HOURS * timeSplit(u.time, this.inSeason(today)).scouting;
     const byId = new Map(st.prospects.map((p) => [p.id, p]));
     const done: Prospect[] = [];
@@ -2656,10 +2660,39 @@ export class Season {
     this.savePitch(pid, { ...this.pitchOf(pid), points: list });
   }
 
-  /** Visits this week (Monday on) of a kind, across every prospect. */
-  private visitsThisWeek(kind: "official" | "coach"): number {
-    const s = this.state, monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
-    return Object.values(s.recruiting?.user.pitches ?? {}).reduce((a, x) => a + (kind === "official" ? (x.visit && x.visit >= monday ? 1 : 0) : (x.coach ?? []).filter((d) => d >= monday).length), 0);
+  /** Your off-field recruiting staff, and how many your program usually carries. */
+  staffers(): number { return this.state.recruiting?.user.staffers ?? this.usualStaffers(); }
+  usualStaffers(): number { const me = this.state.user_team_id; return me == null ? 0 : usualStaffers(isPower(this.team(me))); }
+  /** Hire recruiting staff (or let the extra ones go), down to your program's usual. */
+  setStaffers(n: number): void {
+    const lo = this.usualStaffers();
+    if (!Number.isInteger(n) || n < lo || n > MAX_STAFFERS) throw new Error(`recruiting staff is ${lo} to ${MAX_STAFFERS}`);
+    this.userRecruiting().staffers = n;
+  }
+
+  /**
+   * Your recruiting week (Monday to Sunday, the week of `date`): the coaches' recruiting share plus the
+   * recruiting staff, less the visits made so far; and the head coach's own hours, which visits draw on.
+   */
+  recruitLedger(date = this.state.date) {
+    const s = this.state, me = s.user_team_id, st = s.recruiting;
+    if (me == null || !st) throw new Error("you need a team to recruit");
+    const t = this.team(me), share = timeSplit(st.user.time, this.inSeason(date)).recruiting, staffers = this.staffers();
+    const monday = addDays(date, -((weekday(date) + 6) % 7));
+    let visits = 0, hc = 0, officials = 0, homes = 0;
+    for (const [pid, x] of Object.entries(st.user.pitches ?? {})) {
+      if (x.visit && x.visit >= monday && x.visit <= date) { officials++; visits += VISIT_HOURS.official; hc += VISIT_HOURS.official_hc; }
+      const n = (x.coach ?? []).filter((d) => d >= monday && d <= date).length;
+      if (n) { const h = n * (this.tripNear(this.prospect(Number(pid))) ? VISIT_HOURS.coach_near : VISIT_HOURS.coach_far); homes += n; visits += h; hc += h; }
+    }
+    const coaches = staffHours(t.level) * share, total = recruitHours(t.level, share, staffers);
+    const board = Object.values(st.user.hours).reduce((a, h) => a + Math.min(MAX_CONTACT, Math.max(0, h)), 0);
+    const r = (x: number) => Math.round(x * 10) / 10;
+    return {
+      share, coaches: r(coaches), staffers, usual_staffers: this.usualStaffers(), staffer_hours: STAFFER_HOURS * staffers, total: r(total),
+      visits: r(visits), officials, homes, contact: r(Math.max(0, total - visits)), board, max_contact: MAX_CONTACT,
+      hc: { week: HC_HOURS, recruiting: r(HC_HOURS * share), used: hc, left: r(Math.max(0, HC_HOURS * share - hc)) },
+    };
   }
 
   /** Bring him in for an official visit (juniors and seniors, once each), or send your head coach to his home (twice at most). */
@@ -2670,13 +2703,16 @@ export class Season {
     if (kind === "official") {
       if (gradeOf(p, s.year) < 2) throw new Error("official visits are for juniors and seniors");
       if (pitch.visit) throw new Error(`he made his official visit on ${pitch.visit}`);
-      if (this.visitsThisWeek("official") >= OFFICIAL_VISITS_PER_WEEK) throw new Error(`you can host ${OFFICIAL_VISITS_PER_WEEK} official visits a week`);
+      const w = this.recruitLedger();
+      if (w.hc.left < VISIT_HOURS.official_hc) throw new Error(`your head coach has ${w.hc.left} recruiting hours left this week; hosting an official visit takes ${VISIT_HOURS.official_hc}`);
+      if (w.contact < VISIT_HOURS.official) throw new Error(`your staff has ${w.contact} recruiting hours left this week; an official visit takes ${VISIT_HOURS.official}`);
       this.userRecruiting().spend += near ? VISIT_COST.official_near : VISIT_COST.official_far;
       this.savePitch(pid, { ...pitch, visit: s.date });
       return;
     }
     if ((pitch.coach ?? []).length >= MAX_COACH_VISITS) throw new Error(`your head coach has visited him ${MAX_COACH_VISITS} times`);
-    if (this.visitsThisWeek("coach") >= COACH_VISITS_PER_WEEK) throw new Error(`your head coach makes ${COACH_VISITS_PER_WEEK} home visits a week`);
+    const w = this.recruitLedger(), need = near ? VISIT_HOURS.coach_near : VISIT_HOURS.coach_far;
+    if (w.hc.left < need) throw new Error(`your head coach has ${w.hc.left} recruiting hours left this week; a home visit ${near ? "near home" : "this far away"} takes ${need}`);
     this.userRecruiting().spend += near ? VISIT_COST.coach_near : VISIT_COST.coach_far;
     this.savePitch(pid, { ...pitch, coach: [...(pitch.coach ?? []), s.date] });
   }
@@ -2792,9 +2828,10 @@ export class Season {
       chosen: pitch.points, max_points: MAX_POINTS, heard_hours: HEARD_HOURS, parts,
       visits: {
         official: pitch.visit ?? null, can_official: gradeOf(p, s.year) >= 2, official_cost: near ? VISIT_COST.official_near : VISIT_COST.official_far,
-        official_worth: c ? Math.round(officialWorth(c.mine) * 1000) / 1000 : 0, official_left: Math.max(0, OFFICIAL_VISITS_PER_WEEK - this.visitsThisWeek("official")),
+        official_worth: c ? Math.round(officialWorth(c.mine) * 1000) / 1000 : 0, official_hours: VISIT_HOURS.official, official_hc: VISIT_HOURS.official_hc,
         coach: pitch.coach ?? [], coach_max: MAX_COACH_VISITS, coach_cost: near ? VISIT_COST.coach_near : VISIT_COST.coach_far,
-        coach_worth: c ? Math.round(coachWorth(c.coachSkill) * 1000) / 1000 : 0, coach_left: Math.max(0, COACH_VISITS_PER_WEEK - this.visitsThisWeek("coach")), half_life_weeks: 20,
+        coach_worth: c ? Math.round(coachWorth(c.coachSkill) * 1000) / 1000 : 0, coach_hours: near ? VISIT_HOURS.coach_near : VISIT_HOURS.coach_far, half_life_weeks: 20,
+        week: this.recruitLedger(),
       },
       nil: {
         value, fmv: fmvCeiling(value, !!s.settings.pcsa), talk: t ?? null, agreed: agreed ? { amount: agreed.amount, years: agreed.years } : null,

@@ -211,7 +211,7 @@ export interface StrategyView {
   /** The in-season split (shares add up to 1), the same split out of season, and the usual week. */
   time: Required<StaffTimeSplit>; offseason: Required<StaffTimeSplit>; usual: Required<StaffTimeSplit>;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
-  recruiting: { auto: boolean; board: number; contact_hours: number; hours_set: number; commits: number };
+  recruiting: { auto: boolean; board: number; contact_hours: number; hours_set: number; commits: number; week: ReturnType<Season["recruitLedger"]> };
   scouting: { hours: number; trips: number; region_hours: number; assignments: number; paid: number; spend: number; reports: number; last_report: number };
   development: { pace: number; plans: number; slots: number; skill: number };
   prep: { factor: number; skill: number };

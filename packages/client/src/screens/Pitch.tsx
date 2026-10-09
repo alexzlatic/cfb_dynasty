@@ -44,6 +44,7 @@ export function PitchPage({ pid }: { pid: number }) {
   // What your staff expects the selling points you've picked to do, against what they do now.
   const delta = (sum(chosen) - sum(d.chosen)) * heard;
   const share = d.standing?.share ?? 0;
+  const wk = d.visits.week;
   const preview = shift(share, delta);
   const without = d.parts ? shift(share, -d.parts.total) : share;
   const toggle = (k: string) => setDraft(chosen.includes(k) ? chosen.filter((x) => x !== k) : chosen.length >= d.max_points ? chosen : [...chosen, k]);
@@ -108,25 +109,26 @@ export function PitchPage({ pid }: { pid: number }) {
               <div className="pitchhours">
                 <span>Weekly <input value={hours ?? String(d.weekly_hours || "")} onChange={(e) => setHours(e.target.value)} /> h</span>
                 <button disabled={busy || hours == null} onClick={async () => { if (await act("recruit_hours", { pid, hours: Number(hours) || 0 })) setHours(null); }}>Set</button>
-                <span className="small muted">{d.standing!.hours.toFixed(0)} hours with him so far</span>
+                <span className="small muted">{d.standing!.hours.toFixed(0)} hours with him so far · up to {wk.max_contact} a week</span>
               </div>
               <div className="heardbar"><span style={{ width: `${Math.min(100, (d.standing!.hours / d.persona.know_hours) * 100)}%` }} />
                 <i style={{ left: `${(d.heard_hours / d.persona.know_hours) * 100}%` }} title="Pitch fully heard" /></div>
               <p className="small muted">Your pitch is {pct(heard)} heard: it lands fully after {d.heard_hours} contact hours. At {d.persona.know_hours} your staff knows his real priorities. Hours build the relationship on their own too, and fade a little each week you stop.</p>
             </Panel>
             <Panel title="Visits">
+              <WeekHours wk={wk} />
               <div className="visits">
                 <div className="visit">
                   <h4>Official visit</h4>
                   {d.visits.official ? <p>He visited campus {shortDate(d.visits.official)}.</p>
-                    : <button disabled={busy || !d.visits.can_official || d.visits.official_left <= 0} onClick={() => act("recruit_visit", { pid, kind: "official" })}>Bring him to campus · {money(d.visits.official_cost)}</button>}
-                  <p className="small muted">{d.visits.can_official ? `Your campus is worth ${signedPts(shift(share, d.visits.official_worth) - share)} with him right after, fading over the months. Once per recruit; ${d.visits.official_left} of 4 left this week.` : "Juniors and seniors only."}</p>
+                    : <button disabled={busy || !d.visits.can_official || wk.hc.left < d.visits.official_hc || wk.contact < d.visits.official_hours} onClick={() => act("recruit_visit", { pid, kind: "official" })}>Bring him to campus · {d.visits.official_hours} h · {money(d.visits.official_cost)}</button>}
+                  <p className="small muted">{d.visits.can_official ? `Your campus is worth ${signedPts(shift(share, d.visits.official_worth) - share)} with him right after, fading over the months. Once per recruit. Your staff runs the weekend: ${d.visits.official_hours} hours, ${d.visits.official_hc} of them the head coach's.` : "Juniors and seniors only."}</p>
                 </div>
                 <div className="visit">
                   <h4>Head coach in his home</h4>
                   <p>{d.visits.coach.length ? `Visited ${d.visits.coach.map((x) => shortDate(x)).join(" and ")}.` : "Not yet."}</p>
-                  {d.visits.coach.length < d.visits.coach_max && <button disabled={busy || d.visits.coach_left <= 0} onClick={() => act("recruit_visit", { pid, kind: "coach" })}>Send the head coach · {money(d.visits.coach_cost)}</button>}
-                  <p className="small muted">Worth {signedPts(shift(share, d.visits.coach_worth) - share)} each by your staff's recruiting skill; twice per recruit, {d.visits.coach_left} of 3 left this week.</p>
+                  {d.visits.coach.length < d.visits.coach_max && <button disabled={busy || wk.hc.left < d.visits.coach_hours} onClick={() => act("recruit_visit", { pid, kind: "coach" })}>Send the head coach · {d.visits.coach_hours} h · {money(d.visits.coach_cost)}</button>}
+                  <p className="small muted">Worth {signedPts(shift(share, d.visits.coach_worth) - share)} each by your staff's recruiting skill; twice per recruit. A day of the head coach's own time on the road.</p>
                 </div>
               </div>
             </Panel>
@@ -183,6 +185,22 @@ export function PitchPage({ pid }: { pid: number }) {
 }
 
 /** What a part of your pitch is worth to his chance today: where he'd be without it, in points. */
+type Week = PitchData["visits"]["week"];
+/** Your recruiting week: who the hours come from, what visits have taken, and the head coach's own time. */
+function WeekHours({ wk }: { wk: Week }) {
+  const h = (x: number) => `${Math.round(x)} h`;
+  const over = wk.board > wk.contact;
+  return (
+    <div className="weekhours">
+      <div><span className="muted small">Staff recruiting this week</span><b>{h(wk.total)}</b>
+        <small className="muted">coaches {h(wk.coaches)}{wk.staffers ? ` + ${wk.staffers} recruiting staffer${wk.staffers === 1 ? "" : "s"} ${h(wk.staffer_hours)}` : ""}</small></div>
+      <div><span className="muted small">Visits</span><b>{h(wk.visits)}</b><small className="muted">{wk.officials} official · {wk.homes} home</small></div>
+      <div><span className="muted small">Left for contact</span><b className={over ? "bad" : ""}>{h(wk.contact)}</b><small className={over ? "bad" : "muted"}>{h(wk.board)} set on your board{over ? ", spread thinner" : ""}</small></div>
+      <div><span className="muted small">Head coach</span><b>{h(wk.hc.left)} left</b><small className="muted">{h(wk.hc.recruiting)} of his {wk.hc.week} for recruiting</small></div>
+    </div>
+  );
+}
+
 const fmtU = (share: number, x: number) => {
   const pts = share - shift(share, -x);
   return Math.abs(x) < 0.0005 ? <span className="muted">—</span> : <span className={pts > 0 ? "win" : "loss"}>{signedPts(pts)}</span>;
