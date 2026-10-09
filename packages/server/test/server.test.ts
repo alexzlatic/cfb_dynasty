@@ -675,6 +675,12 @@ describe("inbox", () => {
     const again = League.open("inbox-check", manager.path(lg.id));
     expect(again.inbox().messages.map((x) => [x.subject, x.read])).toEqual([["Hurt", false], ["Welcome", true]]);
     again.close();
+    // The season sends polls, your results with box scores, opponent reports and awards.
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-16" } });
+    const all = lg.inbox().messages, cats = new Set(all.map((x) => x.category));
+    for (const c of ["polls", "games", "opponent", "awards"]) expect(cats, c).toContain(c);
+    expect(all.find((x) => x.category === "games")!.links![0].to).toMatch(/^game\/\d+$/);
+    expect(all.find((x) => x.category === "polls" && x.from === "AP poll")!.subject).toMatch(/Purdue (No\. \d+|unranked)/);
     // No user team, no inbox.
     expect(manager.create({ name: "No inbox", user_team_id: null, seed: 3 }).season.mail({ category: "league", from: "x", subject: "x", body: "" })).toBeNull();
   });

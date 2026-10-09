@@ -49,7 +49,7 @@ import {
   DEFAULT_SETTINGS, type Ballot, type CalEvent, type Coach, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
-import type { InboxMessage, InboxPost } from "./inbox.ts";
+import { newsToInbox, URGENT_NEWS, type InboxMessage, type InboxPost } from "./inbox.ts";
 
 export interface Seeded { seed: number; team_id: number }
 
@@ -3680,6 +3680,18 @@ export class Season {
     if (!s.film || s.film.game_id !== g.id) s.film = { game_id: g.id, hours: 0 };
     const share = timeSplit(s.recruiting.user.time, true).opponent;
     s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(staffSkill(this.staff(me), "scouting"))) * 10) / 10;
+    // The night before the game, the staff's opponent report reaches your inbox.
+    if (daysBetween(today, g.date) === 1) this.opponentMail(today);
+  }
+
+  private opponentMail(date: ISODate): void {
+    const r = this.scoutReport();
+    if (!r) return;
+    const opp = this.team(r.opponent), found = r.insights;
+    const lines = found.map((x) => `${x.side === "offense" ? "Their offense" : x.side === "defense" ? "Their defense" : "Personnel"}: ${x.text}${x.counter ? ` ${x.counter}` : ""}`);
+    this.mail({ date, category: "opponent", from: "Your staff", subject: `Opponent report: ${opp.school} (${Math.round(r.knowledge * 100)}% known)`,
+      body: [`${r.hours} hours of film this week (a usual week is ${Math.round(r.usual)}).`, ...(lines.length ? lines : ["Nothing on film stands out yet."])].join("\n"),
+      team_ids: [r.opponent], links: [{ label: "Game plan", to: "plan" }, { label: opp.school, to: `team/${opp.id}` }] });
   }
 
   /** How well a team's staff knows its opponent in a game (0 to 1): your film this week, or a usual week for everyone else. */
@@ -3790,6 +3802,12 @@ export class Season {
     else if (rw && rl) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     else if (mine) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     if (headline) rep.news.push(this.news(g.date, kind, headline, this.scoreLine(g), [g.home_id, g.away_id]));
+    if (mine) {
+      const won = (s.user_team_id === g.home_id) === homeWon, opp = s.user_team_id === g.home_id ? a : h;
+      const r = records(s.games, this.teams).get(s.user_team_id!);
+      this.mail({ date: g.date, category: "games", from: g.label ?? "Final", subject: `${won ? "Win" : "Loss"} ${won ? "over" : "to"} ${opp.school}: ${this.scoreLine(g)}`,
+        body: r ? `You're ${r.w}-${r.l}.` : "", team_ids: [g.home_id, g.away_id], links: [{ label: "Box score", to: `game/${g.id}` }] }, rep);
+    }
   }
 
   /** Post a message to the user team's inbox (none without a user team); returns it. */
@@ -3807,7 +3825,22 @@ export class Season {
   private news(date: ISODate, kind: string, headline: string, body: string, team_ids: number[]): NewsItem {
     const n = { id: `${date}:${this.state.news.length}`, date, kind, headline, body, team_ids };
     this.state.news.push(n);
+    this.newsMail(n);
     return n;
+  }
+
+  /** The news the user team's coach should see, into the inbox (inbox.ts says which). */
+  private newsMail(n: NewsItem): void {
+    const me = this.state.user_team_id;
+    if (me == null) return;
+    const r = newsToInbox(n.kind, n.team_ids, me);
+    if (!r) return;
+    let subject = n.headline;
+    if (n.kind === "poll") {
+      const rk = this.latestPoll("ap")?.ranks.findIndex((x) => x.team_id === me) ?? -1;
+      subject += rk >= 0 && rk < 25 ? ` · ${this.team(me).school} No. ${rk + 1}` : ` · ${this.team(me).school} unranked`;
+    }
+    this.mail({ ...r, date: n.date, subject, body: n.body, team_ids: n.team_ids.length ? n.team_ids : [me], news_id: n.id, urgent: URGENT_NEWS.test(n.headline) || undefined });
   }
 
   private addGame(rep: DayReport, g: Omit<Game, "id" | "status" | "home_score" | "away_score" | "overtime" | "kickoff_et" | "week" | "conference_game">): Game {

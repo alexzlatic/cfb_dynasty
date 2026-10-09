@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { HS_COLS, REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Pos, type Prospect, type Skill } from "@cfb/core";
-import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, eligibilityYears, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
@@ -488,7 +488,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           career: (lg.db.prepare("SELECT year, team_id, data FROM player_seasons WHERE pid = ? ORDER BY year").all(pl.id) as { year: number; team_id: number; data: string }[])
             .map((r) => ({ ...(JSON.parse(r.data) as PlayerSeason), year: r.year, team_id: r.team_id })),
           awards: (s.awards ?? []).filter((a) => a.pid === pl.id),
-          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES,
+          redshirt: s.redshirts?.includes(pl.id) ?? false, redshirt_games: REDSHIRT_GAMES, eligibility: eligibilityYears(pl.years, !!s.settings.pcsa),
           // Your staff's read on your own players (development so far, traits, his plan).
           staff: pl.team_id === s.user_team_id ? (() => {
             const t = S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), r = S.developmentReport(pl.team_id), d = r.players.find((x) => x.pid === pl.id);
