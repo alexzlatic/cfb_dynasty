@@ -329,6 +329,13 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!S.knownProspects().has(p.id)) throw new HttpError(404, "your staff doesn't know about this prospect yet");
         return S.prospectPage(p);
       }
+      case route === "recruiting/pitch": {
+        if (!s.recruiting || s.user_team_id == null) return null;
+        const p = S.prospect(Number(url.searchParams.get("pid")));
+        if (!S.knownProspects().has(p.id)) throw new HttpError(404, "your staff doesn't know about this prospect yet");
+        return S.pitchView(p.id);
+      }
+      case route === "recruiting/nil": return S.nilView();
       case route === "recruiting/map": {
         // Every prospect your staff knows in a class, as points: [id, lat, lon, stars, est, committed to, on your board].
         const st = s.recruiting;

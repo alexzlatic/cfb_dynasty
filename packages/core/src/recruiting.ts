@@ -5,6 +5,7 @@ import { ATTRS, POSITIONS, fromZ, overall, z, type Pos, type RatedPlayer } from 
 import { RECRUIT_FIT, STARTERS, choose, miles, offerScore, persona, type Persona, type SchoolOffer } from "./valuation.ts";
 import type { StaffTime } from "./staff.ts";
 import { statRead } from "./hsstats.ts";
+import type { Pitch } from "./pitch.ts";
 
 /**
  * High school recruiting (M3 step 3). Four classes are live at once: in August 2026 the 2027 class are
@@ -73,6 +74,8 @@ export interface Prospect {
   offers: number[];
   /** Contact hours each school has put into him (they fade when a school stops calling). */
   interest: Record<string, number>;
+  /** What a school's pitch adds to how much he likes it (selling points, visits, NIL: pitch.ts), by school id. */
+  pull?: Record<string, number>;
 }
 
 export const gradeOf = (p: { cls: number }, year: number) => (year + 4 - p.cls) as Grade;
@@ -455,6 +458,8 @@ export interface School extends SchoolEye {
   buzz: number;
   /** What it can pay a top recruit against a typical power program (1), from its revenue-share budget. */
   wealth: number;
+  /** Seasons its head coach has been there (when the league tracks coaches). */
+  tenure?: number;
 }
 
 /**
@@ -528,6 +533,8 @@ export interface UserRecruiting {
   /** What your scouts have reported, newest first (the last 60). */
   reports?: ScoutReport[];
   next_report?: number;
+  /** Your pitch to each prospect (pitch.ts), by prospect id. */
+  pitches?: Record<string, Pitch>;
 }
 
 /** A prospect in a scouting report, as your staff read him that day. */
@@ -734,6 +741,7 @@ export class RecruitWeek {
     const u = Array.from(list.base);
     for (const key in p.interest) { const k = list.at.get(idx.get(Number(key)) ?? -1); if (k != null) u[k] += contactPull(p.interest[key]); }
     for (const id of p.offers) { const k = list.at.get(idx.get(id) ?? -1); if (k != null) u[k] += OFFER_PULL; }
+    for (const key in p.pull) { const k = list.at.get(idx.get(Number(key)) ?? -1); if (k != null) u[k] += p.pull[key]; }
     const m = Math.max(...u);
     const e = u.map((x) => Math.exp(x - m)), z = e.reduce((a, x) => a + x, 0);
     return Array.from(list.t, (t, k) => ({ team: schools[t].id, share: e[k] / z, offered: p.offers.includes(schools[t].id), hours: Math.round(p.interest[schools[t].id] ?? 0) }))
@@ -770,6 +778,7 @@ export class RecruitWeek {
         if (k != null) u[k] += contactPull(h);
       }
       for (const id of p.offers) { const k = list.at.get(idx.get(id) ?? -1); if (k != null) u[k] += OFFER_PULL; }
+      for (const key in p.pull) { const k = list.at.get(idx.get(Number(key)) ?? -1); if (k != null) u[k] += p.pull[key]; }
       let m = -Infinity;
       for (let k = 0; k < u.length; k++) if (u[k] > m) m = u[k];
       let z = 0;
@@ -874,7 +883,7 @@ export class RecruitWeek {
         if (t == null) continue;
         const k = c.list.at.get(t);
         const base = k != null ? c.list.base[k] : baseScore(schools[t], p, p.svc!.read, { value: 0, quality: (p.svc!.r - 0.86) / 0.04, persona: this.persona(p.id) });
-        opts.push({ t, u: base + contactPull(p.interest[id] ?? 0) + OFFER_PULL });
+        opts.push({ t, u: base + contactPull(p.interest[id] ?? 0) + OFFER_PULL + (p.pull?.[id] ?? 0) });
       }
       if (!opts.length) continue;
       if (!p.commit) {
@@ -975,7 +984,7 @@ export function signingDay(st: RecruitingState, year: number, schools: School[],
       const opts = p.offers.map((id) => idx.get(id)).filter((i): i is number => i != null && (open(i, p.pos) > 0 || schools[i].manual));
       if (!opts.length) continue;
       const me = { value: 0, quality: (p.svc!.r - 0.86) / 0.04, persona: wk.persona(p.id) };
-      const u = opts.map((i) => baseScore(schools[i], p, p.svc!.read, me) + contactPull(p.interest[schools[i].id] ?? 0));
+      const u = opts.map((i) => baseScore(schools[i], p, p.svc!.read, me) + contactPull(p.interest[schools[i].id] ?? 0) + (p.pull?.[schools[i].id] ?? 0));
       const i = opts[choose(u, rng.random())];
       p.commit = { team: schools[i].id, signed: true, date };
       have[i][p.pos] = (have[i][p.pos] ?? 0) + 1;

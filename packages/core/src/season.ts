@@ -22,7 +22,7 @@ import {
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, regionArea, reportSees, publicRead, REGIONS, REGION_REPORT_HOURS, DEFAULT_TRIPS, type ScoutLine, type ScoutReport, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, labPace, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
-import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
+import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, traitLevel, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { HS_COLS, HS_LEAD, hsLatest, hsSeasons, hsSummary } from "./hsstats.ts";
 import {
@@ -51,6 +51,7 @@ import {
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
 import { newsToInbox, URGENT_NEWS, type InboxMessage, type InboxPost } from "./inbox.ts";
+import { COACH_VISITS_PER_WEEK, HEARD_HOURS, KNOW_HOURS, MAX_COACH_VISITS, MAX_POINTS, OFFICIAL_VISITS_PER_WEEK, SELLING_POINTS, VISIT_COST, coachWorth, moneyPull, nilAnswer, nilWalk, officialWorth, pitchPull, pointEffect, pointStrengths, recruitValue, type NilTalk, type Pitch, type SellingPoint } from "./pitch.ts";
 
 export interface Seeded { seed: number; team_id: number }
 
@@ -455,9 +456,13 @@ export class Season {
     // The signing class arrives: every senior committed to a school enrolls there.
     let nextId = s.next_player_id ?? 900_000_001;
     const rst = s.recruiting, incoming: Record<number, RatedPlayer[]> = {};
+    // Your signees' NIL deals, by their new player ids.
+    const recruitDeals: Record<number, { amount: number; years: number; locked?: boolean }> = {};
     if (rst) {
       for (const p of rst.prospects) {
         if (gradeOf(p, y) < 3 || !p.commit || !players[p.commit.team]) continue;
+        const t = p.commit.team === s.user_team_id ? rst.user.pitches?.[p.id]?.nil : undefined, d = t?.status === "agreed" ? t : t?.agreed;
+        if (d) recruitDeals[nextId] = { amount: d.amount, years: d.years, ...(d.years > 1 ? { locked: true } : {}) };
         (incoming[p.commit.team] ??= []).push(enrollPlayer(p, nextId++, p.commit.team, s.seed));
       }
     }
@@ -545,7 +550,7 @@ export class Season {
         const c = activeContract(s.contracts?.[p.id], ny);
         if (c) deals[p.id] = { amount: dealAmount(c), years: c.start + c.years - ny, ...(c.locked ? { locked: true } : {}) };
       }
-      Object.assign(deals, s.next_deals);
+      Object.assign(deals, s.next_deals, recruitDeals);
       next.applyDeals(deals);
     }
     next.startFinance(seed.finances);
@@ -594,7 +599,7 @@ export class Season {
     const next: RecruitingState = {
       prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0, svc_v: 2,
       user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0,
-        ...(u.trips_left ? { trips_left: keep(u.trips_left) } : {}), ...(u.scout_from ? { scout_from: keep(u.scout_from) } : {}),
+        ...(u.trips_left ? { trips_left: keep(u.trips_left) } : {}), ...(u.pitches ? { pitches: keep(u.pitches) } : {}), ...(u.scout_from ? { scout_from: keep(u.scout_from) } : {}),
         found: (u.found ?? []).filter((x) => live.has(x)), board: (u.board ?? []).filter((x) => live.has(x)), board_added: (u.board_added ?? []).filter((x) => live.has(x)) },
     };
     rateClasses(next.prospects, ny, s.date, 0, s.seed, rs.curve);
@@ -927,6 +932,7 @@ export class Season {
     this.recruitingDay(today, rep);
     if (s.talks && !s.portal) this.talksDay(today, rep);
     if (s.contract_offers) this.contractAnswers(today, rep);
+    if (s.recruiting?.user.pitches) this.nilAnswers(today, rep);
     if (s.coaching?.open) this.carouselDay(today, rep);
     if (s.portal?.year === s.year) this.portalDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
@@ -2030,6 +2036,8 @@ export class Season {
     const s = this.state, st = s.recruiting!, me = s.user_team_id;
     const inSeason = this.inSeason(date);
     const frozen = st.frozen?.year === s.year ? st.frozen.schools : this.freezeSchools();
+    // Each head coach's seasons at his school (a recruit hears about a stable program).
+    const since = new Map((s.coaching?.coaches ?? []).filter((c) => c.role === "HC" && c.team_id != null && !c.gone).map((c) => [c.team_id!, c.since]));
     return this.teams.map((t): School => {
       const staff = this.staff(t.id);
       const fbs = t.level === "fbs", power = isPower(t);
@@ -2040,6 +2048,7 @@ export class Season {
         level: fbs ? "fbs" : "fcs", power, ...frozen[t.id],
         hours: STAFF_HOURS * time.recruiting * (power ? 1.5 : fbs ? 1 : 0.6), eff: recruitEff(staffSkill(staff, "recruiting")),
         manual: t.id === me && !st.user.auto,
+        ...(since.has(t.id) ? { tenure: Math.max(0, s.year - since.get(t.id)!) } : {}),
       };
     });
   }
@@ -2102,6 +2111,8 @@ export class Season {
         if (p && !p.commit?.signed) p.interest[me] = Math.round(((p.interest[me] ?? 0) + h * scale * mine.eff) * 100) / 100;
       }
     }
+    // Your pitches as they stand this week (more contact hours, visits fading).
+    this.refreshPulls();
     const ev = this.week.run({ st, year: s.year, date: today, schools, user: me, rng: new Rng(mixSeed(s.seed, s.year, today, "recruiting")) });
     this.recruitNews(ev, today, rep);
     this.boardCommits();
@@ -2581,6 +2592,246 @@ export class Season {
     if (!p) throw new Error(`no prospect ${pid}`);
     return p;
   }
+  // ---- your pitch to a recruit (pitch.ts) -------------------------------------------------------------
+  /** Your pitch to a prospect (an empty one if you haven't made one). */
+  private pitchOf(pid: number): Pitch {
+    return this.state.recruiting?.user.pitches?.[pid] ?? { points: [] };
+  }
+  private savePitch(pid: number, pitch: Pitch): void {
+    const u = this.userRecruiting();
+    const empty = !pitch.points.length && !pitch.visit && !pitch.coach?.length && !pitch.nil;
+    const all = { ...u.pitches };
+    if (!pitch.nil) delete pitch.nil;
+    if (empty) delete all[pid]; else all[pid] = pitch;
+    u.pitches = all;
+    this.refreshPull(this.prospect(pid));
+  }
+
+  /** A prospect you can pitch: rated by the service, a sophomore or older, not signed. */
+  private pitchable(p: Prospect): void {
+    if (p.commit?.signed) throw new Error(`${p.first} ${p.last} has signed`);
+    if (!p.svc || gradeOf(p, this.state.year) < 1) throw new Error(`${p.first} ${p.last} isn't being recruited yet`);
+  }
+
+  /**
+   * Where you stand with a prospect: your school and the others he's considering (his top ten besides you),
+   * your place and chance, and what goes into your pitch's pull.
+   */
+  private pitchContext(p: Prospect, schools = this.schools()) {
+    const s = this.state, me = s.user_team_id!, st = s.recruiting!;
+    const cons = this.considering(p, schools);
+    const byId = new Map(schools.map((t) => [t.id, t]));
+    const i = cons.findIndex((c) => c.team === me);
+    const others = cons.filter((c) => c.team !== me).slice(0, 10).map((c) => byId.get(c.team)!).filter(Boolean);
+    return { mine: byId.get(me)!, others, cons, place: i >= 0 ? i + 1 : null, share: i >= 0 ? cons[i].share : 0,
+      hours: p.interest[me] ?? 0, coachSkill: staffSkill(this.staff(me), "recruiting"), weekly: st.user.hours[p.id] ?? 0 };
+  }
+
+  /** Work out what your pitch adds to how he sees your school (stored on him for the weekly recruiting). */
+  private refreshPull(p: Prospect, schools?: School[]): void {
+    const s = this.state, me = s.user_team_id, pitch = s.recruiting?.user.pitches?.[p.id];
+    if (me == null) return;
+    const { [me]: _old, ...rest } = p.pull ?? {};
+    if (!pitch || !p.svc || p.commit?.signed) { p.pull = Object.keys(rest).length ? rest : undefined; return; }
+    const c = this.pitchContext(p, schools);
+    const parts = pitchPull({ pitch, p, w: this.week.persona(p.id), me: c.mine, others: c.others, hours: c.hours, today: s.date, coachSkill: c.coachSkill });
+    p.pull = { ...rest, [me]: parts.total };
+  }
+
+  /** Every pitch's pull, worked out again (contact hours grow, visits fade). */
+  private refreshPulls(): void {
+    const st = this.state.recruiting, ids = Object.keys(st?.user.pitches ?? {});
+    if (!st || !ids.length) return;
+    const schools = this.schools(), byId = new Map(st.prospects.map((p) => [p.id, p]));
+    for (const id of ids) { const p = byId.get(Number(id)); if (p) this.refreshPull(p, schools); }
+  }
+
+  /** The selling points of your pitch to a prospect (at most three). */
+  setPitchPoints(pid: number, points: SellingPoint[]): void {
+    const p = this.prospect(pid);
+    this.pitchable(p);
+    const keys = new Set(SELLING_POINTS.map((x) => x.key));
+    const list = [...new Set(points)].filter((k) => keys.has(k));
+    if (list.length > MAX_POINTS) throw new Error(`a pitch has at most ${MAX_POINTS} selling points`);
+    this.savePitch(pid, { ...this.pitchOf(pid), points: list });
+  }
+
+  /** Visits this week (Monday on) of a kind, across every prospect. */
+  private visitsThisWeek(kind: "official" | "coach"): number {
+    const s = this.state, monday = addDays(s.date, -((weekday(s.date) + 6) % 7));
+    return Object.values(s.recruiting?.user.pitches ?? {}).reduce((a, x) => a + (kind === "official" ? (x.visit && x.visit >= monday ? 1 : 0) : (x.coach ?? []).filter((d) => d >= monday).length), 0);
+  }
+
+  /** Bring him in for an official visit (juniors and seniors, once each), or send your head coach to his home (twice at most). */
+  pitchVisit(pid: number, kind: "official" | "coach"): void {
+    const s = this.state, p = this.prospect(pid);
+    this.pitchable(p);
+    const pitch = this.pitchOf(pid), near = this.tripNear(p);
+    if (kind === "official") {
+      if (gradeOf(p, s.year) < 2) throw new Error("official visits are for juniors and seniors");
+      if (pitch.visit) throw new Error(`he made his official visit on ${pitch.visit}`);
+      if (this.visitsThisWeek("official") >= OFFICIAL_VISITS_PER_WEEK) throw new Error(`you can host ${OFFICIAL_VISITS_PER_WEEK} official visits a week`);
+      this.userRecruiting().spend += near ? VISIT_COST.official_near : VISIT_COST.official_far;
+      this.savePitch(pid, { ...pitch, visit: s.date });
+      return;
+    }
+    if ((pitch.coach ?? []).length >= MAX_COACH_VISITS) throw new Error(`your head coach has visited him ${MAX_COACH_VISITS} times`);
+    if (this.visitsThisWeek("coach") >= COACH_VISITS_PER_WEEK) throw new Error(`your head coach makes ${COACH_VISITS_PER_WEEK} home visits a week`);
+    this.userRecruiting().spend += near ? VISIT_COST.coach_near : VISIT_COST.coach_far;
+    this.savePitch(pid, { ...pitch, coach: [...(pitch.coach ?? []), s.date] });
+  }
+
+  /** What your senior recruits' agreed NIL deals take from next season's roster budget (besides `except`). */
+  private recruitPledges(except?: number): number {
+    const s = this.state, st = s.recruiting, me = s.user_team_id;
+    if (!st || me == null) return 0;
+    let sum = 0;
+    for (const p of st.prospects) {
+      if (p.id === except || p.cls !== s.year + 1 || (p.commit && p.commit.team !== me)) continue;
+      const t = st.user.pitches?.[p.id]?.nil, d = t?.status === "agreed" ? t : t?.agreed;
+      if (d) sum += d.amount;
+    }
+    return sum;
+  }
+
+  /**
+   * Offer him an NIL deal for when he enrolls: dollars a year and seasons. He answers in a day or two. An
+   * amount of 0 takes back an offer he hasn't answered, or ends a deal he agreed to (which he won't forget).
+   */
+  pitchNil(pid: number, amount: number, years: number): void {
+    const s = this.state, p = this.prospect(pid);
+    this.pitchable(p);
+    const pitch = this.pitchOf(pid), t = pitch.nil;
+    if (amount <= 0) {
+      if (t?.status === "agreed") { this.savePitch(pid, { ...pitch, nil: { ...t, status: "pulled", answer: undefined } }); return; }
+      if (t?.status !== "waiting") throw new Error("there's no offer or deal to take back");
+      // An offer he hasn't answered: back to where the talks stood (his earlier deal, his counter, or nothing).
+      const { agreed, ...rest } = t;
+      const nil: NilTalk | undefined = agreed ? { ...rest, ...agreed, status: "agreed", answer: undefined } : t.counter != null ? { ...rest, status: "countered", answer: undefined } : undefined;
+      this.savePitch(pid, { ...pitch, nil });
+      return;
+    }
+    if (t?.status === "waiting") throw new Error("he hasn't answered your last offer yet");
+    if (t?.status === "done") throw new Error("he's done talking money with you this year");
+    if (t?.status === "pulled") throw new Error("you took back his deal: he won't negotiate with you again");
+    if (years < 1 || years > 4) throw new Error("a deal runs 1 to 4 seasons");
+    const value = recruitValue(p), top = fmvCeiling(value, !!s.settings.pcsa);
+    if (amount > top) throw new Error(`the fair-market-value review would stop it: at most ${money(top)} a year for him`);
+    if (p.cls === s.year + 1) {
+      const b = this.nextBudget(s.user_team_id!), room = b.total - b.committed + this.recruitPledges() - this.recruitPledges(pid);
+      if (amount > room) throw new Error(`that's over next season's roster budget: ${money(Math.max(0, room))} left`);
+    }
+    const n = Object.keys(this.userRecruiting().pitches ?? {}).length + years;
+    const agreed = t?.status === "agreed" ? { amount: t.amount, years: t.years } : t?.agreed;
+    this.savePitch(pid, { ...pitch, nil: { amount: roundPay(amount), years, status: "waiting", made: s.date, answer: addDays(s.date, answerDays(s.seed, pid, 211 + n)),
+      // A recruit has a round more patience than a player renegotiating: it's his first deal.
+      patience: t?.patience ?? patienceOf(this.week.persona(pid)) + 1, ...(t?.counter != null ? { counter: t.counter } : {}), ...(agreed ? { agreed } : {}) } });
+  }
+
+  /** Recruits answer the NIL offers that have waited a day or two (your inbox). */
+  private nilAnswers(date: ISODate, rep: DayReport): void {
+    const s = this.state, st = s.recruiting!, all = st.user.pitches ?? {};
+    for (const [id, pitch] of Object.entries(all)) {
+      const t = pitch.nil;
+      if (!t || t.status !== "waiting" || (t.answer ?? date) > date) continue;
+      const p = this.prospect(Number(id)), w = this.week.persona(p.id), name = `${p.first} ${p.last}`;
+      const link = [{ label: "Your pitch", to: `pitch/${p.id}` }, { label: "His page", to: `prospect/${p.id}` }];
+      const len = `${t.years} season${t.years === 1 ? "" : "s"}`;
+      if (p.commit?.signed && p.commit.team !== s.user_team_id) {
+        all[id] = { ...pitch, nil: { ...t, status: "done", answer: undefined } };
+        continue;
+      }
+      const r = nilAnswer(t, p, w, this.pitchContext(p).place);
+      let nil: NilTalk;
+      if (r.accepted) {
+        nil = { amount: t.amount, years: t.years, status: "agreed", made: t.made, patience: r.patience };
+        this.mail({ date, category: "recruiting", from: name, subject: `${p.pos} ${name} agrees to your NIL deal: ${money(t.amount)} a year for ${len}`,
+          body: `It's his when he enrolls${p.commit?.team === s.user_team_id ? "" : ", if he picks you"}. A deal that beats what he expected from you counts with him, more so the more money matters to him.`, links: link }, rep);
+      } else if (r.too_long) {
+        nil = { ...t, status: "countered", answer: undefined, counter: r.counter ?? t.counter };
+        this.mail({ date, category: "recruiting", from: name, subject: `${p.pos} ${name} won't sign NIL for ${len}`, body: `He'll sign for ${r.too_long === 1 ? "one season at a time" : `up to ${r.too_long} seasons`}.`, links: link, urgent: true }, rep);
+      } else if (r.patience <= 0) {
+        nil = { ...t, status: "done", answer: undefined, patience: 0, counter: r.counter ?? undefined };
+        this.mail({ date, category: "recruiting", from: name, subject: `${p.pos} ${name} is done talking NIL with you`, body: `He turned down ${money(t.amount)} a year and has run out of patience.${r.insulted ? " The offer insulted him." : ""} It has hurt how he sees you.`, links: link, urgent: true }, rep);
+      } else {
+        nil = { ...t, status: t.agreed ? "agreed" : "countered", answer: undefined, patience: r.patience, counter: r.counter ?? undefined, ...(t.agreed ? { amount: t.agreed.amount, years: t.agreed.years } : {}) };
+        this.mail({ date, category: "recruiting", from: name, subject: `${p.pos} ${name} turns down ${money(t.amount)} a year for ${len}`,
+          body: `He wants ${money(r.counter ?? 0)} a year${t.years > 1 ? " (as a one-year number)" : ""}.${r.insulted ? " The offer insulted him." : ""}${t.agreed ? ` Your earlier deal (${money(t.agreed.amount)} a year) stands.` : ""} Make another offer on your pitch page.`, links: link, urgent: true }, rep);
+      }
+      all[id] = { ...pitch, nil };
+    }
+    st.user.pitches = { ...all };
+    this.refreshPulls();
+  }
+
+  /**
+   * The pitch page: where you stand with him, each selling point (your school against the others he's
+   * considering, and how much he cares as your staff reads him), visits, NIL talks and what it all adds.
+   */
+  pitchView(pid: number) {
+    const s = this.state, me = s.user_team_id, p = this.prospect(pid), st = s.recruiting!;
+    if (me == null) throw new Error("you need a team to recruit");
+    const view = this.prospectView(p), pitch = this.pitchOf(pid);
+    const open = !!p.svc && gradeOf(p, s.year) >= 1 && !p.commit?.signed;
+    const c = open ? this.pitchContext(p) : null;
+    // His real priorities drive the pitch; your staff knows them once it has put real time into him.
+    const known = (p.interest[me] ?? 0) >= KNOW_HOURS, w = this.week.persona(pid), read = known ? w : typicalPersona(w.kind);
+    const t = pitch.nil, agreed = t?.status === "agreed" ? t : t?.agreed, value = recruitValue(p);
+    const str = c ? pointStrengths(c.mine, c.others, p, agreed ? agreed.amount / value : 0) : null;
+    // What each part adds as your staff reads him (his chance itself is the real thing).
+    const parts = c ? pitchPull({ pitch, p, w: read, me: c.mine, others: c.others, hours: c.hours, today: s.date, coachSkill: c.coachSkill }) : null;
+    const near = this.tripNear(p);
+    const walk = c ? nilWalk(p, read, c.place) : nilWalk(p, read, null);
+    const senior = p.cls === s.year + 1, b = this.nextBudget(me);
+    return {
+      prospect: view, persona: { ...personaView(s.seed, pid, known), know_hours: KNOW_HOURS }, open, grade: gradeOf(p, s.year),
+      standing: c ? { place: c.place, share: c.share, considering: c.cons.slice(0, 8), hours: Math.round(c.hours * 10) / 10, weekly: c.weekly, pull: p.pull?.[me] ?? 0 } : null,
+      points: SELLING_POINTS.map((x) => ({ key: x.key, label: x.label, line: x.line, care: traitLevel(read[x.factor]), strength: str ? Math.round(str[x.key] * 100) / 100 : 0,
+        // What it would add as one of one, two or three selling points (your staff's read of him, once heard).
+        effects: [1, 2, 3].map((n) => (str ? Math.round(pointEffect(str[x.key], read[x.factor], n) * 1000) / 1000 : 0)) })),
+      chosen: pitch.points, max_points: MAX_POINTS, heard_hours: HEARD_HOURS, parts,
+      visits: {
+        official: pitch.visit ?? null, can_official: gradeOf(p, s.year) >= 2, official_cost: near ? VISIT_COST.official_near : VISIT_COST.official_far,
+        official_worth: c ? Math.round(officialWorth(c.mine) * 1000) / 1000 : 0, official_left: Math.max(0, OFFICIAL_VISITS_PER_WEEK - this.visitsThisWeek("official")),
+        coach: pitch.coach ?? [], coach_max: MAX_COACH_VISITS, coach_cost: near ? VISIT_COST.coach_near : VISIT_COST.coach_far,
+        coach_worth: c ? Math.round(coachWorth(c.coachSkill) * 1000) / 1000 : 0, coach_left: Math.max(0, COACH_VISITS_PER_WEEK - this.visitsThisWeek("coach")), half_life_weeks: 20,
+      },
+      nil: {
+        value, fmv: fmvCeiling(value, !!s.settings.pcsa), talk: t ?? null, agreed: agreed ? { amount: agreed.amount, years: agreed.years } : null,
+        // Your staff's guess at his number (his real one stays his until he names it).
+        guess: { lo: roundPay(walk * 0.85), hi: roundPay(walk * 1.2) }, max_years: Math.min(4, maxYears(read)), years_known: known,
+        // What a deal at a few sizes would add with him (by your staff's read of how much money matters to him).
+        pull_at: [0.5, 1, 1.5, 2, 3].map((k) => ({ amount: roundPay(value * k), pull: Math.round(moneyPull(p, read, value * k, c?.mine.wealth ?? 1) * 1000) / 1000 })),
+        budget: senior ? { year: s.year + 1, total: b.total, committed: b.committed, room: b.total - b.committed + (agreed?.amount ?? 0) } : null,
+        enrolls: p.cls,
+      },
+      offered: p.offers.includes(me), weekly_hours: st.user.hours[pid] ?? 0, auto: st.user.auto,
+    };
+  }
+
+  /**
+   * NIL and offers at a glance: every prospect you've offered or are talking money with (by class and
+   * position on the page), next season's budget with what your recruits have agreed to, and this season's
+   * roster pay by position and class.
+   */
+  nilView() {
+    const s = this.state, me = s.user_team_id, st = s.recruiting;
+    if (me == null || !st) return { available: false as const };
+    const pitches = st.user.pitches ?? {};
+    const recruits = st.prospects.filter((p) => gradeOf(p, s.year) >= 0 && (p.offers.includes(me) || pitches[p.id]?.nil || p.commit?.team === me)).map((p) => {
+      const t = pitches[p.id]?.nil, agreed = t?.status === "agreed" ? t : t?.agreed;
+      return {
+        pid: p.id, name: `${p.first} ${p.last}`, pos: p.pos, cls: p.cls, stars: p.svc ? starsOf(p.svc.r) : null, rank: p.svc?.rank ?? null,
+        commit: p.commit ? { team_id: p.commit.team, signed: p.commit.signed } : null, offered: p.offers.includes(me), value: recruitValue(p),
+        nil: t ? { status: t.status, amount: t.amount, years: t.years, counter: t.counter ?? null } : null,
+        agreed: agreed ? { amount: agreed.amount, years: agreed.years } : null,
+      };
+    });
+    const roster = this.roster(me).map((p) => ({ pid: p.id, name: playerName(p), pos: p.pos, cls: p.class, ovr: p.ovr,
+      revenue_share: activeContract(s.contracts?.[p.id], s.year)?.amount ?? 0, nil: s.nil?.[p.id]?.amount ?? 0 }));
+    return { available: true as const, year: s.year, recruits, roster, pool: this.rosterPool(me), next: this.nextBudget(me) };
+  }
+
   /** What a week of preparation is worth for your team (staff time and game planning skill). */
   prepFactor(): number {
     const s = this.state, me = s.user_team_id;
@@ -3176,14 +3427,16 @@ export class Season {
   }
 
   /** Next season's roster budget for a school (revenue share, retention fund and boosters), and what's committed to it. */
-  nextBudget(teamId: number): { total: number; committed: number; deals: number; contracts: number } {
+  nextBudget(teamId: number): { total: number; committed: number; deals: number; contracts: number; recruits: number } {
     const s = this.state, ny = s.year + 1;
     const total = this.nextBudgetTotal(this.team(teamId));
     const leaving = this.leavingSet();
     const deals = Object.entries(s.next_deals ?? {}).reduce((a, [, d]) => a + d.amount, 0);
     let contracts = 0;
     for (const p of this.roster(teamId)) if (!leaving.has(p.id) && !s.next_deals?.[p.id]) { const c = activeContract(s.contracts?.[p.id], ny); contracts += c ? dealAmount(c) : 0; }
-    return { total, committed: deals + contracts, deals, contracts };
+    // NIL deals your senior recruits agreed to (unless they've committed elsewhere): theirs when they enroll.
+    const recruits = teamId === s.user_team_id ? this.recruitPledges() : 0;
+    return { total, committed: deals + contracts + recruits, deals, contracts, recruits };
   }
 
   private nextBudgetTotal(t: Team): number {

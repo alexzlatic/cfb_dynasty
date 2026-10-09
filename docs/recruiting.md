@@ -230,6 +230,35 @@ considering, your read over time, projected ratings), `GET .../recruiting/board`
 `GET .../recruiting/map?cls=` and `GET .../recruiting/rankings?cls=`. Prospects your staff doesn't know
 return 404.
 
+### Your pitch (the Pitch page)
+
+Every rated sophomore, junior and senior has a pitch page (`#/l/:id/pitch/:pid`, `core/src/pitch.ts`).
+Everything on it adds one number to how much he likes your school (`Prospect.pull`), on top of contact
+hours and the scholarship offer; the weekly recruiting, flips and signing day all read it.
+
+- Selling points (up to three, `recruit_pitch`): early playing time, development, winning, close to home,
+  NIL and money, scheme fit, family and culture. Each lands by how much he cares about it (his
+  personality factor, squared) times how your school really compares on it with the others he's
+  considering (standard units, -2 to 2). Selling a weakness backfires. Effects split as 1/sqrt(n) over the
+  points and add up to at most 0.6. The pitch is heard in proportion to your contact hours with him, fully
+  at 15; at 30 your staff learns his real priorities (until then the page reads his personality type).
+- Visits (`recruit_visit`): an official visit (juniors and seniors, once, four a week, $3K near home and
+  $8K far) is worth 0.14 to 0.3 by how the campus shows; the head coach in his home (twice per recruit,
+  three a week, $1.5K or $4K) 0.06 to 0.14 by the staff's recruiting skill. Both fade with a 20-week
+  half-life. Travel goes into operations with scouting.
+- NIL (`recruit_nil`, amount 0 takes back an offer or ends a deal): a deal a year for when he enrolls,
+  negotiated like a contract. He answers in a day or two in your inbox: yes at or above his number (about
+  his market value, more for a money-first recruit, 15% less where you're his favorite and 15% more
+  where you're outside his top three), else he counters; lowballs cost patience and running out ends the
+  talks for the year (a small hit with him). An agreed deal pulls by how far it beats what he'd expect
+  from your school's money, times how much money matters to him (at most 1.5). Ending an agreed deal
+  costs 0.2. Senior deals count against next season's roster budget (`nextBudget().recruits`), must pass
+  the fair-market-value ceiling, and become his contract when he enrolls (a multi-year deal locked).
+
+The NIL tracker (`#/l/:id/recruiting/nil`, `GET .../recruiting/nil`) shows next season's budget with the
+recruits' deals, offers and NIL talks by class and by position, every talk in one table, and this
+season's roster pay by position and class. `GET .../recruiting/pitch?pid=` serves the pitch page.
+
 ## Determinism
 
 The weekly recruiting draws from a stream seeded by the league seed and the date. How every school

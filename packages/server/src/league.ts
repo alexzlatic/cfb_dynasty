@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage,
+  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage, SELLING_POINTS, type SellingPoint,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -46,6 +46,10 @@ export type Action =
   | { type: "region_hours"; payload: { region: Region; hours: number } }
   /** Put a prospect on your big board (at a place in it, or the end), or take him off. */
   | { type: "recruit_board"; payload: { pid: number; on: boolean; at?: number } }
+  /** Your pitch to a prospect: its selling points (at most three), a visit (official, or your head coach in his home), an NIL offer for when he enrolls (0 takes it back). */
+  | { type: "recruit_pitch"; payload: { pid: number; points: SellingPoint[] } }
+  | { type: "recruit_visit"; payload: { pid: number; kind: "official" | "coach" } }
+  | { type: "recruit_nil"; payload: { pid: number; amount: number; years: number } }
   /** Hire a regional scout (or let one go). */
   | { type: "scout_region"; payload: { region: Region; on: boolean } }
   /** How your staff splits its week between recruiting, scouting and game preparation. */
@@ -313,6 +317,22 @@ export class League {
       if (at != null && !Number.isInteger(at)) throw new Error("at is a place on the board");
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on, ...(at != null ? { at } : {}) } };
     }
+    if (a.type === "recruit_pitch") {
+      const keys = new Set(SELLING_POINTS.map((x) => x.key));
+      const points = Array.isArray(a.payload?.points) ? a.payload.points : [];
+      if (points.some((k: unknown) => !keys.has(k as SellingPoint))) throw new Error("unknown selling point");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), points } };
+    }
+    if (a.type === "recruit_visit") {
+      if (a.payload?.kind !== "official" && a.payload?.kind !== "coach") throw new Error("a visit is official or the head coach's");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), kind: a.payload.kind } };
+    }
+    if (a.type === "recruit_nil") {
+      const amount = Math.round(Number(a.payload?.amount)), years = Math.round(Number(a.payload?.years ?? 1));
+      if (!Number.isFinite(amount) || amount < 0) throw new Error("an NIL offer is dollars a year");
+      if (!Number.isFinite(years) || years < 1 || years > 4) throw new Error("a deal runs 1 to 4 seasons");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), amount, years } };
+    }
     if (a.type === "scout_region") {
       if (!Object.hasOwn(REGIONS, a.payload?.region)) throw new Error(`unknown region ${a.payload?.region}`);
       a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
@@ -404,6 +424,9 @@ export class League {
       if (a.type === "region_hours") this.season.setRegionHours(a.payload.region, a.payload.hours);
       if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
+      if (a.type === "recruit_pitch") this.season.setPitchPoints(a.payload.pid, a.payload.points);
+      if (a.type === "recruit_visit") this.season.pitchVisit(a.payload.pid, a.payload.kind);
+      if (a.type === "recruit_nil") this.season.pitchNil(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);
       if (a.type === "talk_player") this.season.talkTo(a.payload.pid);
       if (a.type === "renewal_offer") this.season.renewalOffer(a.payload.pid, a.payload.amount, a.payload.years);
