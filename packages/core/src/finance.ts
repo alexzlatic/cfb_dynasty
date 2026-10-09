@@ -132,10 +132,24 @@ export function facilitiesFor(t: Pick<Team, "id" | "school" | "conference" | "le
 }
 
 /** An upgrade the athletic department is building: one area to a new grade, paid over its years. */
-export interface Project { team_id: number; area: Area; to: number; cost: number; years: number; start: string; done: string }
+export interface Project {
+  team_id: number; area: Area; to: number; cost: number; years: number; start: string; done: string;
+  /** Renovate (one grade) or a new building (two grades, and the old space is closed while it goes up). */
+  scope?: "renovate" | "build";
+  /** How it's paid for (facilities.ts), the grade it started from, the estimate it was approved at, and what boosters gave. */
+  financing?: "cash" | "bonds" | "donors";
+  from?: number; estimate?: number; gift?: number;
+}
 
-/** What an upgrade costs and how long it takes (a top grade costs tens of millions and takes years). */
-export function projectCost(area: Area, to: number, bigProgram: boolean): { cost: number; years: number } {
-  const per: Record<Area, number> = { weight_room: 3_000_000, medical: 3_500_000, practice: 4_500_000, locker_room: 4_000_000, academics: 2_000_000 };
-  return { cost: r10k(per[area] * Math.pow(to, 1.6) * (bigProgram ? 1 : 0.6)), years: to >= 5 ? 3 : to >= 4 ? 2 : 1 };
+/**
+ * What a project to grade `to` is estimated to cost and how long it takes. A top-grade facility at a power
+ * program costs about what recent ones did (TOP_COST); lower grades cost less (grade^1.6), and Group of Five
+ * schools build smaller for about 45% as much (Troy's 2025 indoor practice facility cost $11.6M,
+ * Mississippi State's 2028 one $60M). A renovation takes a year (two for a top grade); a new building
+ * two (three for a top grade).
+ */
+export const TOP_COST: Record<Area, number> = { weight_room: 22_000_000, medical: 18_000_000, practice: 60_000_000, locker_room: 15_000_000, academics: 20_000_000 };
+export function projectCost(area: Area, to: number, bigProgram: boolean, scope: "renovate" | "build" = "renovate"): { cost: number; years: number } {
+  const base = TOP_COST[area] * Math.pow(to / 5, 1.6) * (bigProgram ? 1 : 0.45);
+  return scope === "build" ? { cost: r10k(base * 1.1), years: to >= 5 ? 3 : 2 } : { cost: r10k(base), years: to >= 5 ? 2 : 1 };
 }
