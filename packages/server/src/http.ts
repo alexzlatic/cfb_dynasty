@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "no
 import { extname, join, normalize } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { REGIONS, SCOUT_COST, SKILLS, TRIP_HOURS, STAFF_HOURS, gradeOf, isPublic, regionOf, starsOf, staffSkill, timeSplit, type Prospect, type Skill } from "@cfb/core";
-import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
+import { AWARD_NAMES, AREAS, EXPENSE_LINES, REVENUE_LINES, FOCUS_MAX, POSITIONS, activeContract, fmvCeiling, returning, eligibilityLeft, revenueCap, FOOTBALL_SHARE, LAB_AREAS, LAB_SLOTS, REDSHIRT_GAMES, autoDepth, prepEdge, records, securityLabel, type DefLine, type Game, type GameDetail, type PlayerSeason, type TeamSeason } from "@cfb/core";
 import { SCHEMES, schemeLayout, schemeRating, type RatedPlayer, type Scheme } from "@cfb/core";
 import { LEAGUE } from "@cfb/engine";
 import { ALL_BOWLS, NY6, PCSA_CAP, realConferences, tieInsFor } from "@cfb/core";
@@ -397,6 +397,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
       }
       case route === "actions": return lg.actions();
       case route === "live" && req.method === "GET": return lg.live ? lg.live.view(Number(url.searchParams.get("since") ?? 0)) : null;
+      case route === "live/box" && req.method === "GET": return lg.live ? lg.live.box(Number(url.searchParams.get("at") ?? Number.MAX_SAFE_INTEGER)) : null;
       case route === "live/start" && req.method === "POST": return lg.startLive((await body(req)).mode ?? {});
       case route === "live/call" && req.method === "POST": {
         const b = await body(req);
@@ -498,12 +499,19 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!g) throw new HttpError(404, "no such game");
         const d = lg.db.prepare("SELECT data FROM game_details WHERE game_id = ?").get(id) as { data: string } | undefined;
         const detail = d ? (JSON.parse(d.data) as GameDetail) : null;
-        // Defensive lines are by player id; send who they are.
-        const defenders = Object.fromEntries(Object.keys(detail?.defense ?? {}).map((k) => {
-          const pl = S.playerById.get(Number(k));
-          return [k, pl ? { name: `${pl.first} ${pl.last}`.trim(), pos: pl.pos, team_id: pl.team_id } : null];
-        }));
-        return { game: gameRow(g), detail, defenders };
+        // Every player's line with who he is, so each name links to his page. Defenders are kept by id and
+        // placed by their current team (one who has since left both schools drops out).
+        let box = null;
+        if (detail) {
+          const side = (pid: number) => {
+            const t = S.playerById.get(pid)?.team_id;
+            return t === g.home_id ? "home" : t === g.away_id ? "away" : null;
+          };
+          const def = { home: {} as Record<number, DefLine>, away: {} as Record<number, DefLine> };
+          for (const [k, l] of Object.entries(detail.defense ?? {})) { const x = side(Number(k)); if (x) def[x][Number(k)] = l; }
+          box = { home: S.boxRows(g.home_id, detail.home_players, def.home), away: S.boxRows(g.away_id, detail.away_players, def.away) };
+        }
+        return { game: gameRow(g), detail, box };
       }
       case route === "standings": return lg.standings();
       case route === "conferences": {
