@@ -49,6 +49,7 @@ import {
   DEFAULT_SETTINGS, type Ballot, type CalEvent, type Coach, type Game, type GameDetail, type GameKind, type Injury, type NewsItem, type Poll, type SeedBundle,
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
+import type { InboxMessage, InboxPost } from "./inbox.ts";
 
 export interface Seeded { seed: number; team_id: number }
 
@@ -72,6 +73,8 @@ export interface SeasonState {
   events: CalEvent[];
   polls: Poll[];
   news: NewsItem[];
+  /** This season's messages to the user team (inbox.ts); absent in leagues saved before the inbox. */
+  inbox?: InboxMessage[];
   power: Record<number, number>;
   preseason_power: Record<number, number>;
   poll_memory: Record<string, PanelMemory>;
@@ -229,6 +232,7 @@ export interface DayReport {
   polls: Poll[];
   ballots: Ballot[];
   news: NewsItem[];
+  inbox: InboxMessage[];
   stop: string | null;
 }
 
@@ -401,7 +405,7 @@ export class Season {
     const state: SeasonState = {
       year: seed.season, seed: opts.seed >>> 0, date: seed.start_date, settings,
       user_team_id: opts.user_team_id ?? null, games, events: seasonEvents(seed.season, seed.start_date, seed.schedule, settings.playoff),
-      polls: [], news: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      polls: [], news: [], inbox: [], power, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: 9_000_001, writers: generateWriters(placeTeams(seed.teams, confs), seed.rosters, opts.seed >>> 0), stars: {},
       conferences: confs, tie_ins: tieInsFor(confs, setup?.tie_ins),
     };
@@ -492,7 +496,7 @@ export class Season {
     const { fortunes, history } = this.closeBooks();
     const state: SeasonState = {
       year: ny, seed: s.seed, date: s.date, settings: s.settings, user_team_id: s.user_team_id, games, events: sortEvents([...ahead, ...events]),
-      polls: [], news: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
+      polls: [], news: [], inbox: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: Math.max(s.next_game_id + base.schedule.length, ...schedule.map((g) => g.id + 1)), writers: s.writers, stars: {},
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
       requests: s.requests, fresh_model: model, rating_anchor: anchor, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
@@ -876,7 +880,7 @@ export class Season {
   advanceDay(): DayReport {
     const s = this.state;
     const today = s.date;
-    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], ballots: [], news: [], stop: null };
+    const rep: DayReport = { date: today, fired: [], played: [], details: [], new_games: [], new_events: [], polls: [], ballots: [], news: [], inbox: [], stop: null };
 
     // 1. Morning: scheduled events fire.
     for (const e of s.events) {
@@ -3786,6 +3790,18 @@ export class Season {
     else if (rw && rl) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     else if (mine) headline = `${name(w, rw)} beats ${name(l, rl)}`;
     if (headline) rep.news.push(this.news(g.date, kind, headline, this.scoreLine(g), [g.home_id, g.away_id]));
+  }
+
+  /** Post a message to the user team's inbox (none without a user team); returns it. */
+  mail(m: InboxPost, rep?: DayReport | null): InboxMessage | null {
+    const s = this.state, me = s.user_team_id;
+    if (me == null) return null;
+    s.inbox ??= [];
+    const date = m.date ?? s.date;
+    const msg: InboxMessage = { ...m, id: `${s.year}:${date}:${s.inbox.length}`, date, team_ids: m.team_ids ?? [me] };
+    s.inbox.push(msg);
+    rep?.inbox.push(msg);
+    return msg;
   }
 
   private news(date: ISODate, kind: string, headline: string, body: string, team_ids: number[]): NewsItem {

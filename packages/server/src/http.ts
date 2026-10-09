@@ -127,7 +127,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
           id: lg.id, name: lg.name, year: s.year, date: s.date, user_team_id: s.user_team_id, settings: s.settings, done: S.done,
           champion: s.champion, upcoming, my_next_game: myGames.find((g) => g.status !== "final") ?? null,
           ap: S.latestPoll("ap")?.ranks.slice(0, 25) ?? [], playoff: s.playoff,
-          news: s.news.slice(-12).reverse(), career: career(), past: s.past ?? [],
+          news: s.news.slice(-12).reverse(), career: career(), past: s.past ?? [], inbox_unread: lg.inbox({ unread: true, limit: 1 }).unread,
         };
       }
       case route === "career": {
@@ -538,6 +538,10 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return s.news.filter((n) => (!kind || n.kind === kind) && (!author || n.author === Number(author)) &&
           (!team || n.team_ids.includes(Number(team))) && (!skipStories || n.kind !== "story"))
           .slice(-Number(url.searchParams.get("limit") || 100)).reverse();
+      }
+      case route === "inbox": {
+        const q = url.searchParams, year = q.get("year");
+        return lg.inbox({ year: year ? Number(year) : undefined, category: q.get("category") || undefined, unread: q.get("unread") === "1", limit: q.get("limit") ? Number(q.get("limit")) : undefined });
       }
       case route === "writers": return s.writers.map(({ voter, ...w }) => ({ ...w, homer: voter.homer }));
       case p[2] === "writers" && p.length === 4: {

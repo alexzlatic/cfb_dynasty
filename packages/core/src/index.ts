@@ -35,3 +35,4 @@ export * from "./realign.ts";
 export * from "./schemes.ts";
 export * from "./scouting.ts";
 export * from "./carousel.ts";
+export * from "./inbox.ts";
