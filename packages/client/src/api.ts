@@ -1,4 +1,4 @@
-import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, TeamSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase, BoxRow, LiveBox } from "@cfb/core";
+import type { ConferenceDef, ConferenceSetup, TieIns, CalEvent, Coach, Game, GameDetail, NewsItem, Player, Poll, Settings, Team, Writer, PlayoffState, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Prep, PrepEdge, Injury as CoreInjury, Career, Award, AwardType, PlayerSeason, TeamSeason, SecurityStep, CareerStart, LabArea, LabPlan, TeamContext, PersonaView, DevPhase, BoxRow, LiveBox, Season } from "@cfb/core";
 import type { TeamRatings, UnitRates } from "@cfb/engine";
 export type { PlayerSeason, TeamSeason, ConferenceDef, ConferenceSetup, TieIns, LiveView, LiveMode, UserCall, GamePlan, PracticePlan, Award, AwardType, CareerStart, LabArea, LabPlan, PersonaView };
 export type ConfMove = { team_id: number; from: string; to: string; announced: number; effective: number; fee: number; reason: string };
@@ -197,6 +197,9 @@ export interface ProspectPageData extends ProspectRow {
   hs_seasons: HsSeason[]; hs_cols: HsCol[];
 }
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
+/** Your pitch to one recruit (Season.pitchView) and NIL at a glance (Season.nilView). */
+export type PitchData = ReturnType<Season["pitchView"]>;
+export type NilData = Extract<ReturnType<Season["nilView"]>, { available: true }>;
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
 export type MapPoint = [number, number, number, number, number, number | null, number, string, string];
 export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number; opponent?: number; develop?: number }
@@ -208,7 +211,7 @@ export interface StrategyView {
   /** The in-season split (shares add up to 1), the same split out of season, and the usual week. */
   time: Required<StaffTimeSplit>; offseason: Required<StaffTimeSplit>; usual: Required<StaffTimeSplit>;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
-  recruiting: { auto: boolean; board: number; contact_hours: number; hours_set: number; commits: number };
+  recruiting: { auto: boolean; board: number; contact_hours: number; hours_set: number; commits: number; week: ReturnType<Season["recruitLedger"]> };
   scouting: { hours: number; trips: number; region_hours: number; assignments: number; paid: number; spend: number; reports: number; last_report: number };
   development: { pace: number; plans: number; slots: number; skill: number };
   prep: { factor: number; skill: number };
@@ -350,6 +353,8 @@ export const api = {
   reports: (id: string) => req<{ reports: ScoutReport[]; regions: Record<string, { name: string }> }>(`/api/leagues/${id}/strategy/reports`),
   prospect: (id: string, pid: number) => req<ProspectPageData>(`/api/leagues/${id}/recruiting/prospect?pid=${pid}`),
   board: (id: string) => req<{ rows: BoardRow[] }>(`/api/leagues/${id}/recruiting/board`),
+  pitch: (id: string, pid: number) => req<PitchData>(`/api/leagues/${id}/recruiting/pitch?pid=${pid}`),
+  nil: (id: string) => req<NilData | { available: false }>(`/api/leagues/${id}/recruiting/nil`),
   recruitMap: (id: string, cls: number, pos = "") => req<{ cls: number; points: MapPoint[] }>(`/api/leagues/${id}/recruiting/map?cls=${cls}${pos ? `&pos=${pos}` : ""}`),
   classRanks: (id: string, cls: number) => req<ClassRank[]>(`/api/leagues/${id}/recruiting/rankings?cls=${cls}&limit=25`),
   liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),

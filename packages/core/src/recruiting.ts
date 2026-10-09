@@ -5,6 +5,7 @@ import { ATTRS, POSITIONS, fromZ, overall, z, type Pos, type RatedPlayer } from 
 import { RECRUIT_FIT, STARTERS, choose, miles, offerScore, persona, type Persona, type SchoolOffer } from "./valuation.ts";
 import type { StaffTime } from "./staff.ts";
 import { statRead } from "./hsstats.ts";
+import type { Pitch } from "./pitch.ts";
 
 /**
  * High school recruiting (M3 step 3). Four classes are live at once: in August 2026 the 2027 class are
@@ -74,6 +75,8 @@ export interface Prospect {
   offers: number[];
   /** Contact hours each school has put into him (they fade when a school stops calling). */
   interest: Record<string, number>;
+  /** What a school's pitch adds to how much he likes it (selling points, visits, NIL: pitch.ts), by school id. */
+  pull?: Record<string, number>;
   /** The schools he has had his eye on from the start (empty: wide open), set the first week he's recruited. */
   fav?: number[];
 }
@@ -339,6 +342,8 @@ const REGION_OF = new Map(Object.entries(REGIONS).flatMap(([k, v]) => v.states.m
 export const SCOUT_COST = { region: 95_000, trip_near: 2_500, trip_far: 7_500 };
 /** Staff hours an evaluation takes. */
 export const TRIP_HOURS = { near: 6, far: 9 };
+/** Contact hours a week one prospect can take: about an hour and a half a day of calls, texts and messages from your staff. */
+export const MAX_CONTACT = 10;
 
 export interface SchoolEye {
   id: number; lat: number; lon: number; state: string | null;
@@ -458,6 +463,8 @@ export interface School extends SchoolEye {
   buzz: number;
   /** What it can pay a top recruit against a typical power program (1), from its revenue-share budget. */
   wealth: number;
+  /** Seasons its head coach has been there (when the league tracks coaches). */
+  tenure?: number;
 }
 
 /**
@@ -502,8 +509,10 @@ export function classTarget(roster: { pos: Pos; years: number }[], portalShare: 
 export interface UserRecruiting {
   /** Your staff works your board (on) or you set every hour and offer yourself (off). */
   auto: boolean;
-  /** Weekly contact hours on each prospect, by prospect id (your board when auto is off). */
+  /** Weekly contact hours on each prospect, by prospect id (your board when auto is off), MAX_CONTACT at most. */
   hours: Record<string, number>;
+  /** Your off-field recruiting staff (absent: the usual for your program, usualStaffers). */
+  staffers?: number;
   /** Prospects your scouts go to see, in order (each at most once a week). */
   scout: number[];
   /** Regions you pay a scout to cover. */
@@ -531,6 +540,8 @@ export interface UserRecruiting {
   /** What your scouts have reported, newest first (the last 60). */
   reports?: ScoutReport[];
   next_report?: number;
+  /** Your pitch to each prospect (pitch.ts), by prospect id. */
+  pitches?: Record<string, Pitch>;
 }
 
 /** A prospect in a scouting report, as your staff read him that day. */
@@ -630,11 +641,13 @@ export function firmness(seed: number, p: Prospect): { loyal: number; share: num
 export const loyaltyOf = (seed: number, p: Prospect, date: ISODate) =>
   firmness(seed, p).loyal + LOYAL_GROW * Math.min(1, Math.max(0, daysBetween(p.commit!.date, date)) / 120);
 
-/** What a school has with him beyond its base score and his commitment: contact, an offer and being a favorite. */
+/** What a school has with him beyond its base score and his commitment: contact, an offer, being a favorite and its pitch. */
 export function pullFor(p: Prospect, id: number, fav: number[] | undefined): number {
   let u = contactPull(p.interest[id] ?? 0);
   if (p.offers.includes(id)) u += OFFER_PULL;
   if (fav?.includes(id)) u += fav.length === 1 ? FAV_PULL.one : FAV_PULL.few;
+  // Your pitch (selling points, visits, NIL: pitch.ts).
+  u += p.pull?.[id] ?? 0;
   return u;
 }
 

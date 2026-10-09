@@ -118,8 +118,14 @@ page has his season-by-season table, and the big board shows his latest line.
 ## Staff
 
 Every coach has five skills, 25 to 95 with 50 average: recruiting, scouting, development, game planning
-and scheme, from the school's standing and a head coach's record. The staff splits its week (about 160
-hours) between recruiting, scouting and preparing for the next game; you set your own split. In season
+and scheme, from the school's standing and a head coach's record. The staff splits its week (160 hours:
+the head coach and three coordinators, about 40 flexible hours each beyond the practices, meetings and
+games that fill a 70 to 80 hour week; 96 at FCS schools) between recruiting, scouting and preparing for
+the next game; you set your own split. The head coach's own 40 hours go by the same split (about 12 for
+recruiting in season, 28 out of it), and his home visits and official-visit weekends draw on them.
+Off-field recruiting staffers (a director of recruiting, personnel staff, analysts) add 16 contact hours a
+week each, all year: power programs carry three, others none, and you can hire up to eight at $85K a year
+out of operations (`recruit_staffers`, the Strategy screen). In season
 the usual split is 30/10/60 and a week of preparation is worth what the split and the staff's game
 planning make it (spending the week recruiting costs you on Saturday). Development skill speeds growth
 at the rollover by up to 10%.
@@ -135,8 +141,8 @@ standing) by the service.
 Every Sunday each school works a board: everyone committed to it, about four uncommitted targets per
 open spot and a few prospects committed elsewhere it tries to flip. A school's targets are prospects in
 its range (its last three classes), ranked by what he's worth to it, how badly it needs his position and
-its chance with him. Its contact hours (more for power programs, worth more with a better recruiting
-staff) build relationships; offers go out up to about five per open spot.
+its chance with him. Its contact hours (its coaches' recruiting share plus its recruiting staff, worth
+more with a better recruiting staff) build relationships; offers go out up to about five per open spot.
 
 A prospect weighs each school the way real recruits chose (a choice model fit to 2024-2025 commitments):
 distance and home state, prestige, the last season's record, power conference, playing time,
@@ -262,7 +268,9 @@ the transfer portal (step 5) and the coaching carousel (M4) are the remaining re
 ## Your recruiting
 
 Your staff runs your board by default. Turn that off to run it yourself: put contact hours on the
-prospects you want (your recruiting share of staff time sets the total), offer, and send scouts.
+prospects you want (up to 10 a week on one prospect; your recruiting share of staff time, your
+recruiting staff and this week's visits set the total, and a board set past it is spread thinner), offer,
+and send scouts.
 Actions: `recruit_auto`, `recruit_hours`, `recruit_offer`, `recruit_board` (your ordered big board),
 `scout_prospect`, `scout_region`, `staff_time`. API: `GET /api/leagues/:id/recruiting` (a class as your
 staff sees it, with filters `cls`, `pos`, `region`, `q`, `stars`, `status`, `sort` and `view` = known,
@@ -270,6 +278,37 @@ rated, found, board, mine or committed), `GET .../recruiting/prospect?pid=` (his
 considering, your read over time, projected ratings), `GET .../recruiting/board`,
 `GET .../recruiting/map?cls=` and `GET .../recruiting/rankings?cls=`. Prospects your staff doesn't know
 return 404.
+
+### Your pitch (the Pitch page)
+
+Every rated sophomore, junior and senior has a pitch page (`#/l/:id/pitch/:pid`, `core/src/pitch.ts`).
+Everything on it adds one number to how much he likes your school (`Prospect.pull`), on top of contact
+hours and the scholarship offer; the weekly recruiting, flips and signing day all read it.
+
+- Selling points (up to three, `recruit_pitch`): early playing time, development, winning, close to home,
+  NIL and money, scheme fit, family and culture. Each lands by how much he cares about it (his
+  personality factor, squared) times how your school really compares on it with the others he's
+  considering (standard units, -2 to 2). Selling a weakness backfires. Effects split as 1/sqrt(n) over the
+  points and add up to at most 0.6. The pitch is heard in proportion to your contact hours with him, fully
+  at 15; at 30 your staff learns his real priorities (until then the page reads his personality type).
+- Visits (`recruit_visit`): an official visit (juniors and seniors, once, $3K near home and $8K far, 8
+  staff hours of which 2 are the head coach's) is worth 0.14 to 0.3 by how the campus shows; the head
+  coach in his home (twice per recruit, $1.5K or $4K, 6 or 10 of his own hours) 0.06 to 0.14 by the
+  staff's recruiting skill. Both fade with a 20-week half-life. Visit hours come out of the week's contact
+  hours, and the head coach can't visit past his own recruiting hours (`recruitLedger`), so in season he
+  manages one or two homes a week. Travel goes into operations with scouting.
+- NIL (`recruit_nil`, amount 0 takes back an offer or ends a deal): a deal a year for when he enrolls,
+  negotiated like a contract. He answers in a day or two in your inbox: yes at or above his number (about
+  his market value, more for a money-first recruit, 15% less where you're his favorite and 15% more
+  where you're outside his top three), else he counters; lowballs cost patience and running out ends the
+  talks for the year (a small hit with him). An agreed deal pulls by how far it beats what he'd expect
+  from your school's money, times how much money matters to him (at most 1.5). Ending an agreed deal
+  costs 0.2. Senior deals count against next season's roster budget (`nextBudget().recruits`), must pass
+  the fair-market-value ceiling, and become his contract when he enrolls (a multi-year deal locked).
+
+The NIL tracker (`#/l/:id/recruiting/nil`, `GET .../recruiting/nil`) shows next season's budget with the
+recruits' deals, offers and NIL talks by class and by position, every talk in one table, and this
+season's roster pay by position and class. `GET .../recruiting/pitch?pid=` serves the pitch page.
 
 ## Determinism
 

@@ -73,6 +73,27 @@ export interface StaffTime {
 export const SEASON_TIME: StaffTime = { recruiting: 0.3, scouting: 0.1, prep: 0.35, develop: 0.1, opponent: 0.15 };
 export const OFFSEASON_TIME: StaffTime = { recruiting: 0.7, scouting: 0.3, prep: 0, develop: 0, opponent: 0 };
 export const STAFF_HOURS = 160;
+/**
+ * Whose hours those are: the head coach and his three coordinators, about 40 flexible hours a week each on
+ * top of the meetings, practices and games that fill the rest of a 70 to 80 hour week. The head coach's own
+ * share goes by the same split, so in season he has about 12 hours a week for recruiting, out of season 28.
+ * FCS staffs are smaller and spread thinner: 96 hours a week.
+ */
+export const HC_HOURS = 40;
+export const staffHours = (level: "fbs" | "fcs") => (level === "fcs" ? 96 : STAFF_HOURS);
+/**
+ * Off-field recruiting staff (a director of recruiting, personnel staff, analysts): 16 contact hours a week
+ * each, all year, on top of the coaches' recruiting share. They run the calls, texts, mail and visit days but
+ * can't stand in for the head coach. Power programs carry three; elsewhere the coaches do it themselves.
+ * You can hire more (or, at a smaller program, some) out of the operations budget.
+ */
+export const STAFFER_HOURS = 16;
+export const STAFFER_PAY = 85_000;
+export const MAX_STAFFERS = 8;
+export const usualStaffers = (power: boolean) => (power ? 3 : 0);
+/** A school's contact hours a week: the coaches' recruiting share plus the recruiting staff. */
+export const recruitHours = (level: "fbs" | "fcs", recruitingShare: number, staffers: number) =>
+  staffHours(level) * recruitingShare + STAFFER_HOURS * staffers;
 
 /**
  * A split normalized to add up to 1. Practice, film and development plans are in-season work: out of season

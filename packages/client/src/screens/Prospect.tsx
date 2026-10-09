@@ -53,7 +53,8 @@ export function ProspectPage({ pid }: { pid: number }) {
       </div>
       {me != null && (
         <div className="actionbar">
-          <button disabled={busy} className={p.board >= 0 ? "" : "primary"} onClick={() => act("recruit_board", { pid: p.id, on: p.board < 0 })}>{p.board >= 0 ? "Remove from big board" : "Add to big board"}</button>
+          {!signed && p.grade >= 1 && p.service && <a className="button primary" href={`#/l/${id}/pitch/${p.id}`}>Your pitch</a>}
+          <button disabled={busy} className={p.board >= 0 || (!signed && p.grade >= 1 && p.service) ? "" : "primary"} onClick={() => act("recruit_board", { pid: p.id, on: p.board < 0 })}>{p.board >= 0 ? "Remove from big board" : "Add to big board"}</button>
           {!signed && p.grade >= 1 && <button disabled={busy} onClick={() => act("recruit_offer", { pid: p.id, on: !offered })}>{offered ? "Pull offer" : "Offer"}</button>}
           <button disabled={busy} title="Three evaluation trips, then your scouts report back (Strategy, Scout reports)" onClick={() => act("scout_prospect", { pid: p.id, on: !p.scouting, trips: 3 })}>{p.scouting ? "Call off the scouts" : "Send scouts (3 trips)"}</button>
           {!signed && <span className="hours">Contact <input value={hours ?? String(p.hours || "")} onChange={(e) => setHours(e.target.value)} /> h/week

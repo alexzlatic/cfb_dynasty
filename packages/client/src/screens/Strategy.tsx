@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useData, useLeague } from "../App.tsx";
-import { api, type Assignment, type ProspectRow, type RegionPlan, type ScoutReport, type StaffShare, type StaffTimeSplit } from "../api.ts";
+import { api, type Assignment, type ProspectRow, type RegionPlan, type ScoutReport, type StaffShare, type StaffTimeSplit, type StrategyView } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { RangeBar, prospectLink } from "./Recruiting.tsx";
@@ -58,9 +58,10 @@ function Overview() {
   const hours = (k: StaffShare) => Math.round(data.staff_hours * share(k));
   const ratio = (k: StaffShare) => (data.time[k] > 0 ? share(k) / data.time[k] : 1);
   const film = data.staff_hours / 6 * share("opponent") * (0.6 + 0.8 * data.skills.scouting / 100);
+  const wk = data.recruiting.week;
   const seen = seenReport(id), fresh = Math.max(0, data.scouting.last_report - seen);
   const buys: Record<StaffShare, { text: string; href: string; link: string }> = {
-    recruiting: { text: `${Math.round(data.recruiting.contact_hours * (data.in_season ? ratio("recruiting") : 1))} contact hours a week${data.recruiting.auto ? ", your staff works the board" : `, ${data.recruiting.hours_set} set by you`}`,
+    recruiting: { text: `${Math.round(Math.max(0, wk.coaches * (data.in_season ? ratio("recruiting") : 1) + wk.staffer_hours - wk.visits))} contact hours a week${wk.staffers ? ` (with ${wk.staffer_hours} from your recruiting staff)` : ""}${data.recruiting.auto ? ", your staff works the board" : `, ${data.recruiting.hours_set} set by you`}`,
       href: `#/l/${id}/recruiting/board`, link: "Big board" },
     scouting: { text: `${Math.round(data.staff_hours * share("scouting"))} scouting hours a week in season (${data.scouting.trips + data.scouting.region_hours} planned)`, href: `#/l/${id}/strategy/scouting`, link: "Scouting" },
     develop: { text: `Plans work at ${paceOf(share("develop"), data.usual.develop).toFixed(2)}x the usual pace (${data.development.plans} of ${data.development.slots} plans)`, href: `#/l/${id}/development`, link: "Development" },
@@ -112,12 +113,32 @@ function Overview() {
           <p>{data.scouting.reports ? <a href={`#/l/${id}/strategy/reports`}>{data.scouting.reports} scout report{data.scouting.reports === 1 ? "" : "s"}{fresh ? `, ${fresh} new` : ""} ›</a> : <span className="muted">No scout reports yet. Assign players or put hours in a region and your scouts report back.</span>}</p>
           <p className="small muted">Spent {money(data.scouting.spend)} on scouting this year (operations budget).</p>
         </Panel>
-        <Panel title="Staff skills" right={<a className="small" href={`#/l/${id}/staff`}>Staff ›</a>}>
-          <div className="skills">{Object.entries(data.skill_names).map(([k, l]) => <div key={k} className="skill"><span>{l}</span><b>{data.skills[k]}</b></div>)}</div>
-          <p className="small muted">{data.staff.map((c) => `${c.role} ${c.first} ${c.last}`).join(", ")}. Skills set what an hour is worth: recruiting per contact hour, scouting per look and per film hour, development the base pace, game planning a week's preparation.</p>
-        </Panel>
+        <RecruitStaff wk={wk} busy={busy} act={act} />
       </div>
+      <Panel title="Staff skills" right={<a className="small" href={`#/l/${id}/staff`}>Staff ›</a>}>
+        <div className="skills">{Object.entries(data.skill_names).map(([k, l]) => <div key={k} className="skill"><span>{l}</span><b>{data.skills[k]}</b></div>)}</div>
+        <p className="small muted">{data.staff.map((c) => `${c.role} ${c.first} ${c.last}`).join(", ")}. Skills set what an hour is worth: recruiting per contact hour, scouting per look and per film hour, development the base pace, game planning a week's preparation.</p>
+      </Panel>
     </div>
+  );
+}
+
+/** The head coach's own week and your off-field recruiting staff (hire more out of the operations budget). */
+function RecruitStaff({ wk, busy, act }: { wk: StrategyView["recruiting"]["week"]; busy: boolean; act: (type: string, payload: unknown) => Promise<void> }) {
+  return (
+    <Panel title="Recruiting staff">
+      <div className="skills">
+        <div className="skill"><span>Staffers</span><b>
+          <button className="link" disabled={busy || wk.staffers <= wk.usual_staffers} onClick={() => act("recruit_staffers", { count: wk.staffers - 1 })}>−</button> {wk.staffers}{" "}
+          <button className="link" disabled={busy || wk.staffers >= 8} onClick={() => act("recruit_staffers", { count: wk.staffers + 1 })}>+</button></b></div>
+        <div className="skill"><span>Their hours</span><b>{wk.staffer_hours}</b></div>
+        <div className="skill"><span>Coaches' recruiting hours</span><b>{Math.round(wk.coaches)}</b></div>
+        <div className="skill"><span>Head coach's</span><b>{Math.round(wk.hc.recruiting)}</b></div>
+      </div>
+      <p className="small muted">Your head coach has {wk.hc.week} hours of his own a week beyond practice, meetings and games, split like the rest of the staff: {Math.round(wk.hc.recruiting)} on recruiting right now, which is
+        what his home visits and official-visit weekends draw on ({Math.round(wk.hc.left)} left this week). Recruiting staffers add 16 contact hours a week each, all year, but can't stand in for him.
+        {wk.usual_staffers ? ` Your program carries ${wk.usual_staffers}; more` : " Your program has none; each"} cost{wk.usual_staffers ? "" : "s"} {money(85_000)} a year out of the operations budget.</p>
+    </Panel>
   );
 }
 

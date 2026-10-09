@@ -29,6 +29,7 @@ import { BudgetScreen } from "./screens/Budget.tsx";
 import { FrontOfficeScreen } from "./screens/FrontOffice.tsx";
 import { RecruitingScreen } from "./screens/Recruiting.tsx";
 import { ProspectPage } from "./screens/Prospect.tsx";
+import { PitchPage } from "./screens/Pitch.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
 import { RetentionScreen } from "./screens/Retention.tsx";
 import { RenewalsScreen } from "./screens/Renewals.tsx";
@@ -87,7 +88,7 @@ const NAV: NavSection[] = [
   // Every call about where the staff's time and money go, each with its own screen.
   { key: "strategy", label: "Strategy", pages: [page("Overview", "strategy/overview", ["strategy"], true), page("Scouting", "strategy/scouting", ["strategy"], true),
     page("Scout reports", "strategy/reports", ["strategy"], true), page("Development", "development", ["development"], true), page("Game plan", "plan", ["plan"], true), page("Staff", "staff", ["staff"], true)] },
-  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
+  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]), page("NIL tracker", "recruiting/nil", ["recruiting"], true),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"])] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "stats", label: "Stats", pages: [page("Players", "stats/players", ["stats"]), page("Teams", "stats/teams", ["stats"]), page("Leaders", "stats/leaders", ["stats"]), page("History", "stats/history", ["stats"])] },
@@ -98,7 +99,7 @@ const NAV: NavSection[] = [
 /** Which section a screen belongs to (pages about other teams, games and players sit under League). */
 function sectionOf(screen: string, arg: string | undefined, my: number | null): string {
   for (const sec of NAV) if (sec.pages.some((p) => p.on(screen, arg, my))) return sec.key;
-  if (screen === "prospect") return "recruiting";
+  if (screen === "prospect" || screen === "pitch") return "recruiting";
   if (screen === "player" || screen === "team" || screen === "depth" || screen === "game") return "league";
   return "home";
 }
@@ -194,6 +195,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "front" && <FrontOfficeScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
         {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
+        {screen === "pitch" && arg && <PitchPage pid={Number(arg)} />}
         {screen === "stats" && <StatsScreen key={`${arg}/${sub}`} sub={arg ?? "players"} year={sub ? Number(sub) : undefined} />}
         {screen === "draft" && <DraftScreen />}
         {screen === "retention" && <RetentionScreen />}

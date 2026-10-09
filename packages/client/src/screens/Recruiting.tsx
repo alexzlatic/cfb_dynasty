@@ -6,6 +6,7 @@ import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { ConsideringList } from "./Prospect.tsx";
 import { RecruitMap } from "./RecruitMap.tsx";
+import { NilTracker } from "./NilTracker.tsx";
 import { recruitStars } from "./ratings.tsx";
 
 const GRADES = ["Freshmen", "Sophomores", "Juniors", "Seniors"];
@@ -24,7 +25,7 @@ export function RecruitingScreen({ sub }: { sub: string }) {
   if (!head) return <p className="muted">Loading...</p>;
   if (!head.available) return <Panel title="Recruiting"><p className="muted">This league has no recruiting.</p></Panel>;
   const c = cls ?? head.cls;
-  const classTabs = sub !== "board" && sub !== "staff" && (
+  const classTabs = sub !== "board" && sub !== "staff" && sub !== "nil" && (
     <div className="classtabs">
       {head.classes.map((x) => (
         <button key={x.cls} className={x.cls === c ? "on" : ""} onClick={() => setCls(x.cls)}>
@@ -41,6 +42,7 @@ export function RecruitingScreen({ sub }: { sub: string }) {
       {sub === "board" && <BigBoard head={head} />}
       {sub === "map" && <MapView cls={c} head={head} />}
       {sub === "rankings" && <Rankings cls={c} />}
+      {sub === "nil" && <NilTracker />}
       {sub === "staff" && <StaffAndScouting />}
     </div>
   );
@@ -212,6 +214,7 @@ function BigBoard({ head }: { head: RecruitingView }) {
                 <div className="bact">
                   <button className="link" disabled={busy || i === 0} onClick={() => act("recruit_board", { pid: r.id, on: true, at: i - 1 })} title="Move up">▲</button>
                   <button className="link" disabled={busy || i === data.rows.length - 1} onClick={() => act("recruit_board", { pid: r.id, on: true, at: i + 1 })} title="Move down">▼</button>
+                  {!r.commit?.signed && r.grade >= 1 && r.service && <a className="link" href={`#/l/${id}/pitch/${r.id}`}>Pitch</a>}
                   {!r.commit?.signed && r.grade >= 1 && <button className="link" disabled={busy} onClick={() => act("recruit_offer", { pid: r.id, on: !r.offers.includes(me) })}>{r.offers.includes(me) ? "Pull offer" : "Offer"}</button>}
                   <button className="link" disabled={busy} onClick={() => act("scout_prospect", { pid: r.id, on: !r.scouting, trips: 3 })}>{r.scouting ? "Stop scouting" : "Scout"}</button>
                   <button className="link muted" disabled={busy} onClick={() => act("recruit_board", { pid: r.id, on: false })}>Remove</button>

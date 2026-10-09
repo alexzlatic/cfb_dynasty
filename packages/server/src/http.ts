@@ -308,11 +308,11 @@ export function startServer(opts: ServerOptions, port: number): Server {
         const u = st.user, time = timeSplit(u.time, true), staff = S.staff(me);
         const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
         const film = S.scoutReport(), plan = S.scoutingPlan()!;
-        const contact = S.schools().find((t) => t.id === me)?.hours ?? 0;
+        const week = S.recruitLedger();
         return {
           available: true, team_id: me, date: s.date, in_season: S.inSeason(s.date), staff_hours: STAFF_HOURS, time, offseason: timeSplit(u.time, false), usual: SEASON_TIME,
           staff, skills, skill_names: SKILLS,
-          recruiting: { auto: u.auto, board: (u.board ?? []).length, contact_hours: Math.round(contact), hours_set: Object.values(u.hours).reduce((a, h) => a + h, 0),
+          recruiting: { auto: u.auto, board: (u.board ?? []).length, contact_hours: Math.round(week.contact), hours_set: week.board, week,
             commits: st.prospects.filter((p) => p.commit?.team === me && p.cls === s.year + 1).length },
           scouting: { hours: plan.hours, trips: plan.trips, region_hours: plan.region_hours, assignments: plan.assignments.length, paid: u.regions.length, spend: u.spend,
             reports: plan.reports, last_report: plan.last_report },
@@ -329,6 +329,13 @@ export function startServer(opts: ServerOptions, port: number): Server {
         if (!S.knownProspects().has(p.id)) throw new HttpError(404, "your staff doesn't know about this prospect yet");
         return S.prospectPage(p);
       }
+      case route === "recruiting/pitch": {
+        if (!s.recruiting || s.user_team_id == null) return null;
+        const p = S.prospect(Number(url.searchParams.get("pid")));
+        if (!S.knownProspects().has(p.id)) throw new HttpError(404, "your staff doesn't know about this prospect yet");
+        return S.pitchView(p.id);
+      }
+      case route === "recruiting/nil": return S.nilView();
       case route === "recruiting/map": {
         // Every prospect your staff knows in a class, as points: [id, lat, lon, stars, est, committed to, on your board].
         const st = s.recruiting;

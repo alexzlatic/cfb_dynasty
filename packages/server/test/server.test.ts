@@ -582,8 +582,8 @@ describe("money", () => {
     const [a, b] = open;
     const ops = lg.season.budget(2509)!.expenses.operations;
     expect((await act("recruit_auto", { on: false })).ok).toBe(true);
-    expect((await act("recruit_hours", { pid: a.id, hours: 12 })).ok).toBe(true);
-    expect((await act("recruit_hours", { pid: a.id, hours: 99 })).error).toMatch(/0 to 40/);
+    expect((await act("recruit_hours", { pid: a.id, hours: 8 })).ok).toBe(true);
+    expect((await act("recruit_hours", { pid: a.id, hours: 99 })).error).toMatch(/0 to 10 a week/);
     expect((await act("recruit_offer", { pid: a.id, on: true })).ok).toBe(true);
     expect((await act("scout_prospect", { pid: b.id, on: true })).ok).toBe(true);
     expect((await act("scout_region", { region: "texas", on: true })).ok).toBe(true);
