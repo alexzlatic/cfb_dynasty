@@ -61,3 +61,63 @@ describe("decision provider", () => {
     expect(r.home.box.punts).toBe(0);
   });
 });
+
+describe("clock management", () => {
+  const snaps = (r: ReturnType<GameSim["result"]>) => r.home.box.pass_att + r.home.box.rush_att + r.home.box.sacks_taken;
+  const avgSnaps = (set: (g: GameSim) => void) => {
+    let n = 0;
+    for (let seed = 1; seed <= 30; seed++) { const g = new GameSim(averageTeam("H", "HOM"), averageTeam("A", "AWY"), { seed, record: false }); set(g); n += snaps(g.play().result()); }
+    return n / 30;
+  };
+
+  it("tempo changes how many snaps an offense gets", () => {
+    const milk = avgSnaps((g) => { g.tempo.home = "milk"; }), base = avgSnaps(() => {}), up = avgSnaps((g) => { g.tempo.home = "uptempo"; }), hurry = avgSnaps((g) => { g.tempo.home = "hurry"; });
+    expect(milk).toBeLessThan(base - 3);
+    expect(up).toBeGreaterThan(base + 5);
+    expect(hurry).toBeGreaterThan(up);
+  });
+
+  it("a timeout stops the clock where the last play ended", () => {
+    let checked = 0;
+    const g = new GameSim(averageTeam("H", "HOM"), averageTeam("A", "AWY"), { seed: 4 });
+    g.play((req, game) => {
+      if (req.kind !== "playCall" || req.side !== "home" || !game.clockRunning || game.home.timeouts === 0) return undefined;
+      const before = game.clock, last = game.plays.at(-1)!, n = game.home.timeouts;
+      expect(game.callTimeout("home")).toBe(true);
+      expect(game.home.timeouts).toBe(n - 1);
+      expect(game.clock).toBeGreaterThan(before);
+      if (last.quarter === game.quarter) expect(game.clock).toBe(last.clock - 6);
+      expect(game.plays.at(-1)!.play_type).toBe("TIMEOUT");
+      expect(game.callTimeout("home")).toBe(false);
+      checked++;
+      return undefined;
+    });
+    expect(checked).toBeGreaterThan(4);
+  });
+
+  it("a side calling its own timeouts is asked, and the engine never spends them", () => {
+    let asked = 0;
+    const r = new GameSim(averageTeam("H", "HOM"), averageTeam("A", "AWY"), { seed: 11 });
+    r.manualTimeouts.home = true;
+    r.play((req) => { if (req.kind === "timeout") { expect(req.side).toBe("home"); asked++; } return undefined; });
+    expect(asked).toBeGreaterThan(20);
+    expect(r.plays.filter((p) => p.description.startsWith("Timeout HOM"))).toHaveLength(0);
+  });
+
+  it("a spike stops a running clock for a down; a kneel loses a yard", () => {
+    const seen = new Set<string>();
+    const g = new GameSim(averageTeam("H", "HOM"), averageTeam("A", "AWY"), { seed: 6 });
+    g.play((req, game) => {
+      if (req.kind !== "playCall" || req.side !== "home" || req.situation.down >= 3) return undefined;
+      if (game.clockRunning && !seen.has("spike")) { game.clockPlay = "spike"; seen.add("spike"); }
+      else if (seen.has("spike") && !seen.has("kneel")) { game.clockPlay = "kneel"; seen.add("kneel"); }
+      return undefined;
+    });
+    const i = g.plays.findIndex((p) => p.play_type === "SPIKE"), k = g.plays.findIndex((p) => p.play_type === "KNEEL");
+    expect(i).toBeGreaterThan(0);
+    const spike = g.plays[i], next = g.plays.slice(i + 1).find((p) => p.down > 0)!;
+    expect(next.down).toBe(spike.down + 1);
+    expect(next.clock).toBe(spike.clock - 1);
+    expect(g.plays[k].yards).toBe(-1);
+  });
+});

@@ -269,6 +269,8 @@ export const api = {
   liveStart: (id: string, mode: Partial<LiveMode> = {}) => req<LiveResult>(`/api/leagues/${id}/live/start`, { method: "POST", body: JSON.stringify({ mode }) }),
   liveCall: (id: string, call: UserCall, since: number, to_end = false) => req<LiveResult>(`/api/leagues/${id}/live/call`, { method: "POST", body: JSON.stringify({ call, since, to_end }) }),
   liveMode: (id: string, mode: Partial<LiveMode>) => req<LiveResult>(`/api/leagues/${id}/live/mode`, { method: "POST", body: JSON.stringify({ mode }) }),
+  liveClock: (id: string, c: { tempo?: string; manual_timeouts?: boolean }) => req<LiveResult>(`/api/leagues/${id}/live/clock`, { method: "POST", body: JSON.stringify(c) }),
+  liveTimeout: (id: string, since: number) => req<LiveResult>(`/api/leagues/${id}/live/timeout`, { method: "POST", body: JSON.stringify({ since }) }),
   liveSub: (id: string, slot: string, pid: number) => req<LiveResult>(`/api/leagues/${id}/live/sub`, { method: "POST", body: JSON.stringify({ slot, pid }) }),
   plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
   recruiting: (id: string, q: Record<string, string>) => req<RecruitingView>(`/api/leagues/${id}/recruiting?` + new URLSearchParams(q)),

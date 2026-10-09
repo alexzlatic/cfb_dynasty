@@ -4,7 +4,7 @@ import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday
 import {
   LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
 } from "./hidden.ts";
-import { Caller, type UserCall } from "./calls.ts";
+import { Caller, applyClock, type ClockEvent, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
@@ -89,6 +89,8 @@ export interface SeasonState {
   calls?: Record<number, UserCall[]>;
   /** The user's changes to their lineup during live games, by game id. */
   subs?: Record<number, GameSub[]>;
+  /** The user's tempo changes and timeouts during live games, by game id. */
+  clock_calls?: Record<number, ClockEvent[]>;
   /** The user's game plan and weekly practice plan (absent = the defaults). */
   game_plan?: GamePlan;
   practice?: PracticePlan;
@@ -3588,6 +3590,12 @@ export class Season {
     (this.state.subs ??= {})[gameId] = subs;
   }
 
+  /** Record the user's clock management from a live game. */
+  setClockCalls(gameId: number, clock: ClockEvent[]): void {
+    if (!clock.length) return;
+    (this.state.clock_calls ??= {})[gameId] = clock;
+  }
+
   /**
    * A practice day: Monday to Thursday in a week your team plays, the day's plan banks prep for the
    * game. A hard day can cost a player time (from its own stream, so nothing else moves).
@@ -3661,7 +3669,11 @@ export class Season {
     const { sim, gd, sides, caller } = this.gameSetup(g);
     const subs = s.subs?.[g.id] ?? [];
     const userSide = caller?.userSide;
-    const called = caller ? caller.replay(s.calls?.[g.id] ?? [], (i) => { for (const x of subs) if (x.at === i && gd && userSide) gd.setDepth(userSide, x.depth); }) : undefined;
+    const clock = s.clock_calls?.[g.id] ?? [];
+    const called = caller ? caller.replay(s.calls?.[g.id] ?? [], (i) => {
+      for (const x of subs) if (x.at === i && gd && userSide) gd.setDepth(userSide, x.depth);
+      for (const x of clock) if (x.at === i && userSide) applyClock(sim, userSide, x);
+    }) : undefined;
     sim.play(gd ? gd.provider(called) : called);
     if (caller && s.prep?.for_game === g.id) s.prep = null;
     const hs = sides?.[0], as = sides?.[1];

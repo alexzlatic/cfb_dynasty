@@ -70,6 +70,46 @@ describe("live games", () => {
     expect(alerts.length).toBeLessThan(40);
   });
 
+  it("tempo, timeouts, spikes and kneels in a live game replay exactly", () => {
+    const { s, g } = start();
+    const live = new LiveGame(s, g, { offense: "me", defense: "coordinator" });
+    const rng = new Rng(21);
+    const tempos = ["auto", "normal", "uptempo", "hurry", "milk"] as const;
+    let k = 0, timeouts = 0, plays = 0, asked = 0;
+    while (!live.view().final) {
+      const v = live.view(), st = v.stop!;
+      if (k++ === 3) live.setClock({ manual_timeouts: true });
+      if (k % 15 === 0) live.setClock({ tempo: tempos[Math.floor(rng.random() * tempos.length)] });
+      if (st.kind === "timeout") { asked++; live.advance(rng.random() < 0.5); continue; }
+      if (v.clock_control.can_timeout && v.quarter % 2 && rng.random() < 0.1) { live.timeout(); timeouts++; }
+      const cp = live.view().clock_control.plays;
+      if (cp.length && rng.random() < 0.3) { live.advance(cp[Math.floor(rng.random() * cp.length)].id); plays++; continue; }
+      live.advance(null);
+    }
+    expect(timeouts).toBeGreaterThan(0);
+    expect(plays).toBeGreaterThan(0);
+    expect(asked).toBeGreaterThan(0);
+    const v = live.view();
+    expect(v.plays.some((p) => p.play_type === "SPIKE" || p.play_type === "KNEEL")).toBe(true);
+    s.setCalls(g.id, live.calls);
+    s.setClockCalls(g.id, live.clock);
+    const rep = s.advanceDay();
+    const done = rep.played.find((x) => x.id === g.id)!;
+    expect([done.home_score, done.away_score]).toEqual([v.home_score, v.away_score]);
+    expect(rep.details.find((d) => d.game_id === g.id)!.plays).toEqual(v.plays);
+  });
+
+  it("a timeout needs a running clock and one left", () => {
+    const { s, g } = start();
+    const live = new LiveGame(s, g, { offense: "me", defense: "me" });
+    while (!live.view().clock_control.running) live.advance(null);
+    const side = live.view().user_side, n = live.view()[`${side}_timeouts`], clock = live.view().clock;
+    live.timeout();
+    expect(live.view()[`${side}_timeouts`]).toBe(n - 1);
+    expect(live.view().clock).toBeGreaterThan(clock);
+    expect(() => live.timeout()).toThrow(/stopped/);
+  });
+
   it("sim to the end plays the whole game, even when you call every snap", () => {
     const { s, g } = start();
     const live = new LiveGame(s, g, { offense: "me", defense: "me" });

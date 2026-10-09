@@ -1,9 +1,9 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
+  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
 } from "@cfb/core";
-import type { TeamRatings } from "@cfb/engine";
+import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
 
 export type Action =
@@ -15,7 +15,7 @@ export type Action =
   /** A team's depth chart; null puts back the opening depth chart. */
   | { type: "set_depth"; payload: { team_id: number; depth: DepthChart | null } }
   /** The user's calls from a game they called live (null = the coordinator's call); the game plays with them tonight. */
-  | { type: "call_game"; payload: { game_id: number; calls: UserCall[]; subs?: GameSub[] } }
+  | { type: "call_game"; payload: { game_id: number; calls: UserCall[]; subs?: GameSub[]; clock?: ClockEvent[] } }
   /** The user's game plan; the coordinators call every game from it. */
   | { type: "set_game_plan"; payload: GamePlan }
   /** The user's practice plan, Monday to Thursday. */
@@ -70,7 +70,7 @@ export type Push =
 
 const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
-  "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "game_plan", "practice", "prep",
+  "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "clock_calls", "game_plan", "practice", "prep",
   "player_stats", "team_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
   "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
@@ -135,7 +135,7 @@ export class League {
       year: meta.year, seed: meta.seed, date: meta.date, settings: meta.settings, user_team_id: meta.user_team_id, power: meta.power,
       preseason_power: meta.preseason_power, poll_memory: meta.poll_memory, conf_champs: meta.conf_champs, playoff: meta.playoff,
       champion: meta.champion, next_game_id: meta.next_game_id, stars: meta.stars ?? {}, depth: meta.depth ?? {}, injuries: meta.injuries ?? [], calls: meta.calls ?? {},
-      subs: meta.subs ?? {}, game_plan: meta.game_plan ?? undefined, practice: meta.practice ?? undefined, prep: meta.prep ?? null,
+      subs: meta.subs ?? {}, clock_calls: meta.clock_calls ?? {}, game_plan: meta.game_plan ?? undefined, practice: meta.practice ?? undefined, prep: meta.prep ?? null,
       player_stats: meta.player_stats ?? undefined, award_week: meta.award_week ?? undefined, awards: meta.awards ?? undefined,
       redshirts: meta.redshirts ?? undefined, career: meta.career ?? null,
       hidden_ctx: meta.hidden_ctx ?? undefined, schemes: meta.schemes ?? undefined, film: meta.film ?? null, morale: meta.morale ?? undefined, lab: meta.lab ?? undefined,
@@ -240,7 +240,7 @@ export class League {
     if (a.type === "create") throw new Error("create is only valid as a league's first action");
     if (a.type === "set_user_team" && a.payload.team_id != null && !this.season.teamById.has(a.payload.team_id)) throw new Error("unknown team");
     if (a.type === "set_depth") this.checkDepth(a.payload.team_id, a.payload.depth);
-    if (a.type === "call_game") { checkCalls(a.payload.calls); this.checkSubs(a.payload.subs); }
+    if (a.type === "call_game") { checkCalls(a.payload.calls); this.checkSubs(a.payload.subs); checkClock(a.payload.clock); }
     if (a.type === "set_game_plan") a = { type: a.type, payload: checkPlan(a.payload) };
     if (a.type === "set_practice") a = { type: a.type, payload: checkPractice(a.payload) };
     if (a.type === "set_redshirt") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
@@ -341,7 +341,11 @@ export class League {
         for (const x of s.games) if (x.kind === "regular") g.run(x.id, x.date, x.kind, x.home_id, x.away_id, x.status, j(x));
       }
       if (a.type === "set_depth") this.season.setDepth(a.payload.team_id, a.payload.depth);
-      if (a.type === "call_game") { this.season.setCalls(a.payload.game_id, a.payload.calls); this.season.setSubs(a.payload.game_id, a.payload.subs ?? []); }
+      if (a.type === "call_game") {
+        this.season.setCalls(a.payload.game_id, a.payload.calls);
+        this.season.setSubs(a.payload.game_id, a.payload.subs ?? []);
+        this.season.setClockCalls(a.payload.game_id, a.payload.clock ?? []);
+      }
       if (a.type === "set_game_plan") this.season.setGamePlan(a.payload);
       if (a.type === "set_practice") this.season.setPractice(a.payload);
       if (a.type === "set_redshirt") this.season.setRedshirt(a.payload.pid, a.payload.on);
@@ -454,6 +458,20 @@ export class League {
     return this.live.view(Number.MAX_SAFE_INTEGER);
   }
 
+  /** Change your tempo or who calls your timeouts in the live game. */
+  liveClock(c: { tempo?: Tempo | "auto"; manual_timeouts?: boolean }): LiveView {
+    if (!this.live) throw new Error("no live game");
+    this.live.setClock(c);
+    return this.live.view(Number.MAX_SAFE_INTEGER);
+  }
+
+  /** Call a timeout in the live game. */
+  liveTimeout(since = 0): LiveView {
+    if (!this.live) throw new Error("no live game");
+    this.live.timeout();
+    return this.live.view(since);
+  }
+
   liveMode(mode: Partial<LiveMode>): LiveView {
     if (!this.live) throw new Error("no live game");
     this.live.setMode(mode);
@@ -464,7 +482,7 @@ export class League {
     if (!v.final || !this.live) return v;
     const live = this.live;
     this.live = null;
-    this.apply({ type: "call_game", payload: { game_id: live.game.id, calls: live.calls, subs: live.subs } });
+    this.apply({ type: "call_game", payload: { game_id: live.game.id, calls: live.calls, subs: live.subs, clock: live.clock } });
     this.apply({ type: "sim", payload: { kind: "day" } });
     return { ...v, result: this.season.state.games.find((g) => g.id === live.game.id) };
   }
@@ -559,6 +577,17 @@ function checkCareer(x: CareerStart): CareerStart {
 function checkCalls(calls: unknown): void {
   if (!Array.isArray(calls) || calls.length > 1000) throw new Error("calls must be a list");
   for (const c of calls) {
-    if (!(c === null || typeof c === "boolean" || isOffCall(c) || isDefCall(c) || c === "go" || c === "fg" || c === "punt")) throw new Error(`not a call: ${String(c)}`);
+    if (!(c === null || typeof c === "boolean" || isOffCall(c) || isDefCall(c) || isClockPlay(c) || c === "go" || c === "fg" || c === "punt")) throw new Error(`not a call: ${String(c)}`);
+  }
+}
+
+function checkClock(clock: unknown): void {
+  if (clock == null) return;
+  if (!Array.isArray(clock) || clock.length > 500) throw new Error("clock must be a list");
+  for (const e of clock) {
+    if (!e || !Number.isInteger(e.at) || e.at < 0) throw new Error("bad clock event");
+    if (e.tempo != null && !TEMPOS.some((t) => t.id === e.tempo)) throw new Error(`unknown tempo ${String(e.tempo)}`);
+    if (e.manual_timeouts != null && typeof e.manual_timeouts !== "boolean") throw new Error("bad clock event");
+    if (e.timeout != null && e.timeout !== true) throw new Error("bad clock event");
   }
 }
