@@ -83,14 +83,14 @@ describe("a pitch to one recruit", () => {
     const value = recruitValue(p);
     s.pitchNil(p.id, Math.round(value * 0.3), 1);
     expect(() => s.pitchNil(p.id, value, 1)).toThrow(/hasn't answered/);
-    for (let i = 0; i < 2; i++) s.advanceDay();
+    for (let i = 0; i < 3; i++) s.advanceDay();
     const t = st.user.pitches![p.id].nil!;
     expect(t.status === "countered" || t.status === "done").toBe(true);
     if (t.status === "done") return;
     expect(t.counter).toBeGreaterThan(value * 0.3);
     const was = p.pull![iowa.id];
     s.pitchNil(p.id, t.counter!, 1);
-    for (let i = 0; i < 2; i++) s.advanceDay();
+    for (let i = 0; i < 3; i++) s.advanceDay();
     expect(st.user.pitches![p.id].nil!.status).toBe("agreed");
     expect(p.pull![iowa.id]).toBeGreaterThanOrEqual(was);
     expect((s.state.inbox ?? []).some((m) => m.category === "recruiting" && /agrees to your NIL deal/.test(m.subject))).toBe(true);

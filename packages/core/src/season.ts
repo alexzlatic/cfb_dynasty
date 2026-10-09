@@ -2418,7 +2418,7 @@ export class Season {
 
   /** The schools a prospect is considering, best first (see RecruitWeek.considering). */
   considering(p: Prospect, schools = this.schools()) {
-    return this.week.considering(this.state.recruiting!, this.state.year, schools, this.state.user_team_id, p);
+    return this.week.considering(this.state.recruiting!, this.state.year, schools, this.state.user_team_id, p, this.state.date);
   }
 
   /**

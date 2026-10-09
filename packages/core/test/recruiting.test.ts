@@ -150,3 +150,32 @@ describe("your big board", () => {
     for (const id of mine()) if (id !== gone) expect(board.has(id)).toBe(true);
   }, 120_000);
 });
+
+describe("recruit interest", () => {
+  const s = fresh();
+  const st = s.state.recruiting!;
+  const seniors = st.prospects.filter((p) => gradeOf(p, s.state.year) === 3 && p.svc && p.svc.rank <= 1500);
+
+  it("puts a committed prospect's school first, usually far ahead", () => {
+    const com = seniors.filter((p) => p.commit && !p.commit.signed).slice(0, 300);
+    const own = com.map((p) => s.considering(p).find((x) => x.team === p.commit!.team));
+    expect(own.every((x) => x != null)).toBe(true);
+    expect(com.filter((p, i) => s.considering(p)[0].team === p.commit!.team && own[i]).length / com.length).toBeGreaterThan(0.95);
+    expect(own.filter((x) => x!.share >= 0.7).length / com.length).toBeGreaterThan(0.85);
+  });
+
+  it("gives some uncommitted prospects a clear leader from the start and leaves others wide open", () => {
+    const lead = seniors.filter((p) => !p.commit).slice(0, 400).map((p) => s.considering(p)[0]?.share ?? 0);
+    expect(lead.filter((x) => x >= 0.4).length / lead.length).toBeGreaterThan(0.08);
+    expect(lead.filter((x) => x < 0.15).length / lead.length).toBeGreaterThan(0.3);
+  });
+
+  it("raises a school's chance when it offers", () => {
+    const p = seniors.find((x) => !x.commit && s.considering(x).length > 3)!;
+    const c = s.considering(p), t = c.find((x) => !x.offered)!;
+    p.offers.push(t.team);
+    const after = s.considering(p).find((x) => x.team === t.team)!;
+    p.offers.pop();
+    expect(after.share).toBeGreaterThan(t.share * 1.4);
+  });
+});
