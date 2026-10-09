@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOWLS, NY6, Season, bracketOrder, loadSeed, openingPairs, runSim, selectBowls, validatePlayoff } from "../src/index.ts";
+import { AP_PANEL, BOWLS, NY6, Season, bracketOrder, generateWriters, loadSeed, openingPairs, runPoll, runSim, selectBowls, validatePlayoff, type Game, type PanelMemory } from "../src/index.ts";
 
 const seed = loadSeed();
 
@@ -63,6 +63,29 @@ describe("polls", () => {
     const byPower = [...ap.ranks.slice(0, 25)].sort((a, b) => s.state.power[b.team_id] - s.state.power[a.team_id]);
     expect(byPower.map((r) => r.team_id)).not.toEqual(ap.ranks.slice(0, 25).map((r) => r.team_id));
     expect(s.state.news.filter((n) => n.kind === "story" && n.date === ap.date)).toHaveLength(s.state.writers.length);
+  });
+  it("an upset lands on the ballot the week it happens, and the unranked winner enters the poll", () => {
+    const teams = [...seed.teams].sort((a, b) => a.id - b.id);
+    const voters = generateWriters(seed.teams, seed.rosters, 3).map((w) => w.voter);
+    const memory: PanelMemory = {}, games: Game[] = [];
+    const vote = (date: string) => runPoll({ voters, date, type: "ap", teams, games, power: seed.power, preseason: seed.power,
+      champs: new Set(), hfa: 2.5, seed: 3, spec: AP_PANEL, memory, biasScale: 1, noiseScale: 1 }).ranks.map((r) => r.team_id);
+    const pre = vote("2026-08-30");
+    const fcs = teams.filter((t) => t.level !== "fbs").map((t) => t.id);
+    const fav = pre[7], dog = pre[34];
+    const game = (w: number, home_id: number, away_id: number, home_score: number, away_score: number) => games.push({ id: games.length + 1,
+      kind: "regular", week: w, date: `2026-09-${String(7 * w - 2).padStart(2, "0")}`, home_id, away_id, neutral: false, status: "final", home_score, away_score, overtime: false } as Game);
+    // Everyone in the top 60 wins every week, except No. 8 losing at unranked No. 35 in week 4.
+    const week = (w: number) => {
+      pre.slice(0, 60).forEach((id, i) => { if (w !== 4 || (id !== fav && id !== dog)) game(w, id, fcs[(i + 7 * w) % fcs.length], 38, 10); });
+      if (w === 4) game(w, dog, fav, 27, 20);
+      return vote(`2026-09-${String(7 * w - 1).padStart(2, "0")}`);
+    };
+    const polls = [1, 2, 3, 4, 5].map(week);
+    const at = (p: number[], id: number) => p.indexOf(id) + 1;
+    expect(at(polls[3], fav) - at(polls[2], fav)).toBeGreaterThanOrEqual(8);
+    expect(at(polls[4], fav) - at(polls[3], fav)).toBeLessThanOrEqual(2);
+    expect(at(polls[3], dog)).toBeLessThanOrEqual(25);
   });
   it("a power-conference team has its own beat writer", () => {
     const s = Season.create(seed, { seed: 8 });
