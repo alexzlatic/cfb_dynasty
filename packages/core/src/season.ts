@@ -9,7 +9,7 @@ import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPrac
 import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
 import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
-import { addDays, daysBetween, weekday, type ISODate } from "./dates.ts";
+import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
 import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
 import {
@@ -21,9 +21,13 @@ import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
   rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
-import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type StaffMember, type StaffTime } from "./staff.ts";
+import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
+import {
+  CAROUSEL_CLOSE, ROLE_NAMES, buyout, candidates, coachName, contractYears, hire, jobOf, marketDay, openCarousel, release, salaryFor, staffBudget, staffPay, staffRecs,
+  newCoach, startCoaching, toMember, willing, type CoachRec, type CoachingState, type Job, type MarketCtx, type Role, type TeamYear,
+} from "./carousel.ts";
 import { INDEPENDENT, conferenceSchedule, isPower, placeTeams, realConferences, tieInsFor, validateSetup, type ConferenceDef, type ConferenceSetup, type TieIns } from "./conferences.ts";
 import { capFor, mediaScore, realign, startDeals, type Move, type RealignState } from "./realign.ts";
 import { CONF_MEDIA, SCHOOL_MEDIA } from "./finance.ts";
@@ -175,6 +179,8 @@ export interface SeasonState {
   fin_history?: Record<number, FinanceYear[]>;
   /** One-time charges to football budgets (conference exit fees and the like). */
   charges?: Charge[];
+  /** Every coach in the league, the carousel's openings, your job offers and every move (carousel.ts); absent in leagues saved before it. */
+  coaching?: CoachingState;
 }
 
 /** What a finished season leaves in the record book. */
@@ -394,6 +400,7 @@ export class Season {
     const season = new Season(state, seed);
     season.startRealign();
     season.startHidden(seed.coaches ?? []);
+    season.startCoaching(opts.career ?? { mode: "real" }, seed.coaches ?? [], seed.coach_pool ?? []);
     season.startMoney();
     season.startCollectives();
     season.startFinance(seed.finances);
@@ -493,6 +500,7 @@ export class Season {
       promises: Object.fromEntries(Object.entries(s.promises ?? {}).filter(([, x]) => x.year === ny)),
       renewal_rule: s.renewal_rule, conferences: rl.conferences, tie_ins: rl.tie_ins, realign: rl.state,
       fortunes, fin_history: history, charges: (s.charges ?? []).filter((c) => c.year >= ny),
+      coaching: s.coaching ? this.nextCoaching(s.coaching) : undefined,
     };
     if (rst) state.recruiting = this.nextRecruiting(rst, ny, incoming);
     const next = new Season(state, seed);
@@ -500,7 +508,7 @@ export class Season {
     next.startHidden(coaches);
     next.state.schemes = this.nextSchemes(next);
     for (const t of next.teams) {
-      if (t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
+      if (!s.coaching && t.level === "fbs" && next.state.hidden_ctx?.[t.id]?.new_coach) next.state.news.push(next.news(s.date, "coaching", `${t.school} has a new head coach`, "A new staff and a new system: how the roster fits it won't be known until camp.", [t.id]));
     }
     next.startMoney();
     next.startCollectives();
@@ -521,7 +529,9 @@ export class Season {
     next.weeklyMorale();
     if (s.career) {
       const c = s.career;
-      next.state.career = { ...c, expect: expectations(c.team_id, next.teams, games, power, s.settings.home_field_points), start: Math.round(this.security() ?? c.start), meetings: [] };
+      // Out of work: the record stays until a school hires you.
+      next.state.career = c.out ? { ...c, meetings: [] } : { ...c, expect: expectations(c.team_id, next.teams, games, power, s.settings.home_field_points),
+        start: Math.round(c.hired && !this.securityTrail().length ? c.start : this.security() ?? c.start), meetings: [], hired: undefined };
     }
     next.turnoverNews(turn.left, turn.added);
     return { next, left: turn.left, added: turn.added };
@@ -532,6 +542,17 @@ export class Season {
    * appears, each school's range follows the class it just signed, and each program's cycle moves (a stand-in
    * for coaching hires and momentum until the coaching carousel).
    */
+  /** The coaches go on to next season: the carousel is over, coaches out of the profession are dropped, the last six years of moves kept. */
+  private nextCoaching(co: CoachingState): CoachingState {
+    const ny = this.state.year + 1;
+    return {
+      ...co, open: false, offers: [],
+      coaches: co.coaches.filter((c) => !c.gone || c.user),
+      openings: co.openings.filter((o) => o.team_id === this.state.user_team_id && o.role !== "HC"),
+      moves: co.moves.filter((m) => m.date >= `${ny - 6}-07-01`),
+    };
+  }
+
   private nextRecruiting(rst: RecruitingState, ny: number, incoming: Record<number, RatedPlayer[]>): RecruitingState {
     const s = this.state, rs = this.seed.recruiting!;
     const prospects = rst.prospects.filter((p) => p.cls > ny);
@@ -866,6 +887,7 @@ export class Season {
     if (weekday(today) === 1) { this.weeklyMorale(); this.weeklyWatch(today, rep); }
     this.recruitingDay(today, rep);
     if (s.talks && !s.portal) this.talksDay(today, rep);
+    if (s.coaching?.open) this.carouselDay(today, rep);
     if (s.portal?.year === s.year) this.portalDay(today, rep);
     // 4. Evening: today's games, then standings, power and news.
     for (const g of s.games) {
@@ -881,9 +903,13 @@ export class Season {
   /** Start (or restart, after changing teams) your career at your team. */
   startCareer(start: CareerStart, coaches: Coach[]): void {
     const s = this.state, me = s.user_team_id;
-    if (me == null) { s.career = null; return; }
+    if (me == null) { s.career = null; if (s.coaching) this.placeUser(start); return; }
+    // You take your place on the school's staff (changing teams in Settings moves you there).
+    if (s.coaching && this.userCoach()?.team_id !== me) this.placeUser(start);
     const coach = coaches.find((c) => c.team_id === me && c.role === "HC");
     s.career = newCareer(start, me, coach, expectations(me, this.teams, s.games, s.preseason_power, s.settings.home_field_points), s.seed);
+    const u = this.userCoach();
+    if (u && s.coaching) s.career.coach.reputation = u.rep;
   }
 
   /** Job security after each of your games so far. */
@@ -900,7 +926,7 @@ export class Season {
 
   private adMeetings(today: ISODate, rep: DayReport): void {
     const c = this.state.career;
-    if (!c) return;
+    if (!c || c.out) return;
     // The preseason meeting is when the season opens, not right after last season's ended.
     const opening = this.state.events.find((e) => e.type === "dynasty_start")?.date;
     if (opening && today < opening) return;
@@ -913,7 +939,7 @@ export class Season {
 
   private meet(kind: Meeting["kind"], date: ISODate, rep: DayReport): void {
     const s = this.state, c = s.career;
-    if (!c || c.meetings.some((m) => m.kind === kind)) return;
+    if (!c || c.out || c.meetings.some((m) => m.kind === kind)) return;
     const sec = this.security()!;
     const r = records(s.games, this.teams).get(c.team_id) ?? { w: 0, l: 0 };
     const text = meetingText(c, kind, sec, r, this.team(c.team_id).school);
@@ -921,6 +947,254 @@ export class Season {
     const ad = `${c.ad.first} ${c.ad.last}`;
     const head = kind === "preseason" ? `Athletic director ${ad} sets the bar for ${s.year}` : kind === "midseason" ? `Midseason meeting with athletic director ${ad}` : `End-of-season meeting with athletic director ${ad}`;
     rep.news.push(this.news(date, "ad", head, text, [c.team_id]));
+    // A season the school wanted earns an extension and a raise.
+    const u = this.userCoach();
+    if (kind === "end" && sec >= 75 && u && u.team_id === c.team_id && u.through < s.year + 5) {
+      u.through = s.year + 5;
+      u.salary = Math.round(u.salary * 1.1 / 10_000) * 10_000;
+      rep.news.push(this.news(date, "career", `${this.team(c.team_id).school} extends ${coachName(u)} through ${u.through}`, `A raise to ${money(u.salary)} a year.`, [c.team_id]));
+    }
+  }
+
+  // ---- coaching staffs and the carousel (M4) ------------------------------------------------------
+  private jobCache?: Map<number, Job>;
+  /** Every school's job as coaches see it. */
+  jobs(): Map<number, Job> { return (this.jobCache ??= new Map(this.teams.map((t) => [t.id, jobOf(t, isPower(t))]))); }
+
+  /** Every coach in the league when it starts (carousel.ts), and you among them. */
+  startCoaching(start: CareerStart, coaches: Coach[], pool: SeedBundle["coach_pool"] & object): void {
+    const s = this.state;
+    s.coaching = startCoaching({ seed: s.seed, year: s.year, teams: this.teams, jobs: this.jobs(), coaches, pool, schemes: this.allSchemes() });
+    this.placeUser(start);
+  }
+
+  /** Your coaching record (null without a team or a career). */
+  userCoach(): CoachRec | null { return this.state.coaching?.coaches.find((c) => c.user) ?? null; }
+
+  /**
+   * You become your school's head coach: its real coach, or you under your own name (the real coach is then
+   * out of work, a candidate for other jobs). Changing teams in Settings moves you; the school you left gets
+   * the best coach available.
+   */
+  private placeUser(start: CareerStart): void {
+    const s = this.state, co = s.coaching, me = s.user_team_id;
+    if (!co) return;
+    const ctx = this.marketCtx(s.date, null);
+    const prev = this.userCoach();
+    if (prev) {
+      prev.user = false;
+      if (prev.source === "you") {
+        if (prev.team_id != null && prev.team_id !== me) { const t = prev.team_id; release(co, ctx, prev, "resigned", { quiet: true }); this.fillNow(t, "HC"); }
+        prev.gone = true;
+        prev.team_id = null; prev.role = null;
+      }
+    }
+    this.staffCache.clear();
+    if (me == null) return;
+    const real = co.coaches.find((c) => c.team_id === me && c.role === "HC");
+    if (start.mode === "real" && real) { real.user = true; return; }
+    const seedHc = (this.seed.coaches ?? []).find((c) => c.team_id === me && c.role === "HC");
+    const you: CoachRec = {
+      id: co.next_id++, first: start.first?.trim() || "Coach", last: start.last?.trim() || "You", age: 35, team_id: me, role: "HC", side: real?.side ?? "off",
+      off: real?.off ?? "spread_rpo", def: real?.def ?? "4-2-5",
+      // Your staff's skills are what the school had (staff.ts): you inherit its program.
+      skills: { ...(real?.skills ?? (seedHc ? coachSkills(s.seed, seedHc, this.team(me)) : coachSkills(s.seed, { team_id: me, role: "HC", first: start.first ?? "Coach", last: "", hire_date: null, career: [], source: "generated" }, this.team(me)))) }, rep: 30, since: s.year,
+      salary: salaryFor("HC", this.jobs().get(me)!, 30), through: s.year + contractYears("HC") - 1, seasons: [], user: true, source: "you",
+    };
+    if (real) { release(co, ctx, real, "resigned", { quiet: true }); real.left = { team_id: me, year: s.year - 1, why: "resigned" }; }
+    co.openings = co.openings.filter((o) => !(o.team_id === me && o.role === "HC"));
+    co.coaches.push(you);
+    this.staffCache.clear();
+  }
+
+  /** Who a hire made today works for: this season if the season hasn't reached its carousel, next season after it. */
+  private nextSince(): number { const co = this.state.coaching!; return co.year >= this.state.year ? this.state.year + 1 : this.state.year; }
+
+  private marketCtx(date: ISODate, rep: DayReport | null): MarketCtx {
+    const s = this.state;
+    return {
+      seed: s.seed, year: s.year, date, jobs: this.jobs(), names: this.namePools(), userTeam: s.user_team_id,
+      news: (h, b, ids, kind = "coaching") => { const n = this.news(date, kind, h, b, ids); rep?.news.push(n); },
+      charge: (team_id, amount, label) => { (s.charges ??= []).push({ team_id, year: s.year, label, amount }); },
+    };
+  }
+
+  /** Fill an opening at once with the best coach available (outside the carousel, and for the school you left). */
+  private fillNow(teamId: number, role: Role, rep: DayReport | null = null): void {
+    const co = this.state.coaching!, ctx = this.marketCtx(this.state.date, rep);
+    const job = this.jobs().get(teamId)!;
+    const pick = candidates(co, job, role, ctx.jobs, ctx.seed, ctx.year).find((p) => p.coach.team_id == null);
+    const c = pick?.coach ?? Object.assign(newCoach(co, new Rng(mixSeed(ctx.seed, ctx.year, ctx.date, "fill", teamId, role)), ctx.names), { entered: ctx.year });
+    hire(co, ctx, c, teamId, role, { since: this.nextSince(), quiet: true });
+    this.staffCache.clear();
+  }
+
+  /** How each team's regular season went, for the carousel (FBS teams). */
+  teamYears(): Map<number, TeamYear> {
+    const s = this.state, fbs = this.teams.filter((t) => t.level === "fbs");
+    const hfa = s.settings.home_field_points;
+    const acc = new Map<number, { w: number; l: number; pf: number; pa: number; exp: number; n: number; reg: number }>();
+    for (const t of fbs) acc.set(t.id, { w: 0, l: 0, pf: 0, pa: 0, exp: 0, n: 0, reg: 0 });
+    for (const g of s.games) {
+      if (g.kind !== "regular" && g.kind !== "conf_champ") continue;
+      for (const [me, opp, home] of [[g.home_id, g.away_id, true], [g.away_id, g.home_id, false]] as const) {
+        const a = acc.get(me);
+        if (!a) continue;
+        if (g.kind === "regular") {
+          const m = (s.preseason_power[g.home_id] ?? 0) - (s.preseason_power[g.away_id] ?? 0) + (g.neutral ? 0 : hfa);
+          a.exp += home ? winChance(m) : 1 - winChance(m);
+          a.reg++;
+        }
+        if (g.status !== "final") continue;
+        const us = home ? g.home_score! : g.away_score!, them = home ? g.away_score! : g.home_score!;
+        if (us > them) a.w++; else a.l++;
+        a.pf += us; a.pa += them; a.n++;
+        void opp;
+      }
+    }
+    // Units against what the roster was expected to give: points for and against per game, against a line through preseason power.
+    const resid = (k: "pf" | "pa") => {
+      const xs = fbs.map((t) => s.preseason_power[t.id] ?? 0), ys = fbs.map((t) => { const a = acc.get(t.id)!; return a.n ? a[k] / a.n : 0; });
+      const mx = xs.reduce((a, b) => a + b, 0) / xs.length, my = ys.reduce((a, b) => a + b, 0) / ys.length;
+      const b = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / Math.max(1e-9, xs.reduce((a, x) => a + (x - mx) ** 2, 0));
+      const r = ys.map((y, i) => y - my - b * (xs[i] - mx)), sd = Math.sqrt(r.reduce((a, x) => a + x * x, 0) / r.length) || 1;
+      return new Map(fbs.map((t, i) => [t.id, r[i] / sd]));
+    };
+    const off = resid("pf"), def = resid("pa");
+    const last = s.past?.[s.past.length - 1];
+    const out = new Map<number, TeamYear>();
+    for (const t of fbs) {
+      const a = acc.get(t.id)!, rec = last?.records[t.id];
+      out.set(t.id, { w: a.w, l: a.l, exp: a.reg ? a.exp / a.reg : 0.5, prev: rec && rec[0] + rec[1] ? rec[0] / (rec[0] + rec[1]) : null, off: off.get(t.id)!, def: -def.get(t.id)! });
+    }
+    return out;
+  }
+
+  /**
+   * The carousel opens: every coach's season goes on his record, your athletic director decides about you,
+   * the others decide about theirs, and coaches retire and enter the profession.
+   */
+  private openCarouselDay(date: ISODate, rep: DayReport): void {
+    const s = this.state, co = s.coaching;
+    if (!co) return;
+    const ctx = this.marketCtx(date, rep);
+    openCarousel(co, ctx, this.teamYears());
+    const u = this.userCoach(), c = s.career;
+    if (u && c) c.coach.reputation = u.rep;
+    // Your athletic director: on the brink means you're done (in your first two seasons, only a disaster).
+    if (u && c && u.team_id != null && !c.out) {
+      const sec = this.security() ?? c.start, tenure = s.year - u.since + 1;
+      if (sec < 20 && (tenure >= 3 || sec < 10)) {
+        const school = this.team(u.team_id).school, owed = buyout(u, s.year);
+        release(co, ctx, u, "fired", { quiet: true });
+        c.out = date;
+        s.user_team_id = null;
+        ctx.userTeam = null;
+        rep.news.push(this.news(date, "career", `${school} fires head coach ${coachName(u)}`,
+          `Athletic director ${c.ad.first} ${c.ad.last} makes the change after ${tenure} season${tenure === 1 ? "" : "s"}. The school owes you $${(owed / 1e6).toFixed(1)} million. Schools with openings may call over the next weeks; any offer shows on your Career page.`, [c.team_id]));
+        rep.stop = "fired";
+      }
+    }
+    this.staffCache.clear();
+  }
+
+  /** A day of the carousel: schools fill their openings; an offer to you stops the sim. */
+  private carouselDay(date: ISODate, rep: DayReport): void {
+    const s = this.state, co = s.coaching;
+    if (!co?.open) return;
+    const r = marketDay(co, this.marketCtx(date, rep), { userCoach: this.userCoach(), close: date >= CAROUSEL_CLOSE(co.year) });
+    for (const o of r.offers) {
+      const t = this.team(o.team_id);
+      rep.news.push(this.news(date, "career", `${t.school} wants you as its head coach`,
+        `${t.school} offers ${money(o.salary)} a year for ${o.years} years. You have until ${o.expires} to answer on your Career page; if you take it, your new school's staff is yours to keep or replace.`, [o.team_id]));
+      rep.stop = "job_offer";
+    }
+    this.staffCache.clear();
+  }
+
+  /** Answer a job offer: take it (you're the new head coach there today) or turn it down. */
+  answerOffer(teamId: number, accept: boolean): void {
+    const s = this.state, co = s.coaching, u = this.userCoach();
+    const o = co?.offers.find((x) => x.team_id === teamId && x.status === "open");
+    if (!co || !u || !o) throw new Error("no open offer from that school");
+    const op = co.openings.find((x) => x.team_id === teamId && x.role === "HC");
+    if (!accept) {
+      o.status = "declined";
+      if (op) { op.offered = false; op.declined = true; }
+      return;
+    }
+    const ctx = this.marketCtx(s.date, null);
+    const old = u.team_id, newJob = this.jobs().get(teamId)!;
+    o.status = "accepted";
+    for (const x of co.offers) if (x.status === "open") { x.status = "declined"; const p = co.openings.find((y) => y.team_id === x.team_id && y.role === "HC"); if (p) { p.offered = false; p.declined = true; } }
+    if (old != null) {
+      release(co, ctx, u, "left", { quiet: true, days: 3 });
+      this.news(s.date, "coaching", `${coachName(u)} leaves ${this.team(old).school} for ${newJob.school}`, `${this.team(old).school} opens a search for a new head coach.`, [old, teamId]);
+    } else this.news(s.date, "coaching", `${newJob.school} hires ${coachName(u)} as head coach`, `${coachName(u)} is back on a sideline.`, [teamId]);
+    ctx.userTeam = teamId;
+    hire(co, ctx, u, teamId, "HC", { since: this.nextSince(), quiet: true });
+    u.salary = o.salary;
+    u.through = u.since + o.years - 1;
+    // A new job: the old school's players, plans and talks stay behind; your name and record come along.
+    s.user_team_id = teamId;
+    s.redshirts = [];
+    s.lab = {};
+    s.talks = undefined;
+    s.next_deals = undefined;
+    s.promises = undefined;
+    const prev = s.career;
+    this.startCareer(prev ? { mode: prev.mode, first: u.first, last: u.last } : { mode: "real" }, this.seed.coaches ?? []);
+    if (s.career) { s.career.coach = { first: u.first, last: u.last, reputation: u.rep }; s.career.hired = s.date; s.career.start = Math.round(60 + 0.2 * (u.rep - 50)); }
+    this.staffCache.clear();
+  }
+
+  /** Your staff openings and the coaches you could hire for one: who's out of work, and (in the offseason) coordinators at schools a step below yours. */
+  staffCandidates(role: Role): { coach: CoachRec; ask: number; scouted: Record<Skill, number> }[] {
+    const s = this.state, co = s.coaching, me = s.user_team_id;
+    if (!co || me == null || role === "HC") return [];
+    const job = this.jobs().get(me)!, year = s.year;
+    const offseason = co.open || !this.inSeason(s.date);
+    return co.coaches
+      .filter((c) => !c.user && willing(c, job, role, this.jobs(), co.open ? co.year : year) && (offseason || c.team_id == null))
+      .map((c) => ({ coach: c, ask: salaryFor(role, job, c.rep), scouted: this.scoutedSkills(c) }))
+      .sort((a, b) => b.coach.rep - a.coach.rep || a.coach.id - b.coach.id)
+      .slice(0, 60);
+  }
+
+  /** Your staff's read of another coach's skills (true for your own staff). */
+  scoutedSkills(c: CoachRec): Record<Skill, number> {
+    const s = this.state;
+    if (c.team_id != null && c.team_id === s.user_team_id) return { ...c.skills };
+    const out = {} as Record<Skill, number>;
+    for (const k of Object.keys(c.skills) as Skill[]) out[k] = Math.round(Math.max(25, Math.min(95, c.skills[k] + 7 * new Rng(mixSeed(s.seed, c.id, k, "coach-read")).gauss(0, 1))));
+    return out;
+  }
+
+  /** Hire a coordinator for your staff (whoever holds the job is let go, and paid what's left of his deal). */
+  hireCoach(role: Role, coachId: number): void {
+    const s = this.state, co = s.coaching, me = s.user_team_id;
+    if (!co || me == null) throw new Error("no team");
+    if (role === "HC") throw new Error("you are the head coach");
+    const pick = this.staffCandidates(role).find((x) => x.coach.id === coachId);
+    if (!pick) throw new Error("that coach isn't available for this job");
+    const job = this.jobs().get(me)!, sitting = co.coaches.find((c) => c.team_id === me && c.role === role);
+    const after = staffPay(co, me) - (sitting?.salary ?? 0) + pick.ask;
+    if (after > Math.max(staffBudget(job), staffPay(co, me))) throw new Error(`your athletic director won't go past ${money(staffBudget(job))} a year for the staff`);
+    const from = pick.coach.team_id, fromRole = pick.coach.role;
+    hire(co, this.marketCtx(s.date, null), pick.coach, me, role, { since: this.nextSince() });
+    // A school you hired from fills the job at once outside the carousel.
+    if (from != null && fromRole && !co.open) this.fillNow(from, fromRole);
+    this.staffCache.clear();
+  }
+
+  /** Let one of your coordinators go (the school pays out most of his contract). */
+  fireCoach(role: Role): void {
+    const s = this.state, co = s.coaching, me = s.user_team_id;
+    if (!co || me == null || role === "HC") throw new Error("no such coach");
+    const c = co.coaches.find((x) => x.team_id === me && x.role === role);
+    if (!c) throw new Error(`you have no ${ROLE_NAMES[role].toLowerCase()}`);
+    release(co, this.marketCtx(s.date, null), c, "fired");
+    this.staffCache.clear();
   }
 
   // ---- money -------------------------------------------------------------------------------------
@@ -1384,7 +1658,11 @@ export class Season {
   /** A school's coaching staff with their skills. */
   staff(teamId: number): StaffMember[] {
     let st = this.staffCache.get(teamId);
-    if (!st) { st = staffOf(this.state.seed, this.seed.coaches ?? [], this.team(teamId)); this.staffCache.set(teamId, st); }
+    if (!st) {
+      const co = this.state.coaching;
+      st = co ? staffRecs(co, teamId).map(toMember) : staffOf(this.state.seed, this.seed.coaches ?? [], this.team(teamId));
+      this.staffCache.set(teamId, st);
+    }
     return st;
   }
   private get week(): RecruitWeek { return (this.recruitWeek ??= new RecruitWeek(this.state.seed)); }
@@ -1872,22 +2150,27 @@ export class Season {
   startHidden(coaches: Coach[]): void {
     const s = this.state, ctx: Record<number, TeamContext> = {};
     const cut = `${s.year - 1}-07-01`;
+    // After the first season the carousel decides: a head coach hired this offseason is new, and his quality is
+    // his true skill at what camp is about (game planning, development, his system).
+    const co = s.past?.length ? s.coaching : undefined;
     for (const t of this.teams) {
+      const rec = co?.coaches.find((c) => c.team_id === t.id && c.role === "HC");
       const hc = coaches.find((c) => c.team_id === t.id && c.role === "HC");
       const w = hc?.career.reduce((a, c) => a + c.wins, 0) ?? 0, l = hc?.career.reduce((a, c) => a + c.losses, 0) ?? 0;
-      const new_coach = !!hc?.hire_date && hc.hire_date >= cut;
+      const new_coach = co ? !!rec && rec.since === s.year && !rec.user : !!hc?.hire_date && hc.hire_date >= cut;
       const st = this.openingStarters(t.id);
       const qb = st.off.find((p) => p.pos === "QB");
       const new_qb = !qb || qb.basis !== "stats" || qb.sample < 150;
       const all = [...st.off, ...st.def];
       const returning = all.length ? all.filter((p) => p.basis === "stats").length / all.length : 0;
+      const q = rec ? (rec.skills.game_planning + rec.skills.development + rec.skills.scheme) / 3 : 50;
       ctx[t.id] = { new_coach, new_qb, continuity: !new_coach && !new_qb && returning >= 0.6,
-        coach: w + l >= 24 ? Math.round(Math.max(-2, Math.min(2, (w / (w + l) - 0.5) / 0.15)) * 100) / 100 : 0 };
+        coach: co ? Math.round(Math.max(-2, Math.min(2, (q - 50) / 8)) * 100) / 100
+          : w + l >= 24 ? Math.round(Math.max(-2, Math.min(2, (w / (w + l) - 0.5) / 0.15)) * 100) / 100 : 0 };
     }
-    // After the first season the seed's coaches never change jobs, so until the coaching carousel (M4) about
-    // one program in five gets a new head coach each year (2026 had 35 of 138), of unknown quality. Your
-    // school keeps you.
-    if (s.past?.length) {
+    // Leagues without the carousel: about one program in five gets a new head coach each year (2026 had 35 of 138),
+    // of unknown quality. Your school keeps you.
+    if (s.past?.length && !co) {
       for (const t of this.teams) {
         if (t.id === s.user_team_id) continue;
         const rng = new Rng(mixSeed(s.seed, s.year, t.id, "coach-change"));
@@ -1934,6 +2217,17 @@ export class Season {
     const now = this.allSchemes(), out: Record<number, TeamSchemes> = {};
     for (const t of next.teams) {
       const cur = now[t.id] ?? { off: "pro_style", def: "4-2-5" };
+      const co = next.state.coaching;
+      if (co) {
+        // Each coordinator runs his own system; without one, a new head coach brings his and an old one keeps what's there.
+        const st = staffRecs(co, t.id), hc = st.find((c) => c.role === "HC"), oc = st.find((c) => c.role === "OC"), dc = st.find((c) => c.role === "DC");
+        const newHc = !!hc && hc.since === next.state.year;
+        const off = oc ? oc.off : newHc && hc!.side === "off" ? hc!.off : cur.off;
+        const def = dc ? dc.def : newHc && hc!.side === "def" ? hc!.def : cur.def;
+        // The academies keep the option whoever coaches them.
+        out[t.id] = { off: cur.off === "option" ? "option" : off, def };
+        continue;
+      }
       if (!next.state.hidden_ctx?.[t.id]?.new_coach) { out[t.id] = cur; continue; }
       const d = drawSchemes(next.state.seed, next.state.year, t.id);
       // The academies keep the option whoever coaches them.
@@ -2920,6 +3214,16 @@ export class Season {
     }
   }
 
+  /** Leagues saved before the carousel: this season's carousel goes on the calendar if it's still ahead. */
+  upgradeCoaching(): void {
+    const s = this.state;
+    if (!s.coaching || s.events.some((e) => e.type === "coaching_carousel")) return;
+    const date = addDays(nthWeekday(s.year, 11, 6, 4), 1);
+    if (date < s.date) return;
+    s.events = sortEvents([...s.events, { id: `${s.year}:coaching_carousel:${date}`, date, end_date: CAROUSEL_CLOSE(s.year), type: "coaching_carousel", scope: "league",
+      label: "Coaching carousel", status: "upcoming", needs_you: false, approx: false, active: true }]);
+  }
+
   // ---- stats, awards and redshirts -------------------------------------------------------------
   private names = new Map<number, Map<string, number>>();
   private pidByName(teamId: number, name: string): number | undefined {
@@ -3188,6 +3492,7 @@ export class Season {
         break;
       }
       case "draft_deadline": this.declarations(e.date, rep); break;
+      case "coaching_carousel": this.openCarouselDay(e.date, rep); break;
       case "renewal_talks": this.openTalks(e.date, rep); break;
       case "portal_window": this.openPortal(e.date, rep); break;
       case "nfl_draft": this.draftDay(e.date, rep); break;

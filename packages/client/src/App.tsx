@@ -31,6 +31,8 @@ import { ProspectPage } from "./screens/Prospect.tsx";
 import { DraftScreen } from "./screens/Draft.tsx";
 import { RetentionScreen } from "./screens/Retention.tsx";
 import { PortalScreen } from "./screens/Portal.tsx";
+import { StaffScreen } from "./screens/Staff.tsx";
+import { CoachesScreen, CoachPage } from "./screens/Coaches.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -78,12 +80,12 @@ const myPage = (label: string, screen: string): NavPage => ({
 const NAV: NavSection[] = [
   { key: "home", label: "Home", pages: [page("Dashboard", "home"), page("News", "news"), page("Calendar", "calendar")] },
   { key: "team", label: "My Team", pages: [myPage("Roster", "team"), myPage("Depth chart", "depth"), page("Game plan", "plan", ["plan"], true),
-    page("Development", "development", ["development"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
+    page("Development", "development", ["development"], true), page("Staff", "staff", ["staff"], true), page("Retention", "retention", ["retention"], true), page("Game day", "live", ["live"], true)] },
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Conferences", "conferences"), page("Polls", "polls"), page("Postseason", "postseason"),
-    page("Awards", "awards"), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
+    page("Awards", "awards"), page("Coaching carousel", "coaches", ["coaches", "coach"]), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
   { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
 ];
 /** Which section a screen belongs to (pages about other teams, games and players sit under League). */
@@ -187,6 +189,9 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "draft" && <DraftScreen />}
         {screen === "retention" && <RetentionScreen />}
         {screen === "portal" && <PortalScreen />}
+        {screen === "staff" && <StaffScreen />}
+        {screen === "coaches" && <CoachesScreen />}
+        {screen === "coach" && arg && <CoachPage key={arg} cid={Number(arg)} />}
       </main>
       {toast && <div className="toast" onClick={() => setToast(null)}>{toast}</div>}
     </Ctx.Provider>

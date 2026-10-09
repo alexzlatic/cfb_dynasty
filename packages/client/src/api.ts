@@ -7,6 +7,25 @@ export type ConferencesView = {
   deals: Record<string, { per_school: number; expires: number }>; pending: ConfMove[]; history: ConfMove[]; pcsa: boolean;
 };
 export type CareerView = Career & { security: number; label: string };
+
+// ---- coaches and the carousel ----
+export type Role = "HC" | "OC" | "DC" | "STC";
+export type SkillKey = "recruiting" | "scouting" | "development" | "game_planning" | "scheme";
+export const SKILL_NAMES: Record<SkillKey, string> = { recruiting: "Recruiting", scouting: "Scouting", development: "Development", game_planning: "Game planning", scheme: "Scheme" };
+export interface CoachView {
+  id: number; first: string; last: string; age: number; role: Role | null; team_id: number | null; rep: number; side: "off" | "def"; off: string; def: string;
+  since: number; salary: number; through: number; seasons: { year: number; team_id: number; role: Role; w: number; l: number; unit?: number }[];
+  prior: { w: number; l: number; years: number } | null; left: { team_id: number; year: number; why: string } | null; source: string; user: boolean; gone: boolean;
+  hc_record: { w: number; l: number }; skills: Record<SkillKey, number>;
+}
+export interface CoachMove { date: string; coach: number; name: string; kind: "fired" | "retired" | "not_retained" | "hired" | "resigned" | "left_coaching"; team_id: number | null; role: Role | null; from?: { team_id: number | null; role: Role | null }; note?: string }
+export interface Opening { team_id: number; role: Role; opened: string; ready: string; why: string; prev: number | null; prev_name: string | null; offered?: boolean; declined?: boolean }
+export interface JobOffer { team_id: number; date: string; expires: string; salary: number; years: number; status: string }
+export interface StaffData {
+  team_id: number | null; roles: Record<Role, string>; members: CoachView[]; open: Role[]; budget: number; pay: number; carousel: { open: boolean; close: string }; in_season: boolean;
+  candidates: (CoachView & { ask: number })[];
+}
+export interface CoachesData { year: number; open: boolean; close: string; openings: Opening[]; moves: CoachMove[]; head_coaches: (CoachView & { hot: number | null })[]; past_years: number[] }
 /** A player's season stats with who he is. */
 export type StatRow = PlayerSeason & { pid: number; name: string; pos: string; class: string; years: number; ovr: number };
 export type LiveResult = LiveView & { since: number; result?: Game };
@@ -197,7 +216,11 @@ export const api = {
   seedConferences: () => req<{ conferences: ConferenceDef[]; tie_ins: TieIns; bowls: { name: string; ny6: boolean; sides: [string[], string[]] }[]; pcsa_cap: number }>("/api/seed/conferences"),
   conferences: (id: string) => req<ConferencesView>(`/api/leagues/${id}/conferences`),
   seedCoaches: () => req<Record<number, Pick<Coach, "first" | "last" | "career">>>("/api/seed/coaches"),
-  career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[] }>(`/api/leagues/${id}/career`),
+  career: (id: string) => req<{ career: CareerView | null; trail: (SecurityStep & { game: GameRow })[]; coach: CoachView | null; offers: JobOffer[]; carousel: { open: boolean; close: string } | null }>(`/api/leagues/${id}/career`),
+  staff: (id: string, role?: Role) => req<StaffData>(`/api/leagues/${id}/staff` + (role ? `?role=${role}` : "")),
+  coaches: (id: string) => req<CoachesData>(`/api/leagues/${id}/coaches`),
+  coachMoves: (id: string, year: number) => req<CoachMove[]>(`/api/leagues/${id}/coaches/moves?year=${year}`),
+  coach: (id: string, cid: number) => req<CoachView & { moves: CoachMove[] }>(`/api/leagues/${id}/coaches/${cid}`),
   awards: (id: string) => req<{ names: Record<AwardType, string>; awards: Award[] }>(`/api/leagues/${id}/awards`),
   frontOffice: (id: string, team?: number) => req<FrontOfficeData>(`/api/leagues/${id}/front_office` + (team != null ? `?team=${team}` : "")),
   budget: (id: string, team?: number) => req<BudgetData>(`/api/leagues/${id}/budget` + (team != null ? `?team=${team}` : "")),
@@ -207,7 +230,7 @@ export const api = {
   leaders: (id: string) => req<Record<string, StatRow[]>>(`/api/leagues/${id}/leaders`),
   state: (id: string) => req<LeagueState>(`/api/leagues/${id}/state`),
   teams: (id: string) => req<Team[]>(`/api/leagues/${id}/teams`),
-  team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; games: GameRow[]; power: number; rank: number | null;
+  team: (id: string, tid: number) => req<{ team: Team; roster: Player[]; coaches: Coach[]; staff: CoachView[] | null; games: GameRow[]; power: number; rank: number | null;
     players: RatedPlayer[]; depth: DepthChart; custom_depth: boolean; injuries: Injury[]; stats: StatRow[]; personas: Record<number, string> }>(`/api/leagues/${id}/teams/${tid}`),
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),

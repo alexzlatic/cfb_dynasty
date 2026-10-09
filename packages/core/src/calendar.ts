@@ -26,6 +26,8 @@ const sundays = (from: ISODate, to: ISODate) => {
 export const RULES: Rule[] = [
   { type: "ap_poll", label: "AP poll", active: true, dates: (y, c) => sundays(`${y}-08-30`, addDays(c.lastRegular, 8)) },
   { type: "early_signing", label: "Early signing period", active: true, dates: (y) => { const d = nthWeekday(y, 12, 3, 1); return [{ date: d, end: addDays(d, 2) }]; } },
+  // Black Monday: the day after the last full Saturday of November; the market runs until January 20.
+  { type: "coaching_carousel", label: "Coaching carousel", active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 11, 6, 4), 1), end: `${y + 1}-01-20` }] },
   { type: "conf_championships", label: "Conference championships", active: true, dates: (y) => [{ date: nthWeekday(y, 12, 6, 1) }] },
   { type: "bowls", label: "Bowl season", approx: true, active: true, dates: (y) => [{ date: addDays(nthWeekday(y, 12, 6, 1), 7), end: `${y + 1}-01-02` }] },
   // Renewal talks open the Monday after conference championship weekend and run until the portal opens.

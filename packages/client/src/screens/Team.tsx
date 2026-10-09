@@ -87,13 +87,18 @@ export function TeamPage({ tid }: { tid: number }) {
         </div>
         <div>
           <Panel title="Staff">
-            <table className="grid tight"><tbody>{data.coaches.map((c, i) => {
+            {data.staff ? (
+              <table className="grid tight"><tbody>{data.staff.map((c) => (
+                <tr key={c.id}><td>{ROLE[c.role!]}</td><td><a href={`#/l/${id}/coach/${c.id}`}>{c.first} {c.last}</a>{c.user && <span className="muted small"> (you)</span>}</td>
+                  <td className="muted small">{c.role === "HC" && c.hc_record.w + c.hc_record.l ? `${c.hc_record.w}-${c.hc_record.l} career` : `since ${c.since}`}</td></tr>
+              ))}</tbody></table>
+            ) : <table className="grid tight"><tbody>{data.coaches.map((c, i) => {
               const recs = c.career.reduce((a, s) => ({ w: a.w + s.wins, l: a.l + s.losses }), { w: 0, l: 0 });
               return (
                 <tr key={i}><td>{ROLE[c.role]}</td><td>{c.first} {c.last}</td>
                   <td className="muted small">{(c.source as string) === "you" ? "you" : c.role === "HC" && c.career.length ? `${recs.w}-${recs.l} career` : c.source === "generated" ? "generated" : c.source_url ? <a href={c.source_url} target="_blank" rel="noreferrer">source</a> : ""}</td></tr>
               );
-            })}</tbody></table>
+            })}</tbody></table>}
           </Panel>
           {data.stats.length > 0 && <TeamStats rows={data.stats} />}
           {data.injuries.length > 0 && (

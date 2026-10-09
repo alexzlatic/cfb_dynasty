@@ -78,7 +78,7 @@ export interface Injury {
 export type EventType =
   | "dynasty_start" | "game_day" | "ap_poll" | "cfp_rankings" | "bcs_standings" | "early_signing" | "conf_championships"
   | "selection" | "playoff_round" | "title_game" | "bowls"
-  | "signing_day" | "renewal_talks" | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
+  | "signing_day" | "coaching_carousel" | "renewal_talks" | "portal_window" | "draft_deadline" | "spring_practice" | "nfl_draft" | "cap_year" | "fall_camp" | "season_end";
 
 export interface CalEvent {
   id: string; date: ISODate; end_date: ISODate | null; type: EventType; scope: "league" | "conference" | "team";
@@ -168,6 +168,8 @@ export interface SeedBundle {
   styles?: Record<string, { portal_share: number; style: "develop" | "balanced" | "portal" | "win_now"; newcomers: number }>;
   /** High school recruiting: the real next class, real recent classes and the pool generated classes come from (recruiting.json); absent in old seeds. */
   recruiting?: RecruitSeed;
+  /** Former FBS head coaches out of work when the league starts (coach_pool.json); absent in old seeds. */
+  coach_pool?: { first: string; last: string; career: Coach["career"] }[];
 }
 
 export interface TeamPlayers {
