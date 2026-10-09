@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage,
+  Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -30,8 +30,10 @@ export type Action =
   | { type: "set_collective_focus"; payload: { focus: Pos[] } }
   /** Your ticket price for one of your home games (null for the usual price). */
   | { type: "set_ticket_price"; payload: { game_id: number; price: number | null } }
-  /** Ask your athletic director to upgrade a facility one grade. */
+  /** Ask your athletic director to upgrade a facility one grade (a cash renovation). */
   | { type: "request_project"; payload: { area: Area } }
+  /** Propose a facility project to your athletic director: renovate or build new, paid in cash, with bonds or a donor campaign. */
+  | { type: "propose_project"; payload: { area: Area; scope: Scope; financing: Financing } }
   /** Let your staff run your recruiting board (on), or run it yourself (off). */
   | { type: "recruit_auto"; payload: { on: boolean } }
   /** Your contact hours a week on a prospect (0 takes him off your board). */
@@ -81,7 +83,7 @@ const j = JSON.stringify;
 const META_KEYS = ["year", "seed", "date", "settings", "user_team_id", "power", "preseason_power", "poll_memory", "conf_champs", "playoff",
   "champion", "next_game_id", "stars", "depth", "injuries", "calls", "subs", "clock_calls", "game_plan", "practice", "prep",
   "player_stats", "team_stats", "award_week", "awards", "redshirts", "career", "hidden_ctx", "schemes", "film", "morale", "lab", "dev_track", "contracts", "pools", "retention", "collectives", "nil", "player_morale", "team_mood",
-  "budgets", "facilities", "projects", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
+  "budgets", "facilities", "projects", "facility_payments", "facility_drag", "facility_asks", "ticket_prices", "gate", "requests", "fresh_model", "next_player_id", "past", "recruiting",
   "declared", "draft_pool", "draft", "draft_history",
   "talks", "contract_offers", "renewal_rule", "next_deals", "promises", "talked", "watch", "portal", "moves", "arrived", "fortunes", "fin_history", "charges", "conferences", "tie_ins", "realign", "coaching"] as const;
 
@@ -151,6 +153,7 @@ export class League {
       contracts: meta.contracts ?? undefined, pools: meta.pools ?? undefined, retention: meta.retention ?? undefined, collectives: meta.collectives ?? undefined, nil: meta.nil ?? undefined,
       player_morale: meta.player_morale ?? undefined, team_mood: meta.team_mood ?? undefined,
       budgets: meta.budgets ?? undefined, facilities: meta.facilities ?? undefined, projects: meta.projects ?? undefined,
+      facility_payments: meta.facility_payments ?? undefined, facility_drag: meta.facility_drag ?? undefined, facility_asks: meta.facility_asks ?? undefined,
       ticket_prices: meta.ticket_prices ?? undefined, gate: meta.gate ?? undefined, requests: meta.requests ?? undefined,
       fresh_model: meta.fresh_model ?? undefined, next_player_id: meta.next_player_id ?? undefined, past: meta.past ?? undefined,
       recruiting: meta.recruiting ?? undefined,
@@ -279,6 +282,12 @@ export class League {
       if (!Object.hasOwn(AREAS, a.payload?.area)) throw new Error(`unknown area ${a.payload?.area}`);
       a = { type: a.type, payload: { area: a.payload.area } };
     }
+    if (a.type === "propose_project") {
+      if (!Object.hasOwn(AREAS, a.payload?.area)) throw new Error(`unknown area ${a.payload?.area}`);
+      if (!Object.hasOwn(SCOPES, a.payload?.scope)) throw new Error("a project renovates or builds new");
+      if (!Object.hasOwn(FINANCING, a.payload?.financing)) throw new Error("pay cash, borrow or run a donor campaign");
+      a = { type: a.type, payload: { area: a.payload.area, scope: a.payload.scope, financing: a.payload.financing } };
+    }
     if (a.type === "recruit_auto") a = { type: a.type, payload: { on: !!a.payload?.on } };
     if (a.type === "recruit_hours") {
       const hours = Math.round(Number(a.payload?.hours));
@@ -386,7 +395,8 @@ export class League {
       if (a.type === "sign_contract") this.season.setContract(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "set_collective_focus") this.season.setCollectiveFocus(a.payload.focus);
       if (a.type === "set_ticket_price") this.season.setTicketPrice(a.payload.game_id, a.payload.price);
-      if (a.type === "request_project") this.season.requestProject(a.payload.area);
+      if (a.type === "request_project") this.season.proposeProject(a.payload.area, "renovate", "cash");
+      if (a.type === "propose_project") this.season.proposeProject(a.payload.area, a.payload.scope, a.payload.financing);
       if (a.type === "recruit_auto") this.season.setRecruitAuto(a.payload.on);
       if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
       if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);

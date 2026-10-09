@@ -503,7 +503,19 @@ describe("money", () => {
     const area = Object.keys(bud.facilities).find((k) => bud.facilities[k] < 5)!;
     expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area } })).ok).toBe(true);
     expect((await postR(`/api/leagues/${id}/actions`, { type: "request_project", payload: { area: "moat" } })).error).toMatch(/unknown area/);
-    expect(lg.season.state.requests!.length).toBe(1);
+    // The AD answers in one to three days; a proposal names its scope and how it's paid for.
+    expect(lg.season.state.facility_asks!.length).toBe(1);
+    const second = Object.keys(bud.facilities).find((k) => k !== area && bud.facilities[k] <= 3);
+    if (second) {
+      expect((await postR(`/api/leagues/${id}/actions`, { type: "propose_project", payload: { area: second, scope: "build", financing: "lease" } })).error).toMatch(/pay cash/);
+      expect((await postR(`/api/leagues/${id}/actions`, { type: "propose_project", payload: { area: second, scope: "build", financing: "bonds" } })).ok).toBe(true);
+    }
+    const plans = (await getR(`/api/leagues/${id}/budget`)).plans;
+    expect(plans.asks.length).toBe(second ? 2 : 1);
+    expect(plans.areas.find((x: any) => x.area === area).options).toEqual([]);
+    for (let i = 0; i < 4; i++) lg.apply({ type: "sim", payload: { kind: "day" } });
+    expect(lg.season.state.facility_asks!.length).toBe(0);
+    expect(lg.season.state.requests!.length).toBe(second ? 2 : 1);
 
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);

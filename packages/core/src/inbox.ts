@@ -57,6 +57,7 @@ export function newsToInbox(kind: string, team_ids: number[], me: number): { cat
     case "draft": return mine || league ? { category: "draft", from: "NFL draft", links: [{ label: "NFL draft", to: "draft" }] } : null;
     case "staff": return mine ? { category: "staff", from: "Your staff", links: [{ label: "Development", to: "development" }] } : null;
     case "redshirt": return mine ? { category: "staff", from: "Your staff", links: [{ label: "Roster", to: `team/${me}` }] } : null;
+    case "facilities": return mine ? { category: "career", from: "Athletic director", links: [{ label: "Facilities", to: "budget" }] } : null;
     case "ad": return mine ? { category: "career", from: "Athletic director", links: [{ label: "Career", to: "career" }] } : null;
     case "career": case "coaching": return mine ? { category: "career", from: "Career", links: [{ label: "Career", to: "career" }] } : null;
     case "conf_champ": return mine ? { category: "games", from: "Conference office" } : null;
