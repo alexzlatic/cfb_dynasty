@@ -11,6 +11,8 @@ import type { ISODate } from "./dates.ts";
 export type StatKey = keyof PlayerLine | keyof DefLine;
 export type StatLine = Partial<Record<StatKey, number>>;
 export interface PlayerSeason extends StatLine { team_id: number; gp: number }
+/** A player's line in one game's box score (pid null when he can't be matched to a player any more). */
+export interface BoxRow extends StatLine { pid: number | null; name: string; pos: string; team_id: number }
 
 /** A team's season: games, wins, points, and its box score totals (`off`) and its opponents' (`def`). */
 export interface TeamSeason { gp: number; w: number; l: number; pf: number; pa: number; off: Partial<TeamStats>; def: Partial<TeamStats> }

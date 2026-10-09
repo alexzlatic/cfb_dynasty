@@ -80,6 +80,28 @@ describe("live games", () => {
     expect(v.stop).toBeNull();
     expect(v.plays.at(-1)!.play_type).toBe("END");
   });
+
+  it("the live box keeps pace with the plays and ends as the final box score", () => {
+    const { s, g } = start();
+    const live = new LiveGame(s, g, { offense: "coordinator", defense: "coordinator" });
+    expect(live.box(0)).toBeNull();
+    while (!live.view().final) live.advance(null);
+    const n = live.view().plays.length;
+    const half = live.box(Math.floor(n / 2))!, end = live.box()!;
+    expect(half.at).toBeLessThanOrEqual(n / 2);
+    expect(end.at).toBe(n);
+    const yds = (rows: typeof end.home) => rows.reduce((a, r) => a + (r.rush_yds ?? 0), 0);
+    expect(yds(half.home)).toBeLessThanOrEqual(yds(end.home) + 20);
+    s.setCalls(g.id, live.calls);
+    const d = s.advanceDay().details.find((x) => x.game_id === g.id)!;
+    expect(end.home_box).toEqual(d.home_box);
+    // Every ball carrier and defender is matched to a player on his team.
+    for (const [rows, tid] of [[end.home, g.home_id], [end.away, g.away_id]] as const) {
+      expect(rows.length).toBeGreaterThan(10);
+      for (const r of rows) expect(s.playerById.get(r.pid!)?.team_id).toBe(tid);
+    }
+    expect(end.home.some((r) => r.tkl) && end.home.some((r) => r.car)).toBe(true);
+  });
 });
 
 describe("game plans, practice and substitutions", () => {
