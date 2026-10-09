@@ -5,6 +5,7 @@ import type { PlayRecord } from "@cfb/engine";
 import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { FieldView } from "./Field.tsx";
+import { LiveBoxPanel } from "./BoxScore.tsx";
 
 /** Milliseconds per snap at each pace; the rest of the log (timeouts, subs, kicks after scores) goes quicker. */
 const PACE: Record<string, number> = { instant: 0, fast: 1300, slow: 2600 };
@@ -16,7 +17,9 @@ const qtr = (q: number, ot = false) => (ot || q > 4 ? "OT" : `Q${q}`);
 const ALERT_TEXT: Record<string, string> = {
   fourth_down: "4th down decision", two_point: "Two-point decision", two_minute: "Two-minute situation", defend_late: "They're driving late",
   overtime: "Overtime", qb_hurt: "Your quarterback is hurt", starter_hurt: "A starter is hurt", red_zone: "Red zone", quarter: "New quarter",
+  clock: "Clock running",
 };
+const TEMPOS: [string, string][] = [["auto", "Coordinator"], ["normal", "Normal"], ["uptempo", "Up-tempo"], ["hurry", "Hurry-up"], ["milk", "Bleed clock"]];
 
 function readPace(): string { try { return localStorage.getItem("cfb.pace") ?? "fast"; } catch { return "fast"; } }
 
@@ -69,6 +72,8 @@ export function LiveScreen() {
     return s;
   }, [plays.length]);
   const setMode = (m: Partial<LiveMode>) => act(() => api.liveMode(id, m));
+  const setClock = (c: { tempo?: string; manual_timeouts?: boolean }) => act(() => api.liveClock(id, c));
+  const timeout = () => act(() => api.liveTimeout(id, plays.length));
   const savePace = (p: string) => { setPace(p); try { localStorage.setItem("cfb.pace", p); } catch { /* private window */ } };
 
   const g = state.my_next_game;
@@ -107,7 +112,11 @@ export function LiveScreen() {
   const spot = ytg > 50 ? `${offTeam?.abbr ?? ""} ${100 - ytg}` : ytg === 50 ? "50" : `${(view.possession === "home" ? A : H)?.abbr ?? ""} ${ytg}`;
   const st = view.stop;
   const stopTitle = !st ? "" : st.kind === "playCall" ? (st.role === "offense" ? "Call the play" : "Call the defense")
-    : st.kind === "fourthDown" ? "4th down" : st.kind === "twoPoint" ? "After the touchdown" : st.kind === "onside" ? "Kickoff" : "Victory formation?";
+    : st.kind === "fourthDown" ? "4th down" : st.kind === "twoPoint" ? "After the touchdown" : st.kind === "onside" ? "Kickoff"
+    : st.kind === "timeout" ? (st.situation.clock <= 0 ? "The clock has run out" : "The clock is running") : "Victory formation?";
+  const cc = view.clock_control;
+  const myTimeouts = view.user_side === "home" ? view.home_timeouts : view.away_timeouts;
+  const stopped = !!st && !revealing && !view.final;
   const toCall = (x: string): UserCall => (x === "true" ? true : x === "false" ? false : (x as UserCall));
 
   return (
@@ -152,7 +161,20 @@ export function LiveScreen() {
                   <button key={o.id} disabled={busy} className={String(st.suggestion) === o.id ? "suggested" : ""} onClick={() => call(toCall(o.id))}>{o.label}</button>
                 ))}
               </div>
-              <p className="small muted">Highlighted: your coordinator's call. <button className="link" disabled={busy} onClick={() => call(null)}>Let the coordinator call it</button></p>
+              {(cc.plays.length > 0 || st.kind !== "timeout") && (
+                <div className="calls clockrow">
+                  {cc.plays.map((o) => <button key={o.id} disabled={busy} onClick={() => call(o.id)}>{o.label}</button>)}
+                  {st.kind !== "timeout" && (
+                    <button disabled={busy || !cc.can_timeout} onClick={timeout}
+                      title={myTimeouts === 0 ? "No timeouts left this half" : !cc.running ? "The clock is already stopped" : "Stop the clock where the last play ended"}>
+                      Timeout ({myTimeouts} left)
+                    </button>
+                  )}
+                </div>
+              )}
+              {st.kind === "timeout" ? <p className="small muted">You're calling your own timeouts: {myTimeouts} left this half.</p> : (
+                <p className="small muted">Highlighted: your coordinator's call. <button className="link" disabled={busy} onClick={() => call(null)}>Let the coordinator call it</button></p>
+              )}
             </Panel>
           ) : <Panel title="On the field"><p className="muted">{revealing ? "Playing..." : "Waiting..."}</p></Panel>}
         </div>
@@ -160,6 +182,7 @@ export function LiveScreen() {
       {err && <p className="error">{err}</p>}
       <div className="cols">
         <div>
+          {H && A && <LiveBoxPanel home={H} away={A} at={listed} />}
           <Panel title="Play-by-play">
             <table className="grid pbp"><tbody>
               {plays.slice(0, listed).slice(-60).reverse().map((p, i) => (
@@ -184,7 +207,14 @@ export function LiveScreen() {
                   </div>
                 </td></tr>
               ))}
-              <tr><td>Pace</td><td><div className="seg">{Object.keys(PACE).map((p) => <button key={p} className={pace === p ? "on" : ""} onClick={() => savePace(p)}>{p[0].toUpperCase() + p.slice(1)}</button>)}</div></td></tr>
+              <tr><td>Tempo</td><td><div className="seg">{TEMPOS.map(([t, label]) => (
+                <button key={t} className={cc.tempo === t ? "on" : ""} disabled={busy || !stopped} onClick={() => setClock({ tempo: t })}>{label}</button>
+              ))}</div></td></tr>
+              <tr><td>Timeouts</td><td><div className="seg">
+                <button className={cc.manual_timeouts ? "on" : ""} disabled={busy || !stopped} onClick={() => setClock({ manual_timeouts: true })}>Me</button>
+                <button className={!cc.manual_timeouts ? "on" : ""} disabled={busy || !stopped} onClick={() => setClock({ manual_timeouts: false })}>Coordinator</button>
+              </div></td></tr>
+              <tr><td>Animation</td><td><div className="seg">{Object.keys(PACE).map((p) => <button key={p} className={pace === p ? "on" : ""} onClick={() => savePace(p)}>{p[0].toUpperCase() + p.slice(1)}</button>)}</div></td></tr>
             </tbody></table>
             {!view.final && <p><button disabled={busy} onClick={() => confirm("Hand the rest of the game to your coordinators?") && call(null, true)}>Sim to the end</button></p>}
           </Panel>

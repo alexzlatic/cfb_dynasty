@@ -20,6 +20,23 @@ import type { Game, ScheduledGame, Team, TeamPlayers } from "./types.ts";
 export const YEAR_GAIN = [3, 2, 3, 2, 1.5];
 
 /**
+ * How far above his overall a player tops out, by seasons already in college: what the usual years he
+ * has left would add plus a quarter more of upside (scaled ±30% for his own pace), the unfilled part of
+ * a high recruiting grade, and a little noise. A true freshman has about 13.5 points left (as a signee
+ * arriving at college does), a senior 3.5 and a fifth-year 1, so young players nearly always have room
+ * and a good share of older ones are already at their ceiling.
+ */
+export function ceilingRoom(years: number, composite: number | null, rng: Rng): number {
+  const rem = YEAR_GAIN.slice(clamp(Math.floor(years), 0, 4), 4).reduce((a, b) => a + b, 0);
+  const rz = composite != null ? (composite - 0.8684) / 0.0341 : -1;
+  return rem * (1.25 + 0.3 * rng.gauss(0, 1)) + 2 * Math.max(0, rz) * rem / 10 + 1 + 2 * rng.gauss(0, 1);
+}
+/** A seeded player's potential from his own (final) overall, so team anchoring and stats can't eat his room. */
+export function seedPotential(p: { id: number; ovr: number; years: number; composite: number | null }, season: number): number {
+  return Math.round(clamp(p.ovr + ceilingRoom(p.years, p.composite, new Rng(mixSeed(season, "potential", p.id))), 20, 99));
+}
+
+/**
  * How fast a program develops players, around 1: better weight rooms, practice and medical facilities
  * (grades 1 to 5) develop more. A program with no facilities on record (FCS) counts as grade 2.
  */

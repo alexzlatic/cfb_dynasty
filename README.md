@@ -51,7 +51,10 @@ Open the same league in two windows and sim a day in one: the other updates live
     team and Notre Dame, two or three per smaller conference, three national columnists), each with a
     voting style (homer, brand loyalist, recency chaser, numbers person, contrarian, steady hand) and a
     lean toward the team and conference they cover. Writers file a story on their beat every week.
-    The coaches poll and the CFP committee are separate panels.
+    The coaches poll and the CFP committee are separate panels. A voter's opinion of a team is sticky,
+    but results land at full weight the week they happen: losses cost more to an unranked team and to
+    teams outside the top five, and beating a ranked team is a quality win. Fit to real AP polls
+    2014-2025 with `npx tsx packages/core/scripts/poll-check.ts`.
   - **Postseason format** is a setting: a 2, 4, 8, 12, 16 or 24-team playoff (automatic bids, byes and
     campus early rounds configurable), a BCS title game, or bowls only with an AP champion. The default
     is the current 12-team format.

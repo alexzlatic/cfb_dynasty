@@ -4,6 +4,7 @@ import { useData, useLeague } from "../App.tsx";
 import { api, type PortalData, type PortalRow } from "../api.ts";
 import { Logo, money, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
+import { CatTabs, StatsTable, catsWith, statSummary } from "../stats.tsx";
 import { POS_ORDER, Rating } from "./Players.tsx";
 
 type Show = "open" | "mine" | "from_me" | "done";
@@ -80,6 +81,8 @@ export function PortalScreen() {
   const [show, setShow] = useState<Show>("open");
   const [pos, setPos] = useState<string>("");
   const [needOnly, setNeedOnly] = useState(false);
+  const [view, setView] = useState<"market" | "stats">("market");
+  const [cat, setCat] = useState("passing");
   const me = state.user_team_id;
   const rows = useMemo(() => {
     const all = data?.entries ?? [];
@@ -88,8 +91,10 @@ export function PortalScreen() {
   }, [data, show, pos, needOnly, me]);
   const { rows: sorted, th } = useSort(rows, {
     name: (r) => r.name, pos: (r) => r.pos, from: (r) => team(r.from)?.school, ovr: (r) => r.ovr, next: (r) => r.next, ask: (r) => r.ask, offers: (r) => r.offers,
-    why: (r) => r.reasons[0], leaning: (r) => r.top[0]?.share,
+    why: (r) => r.reasons[0], leaning: (r) => r.top[0]?.share, gp: (r) => r.stats?.gp,
   });
+  const cats = catsWith(rows.map((r) => r.stats ?? {}));
+  const pc = cats.find((x) => x.key === cat) ?? cats[0];
   if (!data) return <p className="muted">Loading...</p>;
   if (!data.open && !data.entries.length) {
     return <Panel title="Transfer portal"><p className="muted">The portal opens {data.window ? shortDate(data.window) : "January 2"}, after renewal talks. Players whose school's season is still going enter the day after their last game.</p></Panel>;
@@ -125,13 +130,24 @@ export function PortalScreen() {
           {me != null && <label><input type="checkbox" checked={needOnly} onChange={(e) => setNeedOnly(e.target.checked)} /> Only players who fill a need</label>}
           <span className="muted">{rows.length} players</span>
         </div>
+        <span className="seg"><button className={view === "market" ? "on" : ""} onClick={() => setView("market")}>Market</button><button className={view === "stats" ? "on" : ""} onClick={() => setView("stats")}>Stats</button></span>
+        {view === "stats" ? (!pc ? <p className="muted">No one here has stats this season.</p> : <>
+          <CatTabs cats={cats} cat={pc.key} setCat={setCat} />
+          <StatsTable rows={rows} line={(r) => r.stats ?? {}} cat={pc} rowKey={(r) => r.pid} rowClass={(r) => (r.mine ? "mine" : undefined)} lead={[
+            { key: "name", label: "Player", cell: (r) => <><a href={`#/l/${id}/player/${r.pid}`}>{r.name}</a> <span className="muted small">{r.pos} · {r.cls}</span></>, by: (r) => r.name, asc: true },
+            { key: "from", label: "From", cell: (r) => <span className="nowrap"><Logo team={team(r.from)} size={16} /> {team(r.from)?.abbr}</span>, by: (r) => team(r.from)?.school, asc: true },
+            { key: "next", label: "Next", className: "num", title: "Expected overall next season", cell: (r) => r.next, by: (r) => r.next },
+            { key: "ask", label: "Asks", className: "num", cell: (r) => money(r.ask), by: (r) => r.ask },
+          ]} />
+        </>) : <>
         <table className="grid tight">
-          <thead><tr>{th("name", "Player")}{th("from", "From")}{th("ovr", "Ovr", { className: "num", title: "Overall now" })}{th("next", "Next", { className: "num", title: "Expected overall next season" })}{th("why", "Why he left")}{th("ask", "Asks", { className: "num" })}{th("offers", "Offers", { className: "num" })}{th("leaning", "Leaning")}{me != null && show !== "done" && <th>Your bid</th>}</tr></thead>
+          <thead><tr>{th("name", "Player")}{th("from", "From")}{th("ovr", "Ovr", { className: "num", title: "Overall now" })}{th("next", "Next", { className: "num", title: "Expected overall next season" })}{th("gp", "This season", { title: "His stats this season" })}{th("why", "Why he left")}{th("ask", "Asks", { className: "num" })}{th("offers", "Offers", { className: "num" })}{th("leaning", "Leaning")}{me != null && show !== "done" && <th>Your bid</th>}</tr></thead>
           <tbody>{sorted.slice(0, 300).map((r) => (
             <tr key={r.pid} className={r.mine ? "mine" : ""}>
               <td><a href={`#/l/${id}/player/${r.pid}`}>{r.name}</a> <span className="muted small">{r.pos} · {r.cls}{r.stars ? ` · ${"★".repeat(r.stars)}` : ""}</span>{r.costs_season && <span className="tag" title="A second transfer costs him a season">-1 yr</span>}</td>
               <td className="nowrap"><Logo team={team(r.from)} size={16} /> {team(r.from)?.school}</td>
               <td className="num"><Rating v={r.ovr} /></td><td className="num">{r.next}</td>
+              <td className="small nowrap">{statSummary(r.stats, r.pos) || <span className="muted">Didn't play</span>}</td>
               <td className="small">{r.reasons.join(", ")}</td>
               <td className="num">{money(r.ask)}</td><td className="num">{r.offers}</td>
               <td className="small"><Leaning r={r} /></td>
@@ -140,6 +156,7 @@ export function PortalScreen() {
           ))}</tbody>
         </table>
         {rows.length > 300 && <p className="muted small">Showing the top 300; filter by position to see more.</p>}
+        </>}
       </Panel>
     </div>
   );

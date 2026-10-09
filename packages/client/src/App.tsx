@@ -33,6 +33,7 @@ import { RetentionScreen } from "./screens/Retention.tsx";
 import { PortalScreen } from "./screens/Portal.tsx";
 import { StaffScreen } from "./screens/Staff.tsx";
 import { CoachesScreen, CoachPage } from "./screens/Coaches.tsx";
+import { StatsScreen } from "./screens/Stats.tsx";
 
 export interface LeagueCtx {
   id: string;
@@ -84,6 +85,7 @@ const NAV: NavSection[] = [
   { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"]), page("Scouting and staff", "recruiting/staff", ["recruiting"], true)] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
+  { key: "stats", label: "Stats", pages: [page("Players", "stats/players", ["stats"]), page("Teams", "stats/teams", ["stats"]), page("Leaders", "stats/leaders", ["stats"]), page("History", "stats/history", ["stats"])] },
   { key: "league", label: "League", pages: [page("Schedule", "schedule"), page("Standings", "standings"), page("Conferences", "conferences"), page("Polls", "polls"), page("Postseason", "postseason"),
     page("Awards", "awards"), page("Coaching carousel", "coaches", ["coaches", "coach"]), page("NFL draft", "draft"), page("Writers", "writers", ["writers", "writer"])] },
   { key: "office", label: "Office", pages: [page("Career", "career", ["career"], true), page("Settings", "settings")] },
@@ -170,7 +172,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "writers" && <Writers />}
         {screen === "writer" && arg && <WriterPage wid={Number(arg)} />}
         {screen === "news" && <News />}
-        {screen === "team" && arg && <TeamPage tid={Number(arg)} />}
+        {screen === "team" && arg && <TeamPage key={arg} tid={Number(arg)} tab={sub} />}
         {screen === "game" && arg && <GamePage gid={Number(arg)} />}
         {screen === "settings" && <SettingsScreen />}
         {screen === "player" && arg && <PlayerPage key={arg} pid={Number(arg)} tab={sub} />}
@@ -186,6 +188,7 @@ function Shell({ id, screen, arg, sub, ctx, state, teams, busy, setBusy, toast, 
         {screen === "front" && <FrontOfficeScreen tid={arg ? Number(arg) : undefined} />}
         {screen === "recruiting" && <RecruitingScreen sub={arg ?? "list"} />}
         {screen === "prospect" && arg && <ProspectPage pid={Number(arg)} />}
+        {screen === "stats" && <StatsScreen key={`${arg}/${sub}`} sub={arg ?? "players"} year={sub ? Number(sub) : undefined} />}
         {screen === "draft" && <DraftScreen />}
         {screen === "retention" && <RetentionScreen />}
         {screen === "portal" && <PortalScreen />}

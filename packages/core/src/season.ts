@@ -1,13 +1,13 @@
 import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
-import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type SideSetup } from "./gameday.ts";
+import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type DefLine, type SideSetup } from "./gameday.ts";
 import {
   LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
 } from "./hidden.ts";
-import { Caller, type UserCall } from "./calls.ts";
+import { Caller, applyClock, type ClockEvent, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
-import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
+import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine, type BoxRow } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
@@ -90,6 +90,8 @@ export interface SeasonState {
   calls?: Record<number, UserCall[]>;
   /** The user's changes to their lineup during live games, by game id. */
   subs?: Record<number, GameSub[]>;
+  /** The user's tempo changes and timeouts during live games, by game id. */
+  clock_calls?: Record<number, ClockEvent[]>;
   /** The user's game plan and weekly practice plan (absent = the defaults). */
   game_plan?: GamePlan;
   practice?: PracticePlan;
@@ -97,6 +99,8 @@ export interface SeasonState {
   prep?: Prep | null;
   /** Season stats by player id, the best game each player has had since the last players of the week, and every award given. */
   player_stats?: Record<number, PlayerSeason>;
+  /** Season totals by team id: its box scores and its opponents'. */
+  team_stats?: Record<number, TeamSeason>;
   award_week?: Record<number, WeekLine>;
   awards?: Award[];
   /** Your players being redshirted: each can play in up to four games and then sits. */
@@ -291,6 +295,7 @@ export class Season {
     state.depth ??= {};
     state.injuries ??= [];
     state.player_stats ??= {};
+    state.team_stats ??= {};
     state.award_week ??= {};
     state.awards ??= [];
     state.redshirts ??= [];
@@ -3147,6 +3152,8 @@ export class Season {
         costs_season: !!s.settings.pcsa && (s.moves?.[e.pid] ?? 0) >= 1,
         offers_list: e.offers.map((o) => ({ team_id: o.team_id, amount: o.team_id === me ? o.amount : null, years: o.years, date: o.date })),
         pitched_today: (e as PortalEntry & { pitched?: string }).pitched === s.date,
+        /** His stats this season (the season he's leaving). */
+        stats: s.player_stats?.[e.pid] ?? null,
       };
   }
 
@@ -3237,19 +3244,48 @@ export class Season {
   // ---- stats, awards and redshirts -------------------------------------------------------------
   private names = new Map<number, Map<string, number>>();
   private pidByName(teamId: number, name: string): number | undefined {
-    let m = this.names.get(teamId);
-    if (!m) {
-      m = new Map();
+    const build = () => {
+      const m = new Map<string, number>();
       for (const p of this.roster(teamId)) if (!m.has(playerName(p))) m.set(playerName(p), p.id);
       this.names.set(teamId, m);
+      return m;
+    };
+    // Rosters change (signings, the portal, a new season): a name the cached map misses rebuilds it.
+    const m = this.names.get(teamId);
+    return m?.get(name) ?? build().get(name);
+  }
+
+  /**
+   * One team's box score lines with who each player is: the engine keeps ball carriers by name and the
+   * game day keeps defenders by id, so this joins them into one row per player (pid null when nobody on
+   * the roster has that name any more). `defense` is this team's defenders only.
+   */
+  boxRows(teamId: number, players: Record<string, unknown>, defense: Record<number, DefLine>): BoxRow[] {
+    const rows = new Map<string, BoxRow>();
+    for (const [name, l] of Object.entries(players)) {
+      const pid = this.pidByName(teamId, name) ?? null;
+      const p = pid != null ? this.playerById.get(pid) : undefined;
+      rows.set(pid != null ? `#${pid}` : name, { ...(l as StatLine), pid, name, pos: p?.pos ?? "", team_id: teamId });
     }
-    return m.get(name);
+    for (const [k, l] of Object.entries(defense)) {
+      const pid = Number(k), p = this.playerById.get(pid);
+      const row = rows.get(`#${pid}`);
+      if (row) Object.assign(row, l);
+      else rows.set(`#${pid}`, { ...l, pid: p ? pid : null, name: p ? playerName(p) : "Unknown", pos: p?.pos ?? "", team_id: teamId });
+    }
+    return [...rows.values()];
   }
 
   /** Add a game to season stats and to each player's best game of the week. */
   recordStats(g: Game, d: GameDetail, week = true): void {
     const s = this.state;
     const homeWon = g.home_score! > g.away_score!;
+    const ts = (s.team_stats ??= {});
+    const team = (id: number) => (ts[id] ??= { gp: 0, w: 0, l: 0, pf: 0, pa: 0, off: {}, def: {} });
+    if (d.home_box && d.away_box) {
+      addTeamGame(team(g.home_id), g.home_score!, g.away_score!, d.home_box, d.away_box);
+      addTeamGame(team(g.away_id), g.away_score!, g.home_score!, d.away_box, d.home_box);
+    }
     const lines = new Map<number, { team_id: number; line: StatLine }>();
     const get = (pid: number, team: number) => {
       let x = lines.get(pid);
@@ -3286,6 +3322,7 @@ export class Season {
   rebuildStats(details: GameDetail[]): void {
     const s = this.state;
     s.player_stats = {};
+    s.team_stats = {};
     s.award_week = {};
     const lastPoll = s.events.filter((e) => e.type === "ap_poll" && e.status === "done").map((e) => e.date).sort().pop() ?? "";
     const byId = new Map(s.games.map((g) => [g.id, g]));
@@ -3586,6 +3623,12 @@ export class Season {
     (this.state.subs ??= {})[gameId] = subs;
   }
 
+  /** Record the user's clock management from a live game. */
+  setClockCalls(gameId: number, clock: ClockEvent[]): void {
+    if (!clock.length) return;
+    (this.state.clock_calls ??= {})[gameId] = clock;
+  }
+
   /**
    * A practice day: Monday to Thursday in a week your team plays, the day's plan banks prep for the
    * game. A hard day can cost a player time (from its own stream, so nothing else moves).
@@ -3659,7 +3702,11 @@ export class Season {
     const { sim, gd, sides, caller } = this.gameSetup(g);
     const subs = s.subs?.[g.id] ?? [];
     const userSide = caller?.userSide;
-    const called = caller ? caller.replay(s.calls?.[g.id] ?? [], (i) => { for (const x of subs) if (x.at === i && gd && userSide) gd.setDepth(userSide, x.depth); }) : undefined;
+    const clock = s.clock_calls?.[g.id] ?? [];
+    const called = caller ? caller.replay(s.calls?.[g.id] ?? [], (i) => {
+      for (const x of subs) if (x.at === i && gd && userSide) gd.setDepth(userSide, x.depth);
+      for (const x of clock) if (x.at === i && userSide) applyClock(sim, userSide, x);
+    }) : undefined;
     sim.play(gd ? gd.provider(called) : called);
     if (caller && s.prep?.for_game === g.id) s.prep = null;
     const hs = sides?.[0], as = sides?.[1];

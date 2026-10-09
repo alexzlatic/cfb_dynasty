@@ -34,6 +34,21 @@ export const FG_SLOPE = 0.082;
 export const FG_MID = 51.25;
 export const FG_MAX_EXTRA = 5;
 
+/**
+ * Clock management a coach can choose (none of it is in engine.py; a game where nobody chooses runs the
+ * engine's own rules). Seconds between a running-clock play and the next snap, on top of the play's own
+ * 6: hurry-up and bleeding the clock are the engine's two-minute drill and milking; up-tempo is a no-huddle
+ * offense's everyday pace. 2025 CFBD play-by-play, snap to snap after a run with the clock running: 36 s in
+ * the 1st and 3rd quarters (team medians 28 to 38, fastest 23), 39 s ahead in the last 8 minutes (a quarter
+ * of them 44+, the whole 40-second play clock), 14 to 17 s in the final two minutes of a half when behind.
+ */
+export type Tempo = "normal" | "uptempo" | "hurry" | "milk";
+export const UPTEMPO_GAP = 20;
+/** A spike: the offense is at the line and the ball is dead this many seconds after the last play ended. */
+export const SPIKE_SECS = 8;
+/** A play the offense runs to work the clock instead of the called play. */
+export type ClockPlay = "spike" | "kneel";
+
 const trunc = Math.trunc;
 
 /** Python 3 round(): half to even. */
@@ -221,7 +236,9 @@ export type DecisionRequest =
   | { kind: "playCall"; side: "home" | "away"; situation: Situation; suggestion: PlayCall }
   | { kind: "twoPoint"; side: "home" | "away"; situation: Situation; suggestion: boolean }
   | { kind: "onside"; side: "home" | "away"; situation: Situation; suggestion: boolean }
-  | { kind: "kneel"; side: "home" | "away"; situation: Situation; suggestion: boolean };
+  | { kind: "kneel"; side: "home" | "away"; situation: Situation; suggestion: boolean }
+  /** The clock is running toward the next snap (or has run out the half) and `side` calls its own timeouts: call one? */
+  | { kind: "timeout"; side: "home" | "away"; situation: Situation; suggestion: boolean };
 
 export type DecisionAnswer = FourthDownCall | PlayCall | boolean | null | undefined;
 /** Answers a request, or returns undefined to take the engine's suggestion. */
@@ -281,6 +298,8 @@ export class GameSim {
   gameOver = false;
   overtime = false;
   private pendingTimeout: Side | null = null;
+  /** Seconds the clock ran after the last play, before the next snap (0 when it stopped). A timeout gives them back. */
+  private runoff = 0;
   private rzCounted = false;
   private otRound = 0;
   private otPossessionOver = false;
@@ -289,6 +308,12 @@ export class GameSim {
   lastTouch: { name: string; side: "home" | "away" } | null = null;
   /** The play call's effect on the next scrimmage snap; set by a decision provider, cleared after the snap. */
   snapMod: SnapMod | null = null;
+  /** A coach's tempo for his offense; unset, the engine's own rules (hurry when behind late, milk when ahead). */
+  tempo: Partial<Record<"home" | "away", Tempo>> = {};
+  /** Sides whose coach calls his own timeouts: the engine never spends them on its own. */
+  manualTimeouts: Partial<Record<"home" | "away", boolean>> = {};
+  /** A clock play the offense runs on the coming snap in place of the call; set by a decision provider at the play call. */
+  clockPlay: ClockPlay | null = null;
 
   constructor(home: TeamRatings, away: TeamRatings, opts: GameOptions = {}) {
     this.rng = opts.rng ?? new Rng(opts.seed ?? 0);
@@ -340,6 +365,13 @@ export class GameSim {
     let guard = 0;
     while (this.quarter <= 4) {
       if (++guard > 1000) throw new Error("runaway game loop");
+      // A coach who calls his own timeouts gets the chance before the clock runs on, or out at the end of a half.
+      if (this.clockRunning && (this.clock > 0 || this.quarter === 2 || this.quarter === 4)) {
+        for (const s of [this.offense, this.defense]) {
+          if (this.manualTimeouts[this.key(s)] && s.timeouts > 0 && this.clockRunning && (yield* this.decide("timeout", false, s)))
+            this.callTimeout(this.key(s));
+        }
+      }
       if (this.clock <= 0) {
         const q = this.quarter;
         yield* this.endQuarter();
@@ -435,42 +467,72 @@ export class GameSim {
   }
 
   // ---- clock ------------------------------------------------------------------------
+  private key(side: Side): "home" | "away" { return side === this.home ? "home" : "away"; }
   private tempoGap(): number {
     const r = this.offense.ratings;
     const gap = BETWEEN_PLAYS_BASE * LEAGUE_PLAYS_PER_GAME / r.plays_per_game;
     if (this.hurryUp()) return 12;
     if (this.milking()) return 37;
+    if (this.tempo[this.key(this.offense)] === "uptempo") return trunc(UPTEMPO_GAP + this.rng.uniform(-3, 3));
     return trunc(gap + this.rng.uniform(-4, 4));
   }
   hurryUp(): boolean {
     if (this.overtime) return false;
+    const t = this.tempo[this.key(this.offense)];
+    if (t) return t === "hurry";
     if (this.quarter === 2 && this.clock < 120) return true;
     if (this.quarter === 4 && this.margin() < 0 && (this.clock < 300 || (this.margin() < -8 && this.clock < 600))) return true;
     return false;
   }
   milking(): boolean {
+    const t = this.tempo[this.key(this.offense)];
+    if (t) return t === "milk" && !this.overtime;
     return (!this.overtime && this.quarter === 4 && this.margin() > 0 && this.clock < 480) ||
       (this.quarter === 3 && this.margin() > 17);
   }
   private runClock(playSecs: number, clockStops: boolean, inboundsPlay = true) {
+    this.runoff = 0;
     if (this.overtime) return;
     let used = playSecs;
     if (!clockStops) {
       let gap = this.tempoGap();
       const dfn = this.defense;
       if (this.quarter === 4 && this.clock - used < 210 && this.margin(dfn) < 0 && this.margin(dfn) >= -16 &&
-          dfn.timeouts > 0 && inboundsPlay) {
+          dfn.timeouts > 0 && inboundsPlay && !this.manualTimeouts[this.key(dfn)]) {
         dfn.timeouts -= 1; gap = 0; this.pendingTimeout = dfn;
       } else if (this.hurryUp() && this.clock - used < 60 && this.offense.timeouts > 0 &&
-                 (this.quarter === 2 || this.margin() < 0)) {
+                 (this.quarter === 2 || this.margin() < 0) && !this.manualTimeouts[this.key(this.offense)]) {
         this.offense.timeouts -= 1; gap = 0; this.pendingTimeout = this.offense;
       }
       used += gap;
+      this.runoff = Math.max(0, Math.min(used, this.clock) - playSecs);
     }
     used = Math.min(used, this.clock);
     this.clock -= used;
     this.offense.stats.top_seconds += used;
     if (this.drive) this.drive.seconds += used;
+  }
+
+  /** Whether the clock is running toward the next snap (a timeout would stop it where the last play ended). */
+  get clockRunning(): boolean { return this.runoff > 0 && !this.overtime && !this.gameOver; }
+
+  /**
+   * A timeout before the next snap, called the moment the last play ended: the seconds that ran since come
+   * back. Only while the clock is running; false when it isn't or the side has none left.
+   */
+  callTimeout(side: "home" | "away"): boolean {
+    const s = side === "home" ? this.home : this.away;
+    if (!this.clockRunning || s.timeouts <= 0) return false;
+    s.timeouts -= 1;
+    this.giveBack(this.runoff);
+    this.log("TIMEOUT", `Timeout ${s.ratings.abbr} (${s.timeouts} left).`, 0, { down: 0, dist: 0 });
+    return true;
+  }
+  private giveBack(secs: number): void {
+    this.clock += secs;
+    this.offense.stats.top_seconds -= secs;
+    if (this.drive) this.drive.seconds -= secs;
+    this.runoff = 0;
   }
 
   // ---- possession changes -------------------------------------------------------------
@@ -757,14 +819,39 @@ export class GameSim {
     if (this.rng.random() < (off.ratings.penalty_rate + dfn.ratings.penalty_rate)) {
       if (this.handlePenalty()) return;
     }
-    const down0 = this.down, dist0 = this.distance, yl0 = this.yl, q0 = this.quarter, c0 = this.clock;
+    const down0 = this.down, dist0 = this.distance, yl0 = this.yl, q0 = this.quarter;
     off.stats.plays += 1;
     const draw = this.rng.random();
     const call = yield* this.decide("playCall", draw < this.passProb() ? "pass" : "run");
+    // (After the call: a timeout at the play call puts time back on the clock.)
+    const c0 = this.clock;
+    if (this.clockPlay) { yield* this.runClockPlay(); return; }
     const isPass = call === "pass";
     const res = isPass ? this.passPlay() : this.runPlay();
     this.snapMod = null;
     yield* this.postPlay(res[0], res[1], res[2], res[3], down0, dist0, yl0, q0, c0, isPass ? "PASS" : "RUN");
+  }
+
+  /** A spike (the clock stops a few seconds after the last play, at the cost of a down) or a kneel-down. */
+  private *runClockPlay(): Gen {
+    const off = this.offense, kind = this.clockPlay;
+    this.clockPlay = null;
+    this.snapMod = null;
+    if (kind === "kneel") {
+      this.log("KNEEL", `${off.ratings.qb} kneels.`, -1);
+      this.yl = Math.min(99, this.yl + 1);
+      off.stats.rush_att += 1; off.stats.rush_yards -= 1;
+      this.runClock(2, false);
+      yield* this.advanceDown(-1);
+      return;
+    }
+    if (this.runoff > SPIKE_SECS) this.giveBack(this.runoff - SPIKE_SECS);
+    // A spike is an incomplete pass in the stat book.
+    off.stats.pass_att += 1;
+    off.players.pass(off.ratings.qb, false, 0, false, false);
+    this.log("SPIKE", `${off.ratings.qb} spikes the ball to stop the clock.`, 0);
+    this.runClock(1, true);
+    yield* this.advanceDown(0);
   }
 
   private touch(name: string): void { this.lastTouch = { name, side: this.offense === this.home ? "home" : "away" }; }
@@ -955,6 +1042,13 @@ export class GameSim {
   }
 
   private handlePenalty(): boolean {
+    // A flag doesn't take back the time that ran before the snap: a timeout after it still saves it.
+    const runoff = this.runoff;
+    const out = this.penalty();
+    this.runoff = runoff;
+    return out;
+  }
+  private penalty(): boolean {
     const off = this.offense, dfn = this.defense, rng = this.rng;
     const pOff = off.ratings.penalty_rate / (off.ratings.penalty_rate + dfn.ratings.penalty_rate);
     if (rng.random() < pOff) {
@@ -992,6 +1086,7 @@ export class GameSim {
 
   // ---- flow -------------------------------------------------------------------------
   private *endQuarter(): Gen {
+    this.runoff = 0;
     if (this.quarter === 2) {
       this.endDrive("End of half");
       this.home.timeouts = this.away.timeouts = 3;

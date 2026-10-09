@@ -50,6 +50,20 @@ describe("rollover", () => {
     expect(t.next_player_id).toBe(900_000_001 + t.added.length);
   });
 
+  it("leaves younger players more room to their potential than older ones", () => {
+    // Among each team's top 22 (the players a user looks at), by seasons in college.
+    const room: number[][] = [[], [], [], [], []];
+    for (const tp of Object.values(players)) {
+      for (const p of [...tp.players].sort((a, b) => b.ovr - a.ovr).slice(0, 22)) room[Math.min(4, Math.floor(p.years))].push(p.hidden.potential - p.ovr);
+    }
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const atCeiling = (xs: number[]) => xs.filter((x) => x <= 0).length / xs.length;
+    for (let y = 1; y < 5; y++) expect(mean(room[y])).toBeLessThan(mean(room[y - 1]) - 1);
+    expect(mean(room[0])).toBeGreaterThan(10);
+    expect(atCeiling(room[0]) + atCeiling(room[1])).toBeLessThan(0.02);
+    expect(atCeiling(room[4])).toBeGreaterThan(0.2);
+  });
+
   it("repeats the schedule a year later with home and away swapped", () => {
     const games: Game[] = seed.schedule.map((g) => ({ ...g, kind: "regular", label: g.notes, status: "final", home_score: 1, away_score: 0, overtime: false }));
     const { start, schedule } = nextSchedule(games, seed.teams, seed.start_date, 9_500_000);

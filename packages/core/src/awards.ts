@@ -1,4 +1,4 @@
-import type { PlayerLine } from "@cfb/engine";
+import { TEAM_FIELDS, type PlayerLine, type TeamStats } from "@cfb/engine";
 import type { DefLine } from "./gameday.ts";
 import type { Pos } from "./players.ts";
 import type { ISODate } from "./dates.ts";
@@ -11,6 +11,22 @@ import type { ISODate } from "./dates.ts";
 export type StatKey = keyof PlayerLine | keyof DefLine;
 export type StatLine = Partial<Record<StatKey, number>>;
 export interface PlayerSeason extends StatLine { team_id: number; gp: number }
+/** A player's line in one game's box score (pid null when he can't be matched to a player any more). */
+export interface BoxRow extends StatLine { pid: number | null; name: string; pos: string; team_id: number }
+
+/** A team's season: games, wins, points, and its box score totals (`off`) and its opponents' (`def`). */
+export interface TeamSeason { gp: number; w: number; l: number; pf: number; pa: number; off: Partial<TeamStats>; def: Partial<TeamStats> }
+
+/** Add one game's box scores (the team's and its opponent's) to a team season. */
+export function addTeamGame(into: TeamSeason, pf: number, pa: number, mine: Partial<TeamStats>, theirs: Partial<TeamStats>): void {
+  into.gp++;
+  if (pf > pa) into.w++; else if (pa > pf) into.l++;
+  into.pf += pf; into.pa += pa;
+  for (const f of TEAM_FIELDS) {
+    if (mine[f]) into.off[f] = (into.off[f] ?? 0) + mine[f]!;
+    if (theirs[f]) into.def[f] = (into.def[f] ?? 0) + theirs[f]!;
+  }
+}
 
 /** A player's best game since the last players of the week. */
 export interface WeekLine { pid: number; team_id: number; game_id: number; won: boolean; line: StatLine }

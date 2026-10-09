@@ -1,14 +1,8 @@
 import { useState } from "react";
 import { useData, useLeague } from "../App.tsx";
-import { api, type Award, type StatRow } from "../api.ts";
+import { api, type Award } from "../api.ts";
 import { Logo, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
-
-const LEADERS: [string, string][] = [
-  ["pass_yds", "Passing yards"], ["pass_td", "Passing TDs"], ["rush_yds", "Rushing yards"], ["rush_td", "Rushing TDs"], ["rec", "Receptions"],
-  ["rec_yds", "Receiving yards"], ["rec_td", "Receiving TDs"], ["tkl", "Tackles"], ["tfl", "Tackles for loss"], ["sacks", "Sacks"],
-  ["def_int", "Interceptions"], ["pd", "Passes defended"], ["ff", "Forced fumbles"], ["fgm", "Field goals"],
-];
 
 /** Who: a linked player with his team. */
 function Who({ a }: { a: { pid: number; name: string; pos: string; team_id: number } }) {
@@ -17,13 +11,12 @@ function Who({ a }: { a: { pid: number; name: string; pos: string; team_id: numb
   return <span><Logo team={t} size={16} /> <a href={`#/l/${id}/player/${a.pid}`}>{a.name}</a> <span className="muted small">{a.pos}, {t?.school}</span></span>;
 }
 
-/** Awards (Heisman, All-Americans, conference and weekly honors) and national stat leaders. */
+/** Awards (Heisman, All-Americans, conference and weekly honors); stat leaders are under Stats. */
 export function AwardsScreen() {
   const { id, state } = useLeague();
   const data = useData(() => api.awards(id), [state.date]);
-  const leaders = useData(() => api.leaders(id), [state.date]);
-  const [tab, setTab] = useState<"awards" | "weekly" | "leaders">("awards");
-  if (!data || !leaders) return <p className="muted">Loading...</p>;
+  const [tab, setTab] = useState<"awards" | "weekly">("awards");
+  if (!data) return <p className="muted">Loading...</p>;
   const year = data.awards.filter((a) => a.year === state.year);
   const of = (t: Award["type"]) => year.filter((a) => a.type === t);
   const heis = [...of("heisman"), ...of("heisman_finalist")];
@@ -36,7 +29,7 @@ export function AwardsScreen() {
       <div className="seg">
         <button className={tab === "awards" ? "on" : ""} onClick={() => setTab("awards")}>Season awards</button>
         <button className={tab === "weekly" ? "on" : ""} onClick={() => setTab("weekly")}>Players of the week</button>
-        <button className={tab === "leaders" ? "on" : ""} onClick={() => setTab("leaders")}>Stat leaders</button>
+        <a className="button" href={`#/l/${id}/stats/leaders`}>Stat leaders</a>
       </div>
       {tab === "awards" && (!heis.length ? <Panel title="Season awards"><p className="muted">The Heisman, the All-America team and conference players of the year are announced the day after championship weekend.</p></Panel> : (
         <div className="cols">
@@ -83,25 +76,6 @@ export function AwardsScreen() {
           )}
         </Panel>
       )}
-      {tab === "leaders" && (
-        <div className="leaders">
-          {LEADERS.map(([k, label]) => <Leaders key={k} label={label} k={k} rows={leaders[k] ?? []} />)}
-        </div>
-      )}
     </div>
-  );
-}
-
-function Leaders({ label, k, rows }: { label: string; k: string; rows: StatRow[] }) {
-  const { state } = useLeague();
-  return (
-    <Panel title={label}>
-      {!rows.length ? <p className="muted small">No games yet.</p> : (
-        <table className="grid tight"><tbody>{rows.map((r, i) => (
-          <tr key={r.pid} className={r.team_id === state.user_team_id ? "mine" : ""}><td className="num muted">{i + 1}</td><td><Who a={r} /></td>
-            <td className="num"><b>{(r as unknown as Record<string, number>)[k]}</b></td><td className="num muted small">{r.gp} g</td></tr>
-        ))}</tbody></table>
-      )}
-    </Panel>
   );
 }
