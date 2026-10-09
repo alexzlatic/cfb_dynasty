@@ -38,8 +38,10 @@ export type Action =
   | { type: "recruit_hours"; payload: { pid: number; hours: number } }
   /** Offer a prospect a scholarship, or pull the offer. */
   | { type: "recruit_offer"; payload: { pid: number; on: boolean } }
-  /** Send your scouts to evaluate a prospect (each week until taken off the list). */
-  | { type: "scout_prospect"; payload: { pid: number; on: boolean } }
+  /** Send your scouts to evaluate a prospect: `trips` times, then they report back (without a count, each week until taken off the list). */
+  | { type: "scout_prospect"; payload: { pid: number; on: boolean; trips?: number; at?: number } }
+  /** Your scouts' weekly hours in a region (0 takes them off it): they find prospects there and report every 24 hours. */
+  | { type: "region_hours"; payload: { region: Region; hours: number } }
   /** Put a prospect on your big board (at a place in it, or the end), or take him off. */
   | { type: "recruit_board"; payload: { pid: number; on: boolean; at?: number } }
   /** Hire a regional scout (or let one go). */
@@ -275,7 +277,20 @@ export class League {
       if (!Number.isFinite(hours) || hours < 0 || hours > 40) throw new Error("contact hours are 0 to 40 a week");
       a = { type: a.type, payload: { pid: Number(a.payload?.pid), hours } };
     }
-    if (a.type === "recruit_offer" || a.type === "scout_prospect") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "recruit_offer") a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on } };
+    if (a.type === "scout_prospect") {
+      const trips = a.payload?.trips == null ? undefined : Math.round(Number(a.payload.trips));
+      if (trips != null && (!Number.isFinite(trips) || trips < 1 || trips > 10)) throw new Error("an assignment is 1 to 10 trips");
+      const at = a.payload?.at == null ? undefined : Number(a.payload.at);
+      if (at != null && !Number.isInteger(at)) throw new Error("at is a place in the list");
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), on: !!a.payload?.on, ...(trips != null ? { trips } : {}), ...(at != null ? { at } : {}) } };
+    }
+    if (a.type === "region_hours") {
+      if (!Object.hasOwn(REGIONS, a.payload?.region)) throw new Error(`unknown region ${a.payload?.region}`);
+      const hours = Math.round(Number(a.payload?.hours));
+      if (!Number.isFinite(hours) || hours < 0 || hours > 60) throw new Error("region hours are 0 to 60 a week");
+      a = { type: a.type, payload: { region: a.payload.region, hours } };
+    }
     if (a.type === "recruit_board") {
       const at = a.payload?.at == null ? undefined : Number(a.payload.at);
       if (at != null && !Number.isInteger(at)) throw new Error("at is a place on the board");
@@ -286,8 +301,10 @@ export class League {
       a = { type: a.type, payload: { region: a.payload.region, on: !!a.payload?.on } };
     }
     if (a.type === "staff_time") {
-      const t = { recruiting: Number(a.payload?.recruiting), scouting: Number(a.payload?.scouting), prep: Number(a.payload?.prep), opponent: Number(a.payload?.opponent ?? 0.15) };
-      if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep + t.opponent <= 0) throw new Error("staff time is four shares that add up to more than 0");
+      // Splits sent before development had its own share leave it out (it comes out of practice).
+      const t: StaffTime = { recruiting: Number(a.payload?.recruiting), scouting: Number(a.payload?.scouting), prep: Number(a.payload?.prep), opponent: Number(a.payload?.opponent ?? 0.15),
+        ...(a.payload?.develop != null ? { develop: Number(a.payload.develop) } : {}) };
+      if (Object.values(t).some((x) => !Number.isFinite(x) || x < 0) || t.recruiting + t.scouting + t.prep + t.opponent! + (t.develop ?? 0) <= 0) throw new Error("staff time is shares that add up to more than 0");
       a = { type: a.type, payload: t };
     }
     if (a.type === "hire_coach" || a.type === "fire_coach") {
@@ -357,7 +374,8 @@ export class League {
       if (a.type === "recruit_auto") this.season.setRecruitAuto(a.payload.on);
       if (a.type === "recruit_hours") this.season.setRecruitHours(a.payload.pid, a.payload.hours);
       if (a.type === "recruit_offer") this.season.setOffer(a.payload.pid, a.payload.on);
-      if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on);
+      if (a.type === "scout_prospect") this.season.setScoutTarget(a.payload.pid, a.payload.on, a.payload.trips, a.payload.at);
+      if (a.type === "region_hours") this.season.setRegionHours(a.payload.region, a.payload.hours);
       if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);

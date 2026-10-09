@@ -577,6 +577,10 @@ describe("money", () => {
     expect((await act("scout_region", { region: "mars", on: true })).error).toMatch(/unknown region/);
     expect((await act("staff_time", { recruiting: 0.4, scouting: 0.2, prep: 0.4 })).ok).toBe(true);
     expect((await act("recruit_offer", { pid: 1, on: true })).error).toMatch(/no prospect/);
+    expect((await act("region_hours", { region: "texas", hours: 12 })).ok).toBe(true);
+    expect((await act("region_hours", { region: "texas", hours: 99 })).error).toMatch(/0 to 60/);
+    expect((await act("scout_prospect", { pid: open[2].id, on: true, trips: 2 })).ok).toBe(true);
+    expect((await act("scout_prospect", { pid: open[2].id, on: true, trips: 0 })).error).toMatch(/1 to 10 trips/);
 
     lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-15" } });
     const st = lg.season.state.recruiting!;
@@ -589,6 +593,15 @@ describe("money", () => {
     const ranks = await getR(`/api/leagues/${id}/recruiting/rankings?limit=10`);
     expect(ranks).toHaveLength(10);
     expect((await getR(`/api/leagues/${id}/recruiting/prospect?pid=${a.id}`)).evals).toBe(0);
+    // Strategy: the week (an old three-share split gives development its usual share out of practice), the scouts' plan and their reports.
+    const strat = await getR(`/api/leagues/${id}/strategy`);
+    expect(strat.time.develop).toBeCloseTo(0.1 / 1.15, 6);
+    expect(strat.development.pace).toBeCloseTo(Math.sqrt(1 / 1.15), 2);
+    const plan = await getR(`/api/leagues/${id}/strategy/scouting`);
+    expect(plan.regions.find((r: { key: string }) => r.key === "texas").hours).toBe(12);
+    expect(plan.assignments.map((x: { id: number }) => x.id)).not.toContain(open[2].id);
+    const reps = (await getR(`/api/leagues/${id}/strategy/reports`)).reports as { kind: string; lines: { pid: number }[] }[];
+    expect(reps.some((r) => r.kind === "player" && r.lines[0].pid === open[2].id)).toBe(true);
 
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);

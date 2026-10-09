@@ -168,7 +168,36 @@ export interface ProspectPageData extends ProspectRow {
 export type BoardRow = ProspectRow & { considering: Considering[]; you: { place: number; share: number } | null };
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
 export type MapPoint = [number, number, number, number, number, number | null, number, string, string];
-export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number; opponent?: number }
+export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number; opponent?: number; develop?: number }
+export type StaffShare = "recruiting" | "scouting" | "develop" | "prep" | "opponent";
+
+// ---- strategy: the staff's week and the scouts ----
+export interface StrategyView {
+  available: boolean; team_id: number | null; date: string; in_season: boolean; staff_hours: number;
+  /** The in-season split (shares add up to 1), the same split out of season, and the usual week. */
+  time: Required<StaffTimeSplit>; offseason: Required<StaffTimeSplit>; usual: Required<StaffTimeSplit>;
+  staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
+  recruiting: { auto: boolean; board: number; contact_hours: number; hours_set: number; commits: number };
+  scouting: { hours: number; trips: number; region_hours: number; assignments: number; paid: number; spend: number; reports: number; last_report: number };
+  development: { pace: number; plans: number; slots: number; skill: number };
+  prep: { factor: number; skill: number };
+  film: { opponent: number; knowledge: number; found: number } | null;
+}
+export type Assignment = ProspectRow & { near: boolean; trip_hours: number; trip_cost: number; trips_left: number | null };
+export interface RegionPlan { key: string; name: string; home: boolean; paid: boolean; hours: number; done: number; known: number; found: number }
+export interface ScoutingPlan {
+  available?: false; hours: number; in_season: boolean; season_hours: number; offseason_hours: number; trips: number; region_hours: number;
+  assignments: Assignment[]; regions: RegionPlan[]; report_hours: number; default_trips: number; spend: number;
+  costs: { region: number; trip_near: number; trip_far: number; trip_hours: { near: number; far: number } }; reports: number; last_report: number;
+}
+export interface ScoutLine {
+  pid: number; name: string; pos: string; cls: number; city: string | null; state: string | null; est: number; lo: number; hi: number;
+  stars: number | null; rank: number | null; note: string; fresh: boolean; commit: number | null;
+}
+export interface ScoutReport {
+  id: number; date: string; kind: "region" | "player"; region?: string; title: string; summary: string; lines: ScoutLine[];
+  before?: { est: number; lo: number; hi: number }; trips?: number; hours?: number;
+}
 export interface RecruitingView {
   available: boolean; team_id: number | null; year: number; date: string; cls: number;
   classes: { cls: number; grade: number; total: number; known: number; rated: number; found: number }[];
@@ -284,6 +313,9 @@ export const api = {
   plan: (id: string) => req<PlanInfo>(`/api/leagues/${id}/plan`),
   recruiting: (id: string, q: Record<string, string>) => req<RecruitingView>(`/api/leagues/${id}/recruiting?` + new URLSearchParams(q)),
   draft: (id: string) => req<DraftView>(`/api/leagues/${id}/draft`),
+  strategy: (id: string) => req<StrategyView>(`/api/leagues/${id}/strategy`),
+  scouting: (id: string) => req<ScoutingPlan>(`/api/leagues/${id}/strategy/scouting`),
+  reports: (id: string) => req<{ reports: ScoutReport[]; regions: Record<string, { name: string }> }>(`/api/leagues/${id}/strategy/reports`),
   prospect: (id: string, pid: number) => req<ProspectPageData>(`/api/leagues/${id}/recruiting/prospect?pid=${pid}`),
   board: (id: string) => req<{ rows: BoardRow[] }>(`/api/leagues/${id}/recruiting/board`),
   recruitMap: (id: string, cls: number, pos = "") => req<{ cls: number; points: MapPoint[] }>(`/api/leagues/${id}/recruiting/map?cls=${cls}${pos ? `&pos=${pos}` : ""}`),

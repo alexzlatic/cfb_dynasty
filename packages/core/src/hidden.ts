@@ -31,7 +31,20 @@ export const LAB_AREAS: Record<LabArea, string> = {
 };
 /** Players a staff can give individual development plans at once. */
 export const LAB_SLOTS = 8;
-export interface LabPlan { area: LabArea; from: ISODate }
+/**
+ * A player's development plan. `work` is the days of work done by `upto`: one a day at the usual pace, more
+ * or less with the staff's development time (staff.ts labPace). Plans saved without it count one a day.
+ */
+export interface LabPlan { area: LabArea; from: ISODate; work?: number; upto?: ISODate }
+
+/** Days of work a plan has behind it on a date (100 at most): its work so far, then `pace` a day ahead. */
+export function labWork(l: LabPlan | undefined, date: ISODate, pace = 1): number {
+  if (!l || date <= l.from) return 0;
+  const upto = l.upto ?? l.from, work = l.work ?? 0;
+  // Before the last tally, the work is spread evenly over the days it took.
+  const w = date >= upto ? work + daysBetween(upto, date) * pace : work * daysBetween(l.from, date) / Math.max(1, daysBetween(l.from, upto));
+  return Math.min(100, w);
+}
 
 /** A player's hidden makeup, drawn once per season from the league seed. */
 export interface HiddenPlayer {
@@ -128,9 +141,9 @@ export function devPhase(year: number, date: ISODate, firstGame: ISODate): DevPh
 }
 
 /** Overall points a development plan has added by a date (about 2 over 80 days of work, 2.5 at most). */
-export function labGain(l: LabPlan | undefined, date: ISODate): number {
-  if (!l || l.area === "leadership" || date <= l.from) return 0;
-  return 2 * Math.min(100, daysBetween(l.from, date)) / 80;
+export function labGain(l: LabPlan | undefined, date: ISODate, pace = 1): number {
+  if (!l || l.area === "leadership") return 0;
+  return 2 * labWork(l, date, pace) / 80;
 }
 
 /** Which kind of work moves each rating; everything else is technique. */
@@ -164,6 +177,8 @@ export const unitOf = (pos: string): Unit | null => (OFF_POS.has(pos) ? "off" : 
 export function hiddenTeam(o: {
   seed: number; year: number; team_id: number; date: ISODate; ctx: TeamContext;
   roster: RatedPlayer[]; starters: Record<Unit, RatedPlayer[]>; morale?: number; lab?: Record<number, LabPlan>;
+  /** How fast the plans work from their last tally on (staff.ts labPace; 1 when absent). */
+  labPace?: number;
   /** Chemistry from players' morale about pay and playing time, in points by unit (morale.ts). */
   mood?: Record<Unit, number>;
   /** Each player's fit from his ratings in the coaches' schemes, in SDs (see hiddenPlayer). */
@@ -174,11 +189,8 @@ export function hiddenTeam(o: {
   const hp = new Map(o.roster.map((p) => [p.id, hiddenPlayer(seed, year, p, o.schemeFit?.get(p.id))]));
   const rng = new Rng(mixSeed(seed, year, o.team_id, "hidden-team"));
   const fit = { off: 0, def: 0 }, chem = { off: 0, def: 0 };
-  const labDays = (pid: number) => {
-    const l = o.lab?.[pid];
-    // A plan's effect builds over about 80 days of work and tops out at 100 days in a year.
-    return l && o.date > l.from ? Math.min(100, daysBetween(l.from, o.date)) : 0;
-  };
+  // A plan's effect builds over about 80 days of work and tops out at 100 days in a year.
+  const labDays = (pid: number) => labWork(o.lab?.[pid], o.date, o.labPace);
   for (const u of ["off", "def"] as const) {
     const st = o.starters[u];
     const n = Math.max(1, st.length);

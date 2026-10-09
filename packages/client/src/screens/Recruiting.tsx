@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { SortTable } from "../sort.tsx";
 import { useData, useLeague } from "../App.tsx";
-import { api, type HsCol, type ProspectRow, type RecruitingView, type StaffTimeSplit } from "../api.ts";
-import { Logo, money } from "../util.tsx";
+import { api, type HsCol, type ProspectRow, type RecruitingView } from "../api.ts";
+import { Logo } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { ConsideringList } from "./Prospect.tsx";
 import { RecruitMap } from "./RecruitMap.tsx";
@@ -41,7 +41,7 @@ export function RecruitingScreen({ sub }: { sub: string }) {
       {sub === "board" && <BigBoard head={head} />}
       {sub === "map" && <MapView cls={c} head={head} />}
       {sub === "rankings" && <Rankings cls={c} />}
-      {sub === "staff" && <StaffAndScouting head={head} />}
+      {sub === "staff" && <StaffAndScouting />}
     </div>
   );
 }
@@ -187,7 +187,7 @@ function BigBoard({ head }: { head: RecruitingView }) {
           <button className={cls === "all" ? "on" : ""} onClick={() => setCls("all")}>All classes</button>
           {head.classes.map((c) => <button key={c.cls} className={cls === c.cls ? "on" : ""} onClick={() => setCls(c.cls)}>{c.cls}</button>)}
         </div>
-        <span className="muted small">{head.settings.auto ? "Your staff works the board each week (Scouting and staff to run it yourself)." : "You run the board: set contact hours below."}</span>
+        <span className="muted small">{head.settings.auto ? "Your staff works the board each week (turn it off in Strategy to run it yourself)." : "You run the board: set contact hours below."}</span>
       </div>
       {!data ? <p className="muted">Loading...</p> : !rows.length ? (
         <Panel title="Nobody on your board yet"><p>Add prospects with the ☆ on the <a href={`#/l/${id}/recruiting/list`}>Prospects</a> list, a prospect's page or the <a href={`#/l/${id}/recruiting/map`}>map</a>.</p></Panel>
@@ -213,7 +213,7 @@ function BigBoard({ head }: { head: RecruitingView }) {
                   <button className="link" disabled={busy || i === 0} onClick={() => act("recruit_board", { pid: r.id, on: true, at: i - 1 })} title="Move up">▲</button>
                   <button className="link" disabled={busy || i === data.rows.length - 1} onClick={() => act("recruit_board", { pid: r.id, on: true, at: i + 1 })} title="Move down">▼</button>
                   {!r.commit?.signed && r.grade >= 1 && <button className="link" disabled={busy} onClick={() => act("recruit_offer", { pid: r.id, on: !r.offers.includes(me) })}>{r.offers.includes(me) ? "Pull offer" : "Offer"}</button>}
-                  <button className="link" disabled={busy} onClick={() => act("scout_prospect", { pid: r.id, on: !r.scouting })}>{r.scouting ? "Stop scouting" : "Scout"}</button>
+                  <button className="link" disabled={busy} onClick={() => act("scout_prospect", { pid: r.id, on: !r.scouting, trips: 3 })}>{r.scouting ? "Stop scouting" : "Scout"}</button>
                   <button className="link muted" disabled={busy} onClick={() => act("recruit_board", { pid: r.id, on: false })}>Remove</button>
                 </div>
               </div>
@@ -267,44 +267,8 @@ function Rankings({ cls }: { cls: number }) {
   );
 }
 
-function StaffAndScouting({ head }: { head: RecruitingView }) {
-  const [time, setTime] = useState<StaffTimeSplit | null>(null);
-  const { busy, err, act } = useAct();
-  const u = head.settings;
-  if (head.team_id == null) return <p className="muted">You need a team.</p>;
-  const t0 = time ?? u.time;
-  const t = { ...t0, opponent: t0.opponent ?? 0.15 };
-  const tsum = t.recruiting + t.scouting + t.prep + t.opponent || 1;
-  return (
-    <div className="cols even">
-      <div>
-        {err && <p className="error">{err}</p>}
-        <Panel title="Your staff's week">
-          <p><label className="check"><input type="checkbox" checked={u.auto} disabled={busy} onChange={(e) => act("recruit_auto", { on: e.target.checked })} /> Let the staff run the board</label></p>
-          <table className="grid tight"><tbody>
-            {(["recruiting", "scouting", "prep", "opponent"] as const).map((k) => <tr key={k}>
-              <td>{k === "prep" ? "Practice and game plan" : k === "opponent" ? "Opponent film" : k === "recruiting" ? "Recruiting" : "Scouting prospects"}</td>
-              <td><input type="range" min={0} max={100} value={Math.round(100 * t[k] / tsum)} onChange={(e) => setTime({ ...t, [k]: Number(e.target.value) / 100 })} /></td>
-              <td className="num">{pct(t[k] / tsum)}</td><td className="num muted small">{Math.round(head.hours * t[k] / tsum)} h</td></tr>)}
-          </tbody></table>
-          {time && <p><button className="primary" disabled={busy} onClick={async () => { await act("staff_time", time); setTime(null); }}>Save</button> <button className="link" onClick={() => setTime(null)}>Cancel</button></p>}
-          <p className="small muted">In season the usual week is 30% recruiting, 10% scouting prospects, 45% practice and the game plan and 15% film of the next opponent.
-            Less practice costs you on the field; more film finds more of the opponent's tendencies (Game plan, Film room). More scouting time finds more prospects and narrows reads.
-            Out of season there is no game to prepare for.</p>
-        </Panel>
-        <Panel title="Staff skills">
-          <div className="skills">{Object.entries(head.skill_names).map(([k, l]) => <div key={k} className="skill"><span>{l}</span><b>{head.skills[k]}</b></div>)}</div>
-          <p className="small muted">{head.staff.map((c) => `${c.role} ${c.first} ${c.last}`).join(", ")}</p>
-        </Panel>
-      </div>
-      <Panel title="Regional scouts" right={<span className="small muted">Spent {money(u.spend)} this year</span>}>
-        <table className="grid tight"><tbody>
-          {Object.entries(head.regions).map(([k, r]) => <tr key={k} className={u.regions.includes(k) ? "mine" : ""}><td>{r.name}</td>
-            <td className="nowrap"><label className="small check"><input type="checkbox" checked={u.regions.includes(k)} disabled={busy} onChange={(e) => act("scout_region", { region: k, on: e.target.checked })} /> {money(head.costs.region)}/yr</label></td></tr>)}
-        </tbody></table>
-        <p className="small muted">A regional scout finds prospects there your staff didn't know about and tightens your reads on everyone there. Evaluation trips cost {money(head.costs.trip_near)} and {head.costs.trip_hours.near} staff hours near home,
-          {" "}{money(head.costs.trip_far)} and {head.costs.trip_hours.far} hours away. Scouting comes out of your operations budget.</p>
-      </Panel>
-    </div>
-  );
+/** The staff's week and the scouts moved to Strategy; old links land here. */
+function StaffAndScouting() {
+  const { id } = useLeague();
+  return <Panel title="Scouting and staff"><p>Your staff's week, scouting assignments and scout reports are in <a href={`#/l/${id}/strategy/overview`}>Strategy</a>.</p></Panel>;
 }

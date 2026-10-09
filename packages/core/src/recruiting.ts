@@ -411,13 +411,26 @@ export const isPublic = (p: Prospect) => p.svc != null || p.commit != null;
  * only). Better prospects are found sooner: z is how far his true potential is above his class's average, in
  * class standard deviations. `effort` is the staff's scouting time against the usual 10% (square root).
  */
-export function discoverRate(eye: SchoolEye, p: Prospect, z: number, effort: number): number {
+export function discoverRate(eye: SchoolEye, p: Prospect, z: number, effort: number,
+  /** The rate your scouts' hours in his region give it this week (regionArea), when more than the usual. */
+  extra = 0): number {
   const near = p.home.state === eye.state || miles(p.home, eye) <= 300;
   const reg = regionOf(p.home);
-  const area = near ? 0.08 : reg != null && eye.regions.includes(reg) ? 0.06 : eye.national ? 0.004 : 0.002;
+  const area = Math.max(extra, near ? 0.08 : reg != null && eye.regions.includes(reg) ? 0.06 : eye.national ? 0.004 : 0.002);
   const prom = Math.min(1, Math.exp(1.2 * (z - 1.5)));
   return area * prom * Math.max(0.5, Math.min(2, effort)) / eye.width;
 }
+/**
+ * Your scouts' weekly hours in a region: they look there like a paid regional scout at 8 hours a week, and
+ * half again at 12 or more. Every REGION_REPORT_HOURS hours they file a report on the best they've seen.
+ */
+export const regionArea = (hours: number) => 0.06 * Math.min(1.5, Math.max(0, hours) / 8);
+export const REGION_REPORT_HOURS = 24;
+/** The chance a region report turns up a prospect your staff didn't know (z as in discoverRate): about 40% for the best, few below them. */
+export const reportSees = (hours: number, z: number) => 1 - Math.exp(-0.5 * (hours / REGION_REPORT_HOURS) * Math.min(1, Math.exp(1.5 * (z - 2))));
+/** Trips an assignment to see a prospect takes when you don't say (each is a look: about 40% off his range after three). */
+export const DEFAULT_TRIPS = 3;
+
 /** Weeks of looking a staff has behind it when a league starts: a sophomore class has had a year, freshmen a few weeks. */
 export const KNOWN_WEEKS = [3, 40, 80, 120];
 
@@ -505,6 +518,39 @@ export interface UserRecruiting {
   board?: number[];
   /** Your commits already put on your board for you (so one you take off stays off). */
   board_added?: number[];
+  /** Trips left on each prospect your scouts are assigned to (one on `scout` without a count is seen every week until taken off). */
+  trips_left?: Record<string, number>;
+  /** Your read of each assigned prospect when the assignment started, for the scouts' report. */
+  scout_from?: Record<string, { est: number; sd: number }>;
+  /** Your scouts' weekly hours on each region, and the hours put in toward each region's next report. */
+  region_hours?: Partial<Record<Region, number>>;
+  region_done?: Partial<Record<Region, number>>;
+  /** What your scouts have reported, newest first (the last 60). */
+  reports?: ScoutReport[];
+  next_report?: number;
+}
+
+/** A prospect in a scouting report, as your staff read him that day. */
+export interface ScoutLine {
+  pid: number; name: string; pos: Pos; cls: number; city: string | null; state: string | null;
+  /** Your staff's 90% range for his potential, and its best guess. */
+  est: number; lo: number; hi: number;
+  stars: number | null; rank: number | null;
+  /** Why he's on the report (new to you, unrated, better than his stars, committed elsewhere). */
+  note: string;
+  /** Your staff didn't know about him before this report. */
+  fresh: boolean;
+  commit: number | null;
+}
+/** A report your scouts filed: on a region they worked (its best prospects and the ones nobody rates), or on a prospect they went to see. */
+export interface ScoutReport {
+  id: number; date: ISODate; kind: "region" | "player"; region?: Region; title: string; summary: string;
+  /** Region reports: the best they saw, then the ones under the radar. Player reports: him. */
+  lines: ScoutLine[];
+  /** Player reports: your read when the assignment started, and the trips it took. */
+  before?: { est: number; lo: number; hi: number }; trips?: number;
+  /** Region reports: the hours behind it. */
+  hours?: number;
 }
 
 export interface RecruitingState {

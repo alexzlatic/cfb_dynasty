@@ -150,7 +150,7 @@ function FilmRoom({ film, school }: { film: NonNullable<PlanInfo["film"]>; schoo
         </tbody></table>
       ) : <p className="small muted">Nothing stands out on film yet.</p>}
       <p className="small muted">Your coordinators use what the staff knows on game day, and knowing them better than they know you is worth up to about a point.
-        More film time (Recruiting, Staff and scouting) finds more, at the cost of recruiting and practice.</p>
+        More film time (Strategy, the staff's week) finds more, at the cost of recruiting and practice.</p>
     </>
   );
 }

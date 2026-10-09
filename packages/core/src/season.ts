@@ -2,7 +2,7 @@ import { GameSim, Rng, type TeamRatings } from "@cfb/engine";
 import { compileTeam, lineup, type DepthChart } from "./compiler.ts";
 import { DEFENSE_FIELD, GameDay, OFFENSE_FIELD, type DefLine, type SideSetup } from "./gameday.ts";
 import {
-  LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
+  LAB_SLOTS, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, hiddenTeam, labGain, labWork, progress, unitOf, type DevPhase, type DevTrack, type HiddenTeam, type LabArea, type LabPlan, type TeamContext, type Unit,
 } from "./hidden.ts";
 import { Caller, applyClock, type ClockEvent, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
@@ -19,9 +19,9 @@ import {
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
-  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
+  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, regionArea, reportSees, publicRead, REGIONS, REGION_REPORT_HOURS, DEFAULT_TRIPS, type ScoutLine, type ScoutReport, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
-import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
+import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, labPace, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
 import { mixSeed } from "./hash.ts";
 import { HS_COLS, HS_LEAD, hsLatest, hsSeasons, hsSummary } from "./hsstats.ts";
@@ -575,6 +575,7 @@ export class Season {
     const next: RecruitingState = {
       prospects, next_id: rst.next_id + fresh.length, classes, cycle, rerate: 0, svc_v: 2,
       user: { ...u, hours: keep(u.hours), evals: keep(u.evals), scout: u.scout.filter((x) => live.has(x)), spend: 0,
+        ...(u.trips_left ? { trips_left: keep(u.trips_left) } : {}), ...(u.scout_from ? { scout_from: keep(u.scout_from) } : {}),
         found: (u.found ?? []).filter((x) => live.has(x)), board: (u.board ?? []).filter((x) => live.has(x)), board_added: (u.board_added ?? []).filter((x) => live.has(x)) },
     };
     rateClasses(next.prospects, ny, s.date, 0, s.seed, rs.curve);
@@ -885,6 +886,7 @@ export class Season {
     // 2. Actions are applied by the server before it calls advanceDay; contested orders resolve here in M3+.
     // 3. Day processing: build postseason games whose inputs are now known; your team practices.
     this.buildPostseason(rep);
+    this.tallyLab(today);
     this.practiceDay(today, rep);
     this.filmDay(today);
     this.trackDevelopment(today);
@@ -1876,34 +1878,191 @@ export class Season {
     u.board_added = [...added, ...fresh.map((p) => p.id)];
   }
 
-  /** Your scouts' week: trips to the prospects on your list (as many as their hours allow), and the regional scouts' pay. */
+  /** Whether a prospect lives near your school (his state, or within 300 miles): a cheaper, shorter trip. */
+  private tripNear(p: Prospect): boolean {
+    const t = this.team(this.state.user_team_id!);
+    return p.home.state === t.venue?.state || (t.venue?.lat != null && miles(p.home, { lat: t.venue.lat, lon: t.venue.lon! }) <= 300);
+  }
+
+  /** Your scouting hours this week (or on a date): the scouting share of the staff's week. */
+  scoutHours(date = this.state.date): number {
+    const st = this.state.recruiting;
+    return st ? Math.round(STAFF_HOURS * timeSplit(st.user.time, this.inSeason(date)).scouting * 10) / 10 : 0;
+  }
+
+  /**
+   * Your scouts' week: trips to the prospects on your list (as many as their hours allow, in list order),
+   * then the regions you put hours into share what's left; the regional scouts' pay. A finished assignment
+   * and every REGION_REPORT_HOURS in a region come back as a report.
+   */
   private scoutingWeek(today: ISODate): void {
     const s = this.state, st = s.recruiting!, me = s.user_team_id;
     if (me == null) return;
-    const u = st.user, t = this.team(me);
+    const u = st.user;
     u.spend += Math.round(u.regions.length * SCOUT_COST.region / 52);
     let hours = STAFF_HOURS * timeSplit(u.time, this.inSeason(today)).scouting;
     const byId = new Map(st.prospects.map((p) => [p.id, p]));
+    const done: Prospect[] = [];
     for (const pid of u.scout) {
       const p = byId.get(pid);
       if (!p) continue;
-      const near = p.home.state === t.venue?.state || (t.venue?.lat != null && miles(p.home, { lat: t.venue.lat, lon: t.venue.lon! }) <= 300);
+      const near = this.tripNear(p);
       const need = near ? TRIP_HOURS.near : TRIP_HOURS.far;
       if (hours < need) break;
       hours -= need;
       u.evals[pid] = (u.evals[pid] ?? 0) + 1;
       u.spend += near ? SCOUT_COST.trip_near : SCOUT_COST.trip_far;
+      const left = u.trips_left?.[pid];
+      if (left != null) {
+        u.trips_left = { ...u.trips_left, [pid]: left - 1 };
+        if (left <= 1) done.push(p);
+      }
     }
-    // Your coaches come across prospects they didn't know: most near home, more where you pay a scout.
+    for (const p of done) this.playerReport(p, today);
+    // The regions share what the trips left, in proportion when it runs short.
+    const want = (Object.entries(u.region_hours ?? {}) as [Region, number][]).filter(([, h]) => h > 0);
+    const total = want.reduce((a, [, h]) => a + h, 0);
+    const scale = total > hours ? hours / Math.max(1e-9, total) : 1;
+    const got = new Map<Region, number>();
+    for (const [r, h] of want) {
+      const g = h * scale;
+      got.set(r, g);
+      const sum = (u.region_done?.[r] ?? 0) + g;
+      u.region_done = { ...u.region_done, [r]: Math.round(sum * 10) / 10 };
+      if (sum >= REGION_REPORT_HOURS) { this.regionReport(r, sum, today); u.region_done = { ...u.region_done, [r]: 0 }; }
+    }
+    // Your coaches come across prospects they didn't know: most near home, more where you pay a scout or put hours.
     const eye = this.myEye()!, zs = this.classZ(today), rng = new Rng(mixSeed(s.seed, today, "found"));
     const effort = Math.sqrt(timeSplit(u.time, this.inSeason(today)).scouting / 0.1);
     const have = new Set(u.found ?? []), found = [...have];
     for (const p of st.prospects) {
       const r = rng.random();
       if (have.has(p.id) || isPublic(p)) continue;
-      if (r < discoverRate(eye, p, zs.get(p.id)!, effort)) found.push(p.id);
+      const reg = got.size ? regionOf(p.home) : null;
+      if (r < discoverRate(eye, p, zs.get(p.id)!, effort, reg ? regionArea(got.get(reg) ?? 0) : 0)) found.push(p.id);
     }
     u.found = found;
+  }
+
+  /**
+   * Your scouts' plan for the week: the hours they have, each assignment (trips left, what a trip takes and
+   * costs) and each region (paid scout, weekly hours, progress to its next report, prospects you know there).
+   */
+  scoutingPlan() {
+    const s = this.state, st = s.recruiting, me = s.user_team_id;
+    if (!st || me == null) return null;
+    const u = st.user, byId = new Map(st.prospects.map((p) => [p.id, p])), known = this.knownProspects();
+    const assignments = u.scout.map((pid) => byId.get(pid)).filter((p): p is Prospect => !!p).map((p) => {
+      const near = this.tripNear(p);
+      return { ...this.prospectView(p), near, trip_hours: near ? TRIP_HOURS.near : TRIP_HOURS.far, trip_cost: near ? SCOUT_COST.trip_near : SCOUT_COST.trip_far,
+        trips_left: u.trips_left?.[p.id] ?? null };
+    });
+    const count = new Map<Region, { known: number; found: number }>();
+    const found = new Set(u.found ?? []);
+    for (const p of st.prospects) {
+      if (!known.has(p.id) || gradeOf(p, s.year) < 0) continue;
+      const r = regionOf(p.home);
+      if (!r) continue;
+      const c = count.get(r) ?? count.set(r, { known: 0, found: 0 }).get(r)!;
+      c.known++;
+      if (found.has(p.id)) c.found++;
+    }
+    const mine = this.team(me), home = regionOf({ state: mine.venue?.state ?? null, lat: mine.venue?.lat ?? 39 });
+    const regions = (Object.keys(REGIONS) as Region[]).map((key) => ({
+      key, name: REGIONS[key].name, home: key === home, paid: u.regions.includes(key), hours: u.region_hours?.[key] ?? 0, done: u.region_done?.[key] ?? 0,
+      known: count.get(key)?.known ?? 0, found: count.get(key)?.found ?? 0,
+    }));
+    return {
+      hours: this.scoutHours(), in_season: this.inSeason(s.date),
+      season_hours: Math.round(STAFF_HOURS * timeSplit(u.time, true).scouting * 10) / 10, offseason_hours: Math.round(STAFF_HOURS * timeSplit(u.time, false).scouting * 10) / 10,
+      trips: assignments.reduce((a, x) => a + x.trip_hours, 0), region_hours: regions.reduce((a, r) => a + r.hours, 0),
+      assignments, regions, report_hours: REGION_REPORT_HOURS, default_trips: DEFAULT_TRIPS, spend: u.spend,
+      costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS }, reports: (u.reports ?? []).length, last_report: u.reports?.[0]?.id ?? 0,
+    };
+  }
+
+  /** A prospect as a line in a report, with your read today. */
+  private scoutLine(p: Prospect, date: ISODate, note: string, fresh: boolean): ScoutLine {
+    const eye = this.myEye()!, st = this.state.recruiting!;
+    const r = schoolRead(eye, p, date, this.state.seed, looksOf(p, eye.id, st.user.evals[p.id] ?? 0));
+    const cap = (x: number) => Math.round(Math.max(40, Math.min(99, x)));
+    return {
+      pid: p.id, name: `${p.first} ${p.last}`, pos: p.pos, cls: p.cls, city: p.home.city ?? null, state: p.home.state ?? null,
+      est: cap(r.est), lo: cap(r.est - 1.65 * r.sd), hi: cap(r.est + 1.65 * r.sd),
+      stars: p.svc ? starsOf(p.svc.r) : null, rank: p.svc?.rank ?? null, note, fresh, commit: p.commit?.team ?? null,
+    };
+  }
+
+  /** Reports stay with your recruiting (not the league's news, which every coach in a league reads). */
+  private fileReport(r: Omit<ScoutReport, "id">): void {
+    const u = this.state.recruiting!.user, id = u.next_report ?? 1;
+    u.next_report = id + 1;
+    u.reports = [{ id, ...r }, ...(u.reports ?? [])].slice(0, 60);
+  }
+
+  /** Your scouts are back from their trips to see a prospect: what they saw, and how your read moved. */
+  private playerReport(p: Prospect, today: ISODate): void {
+    const u = this.state.recruiting!.user, me = this.state.user_team_id!;
+    const from = u.scout_from?.[p.id], trips = u.evals[p.id] ?? 0;
+    u.scout = u.scout.filter((x) => x !== p.id);
+    const { [p.id]: _l, ...left } = u.trips_left ?? {};
+    const { [p.id]: _f, ...froms } = u.scout_from ?? {};
+    u.trips_left = left; u.scout_from = froms;
+    const svc = publicRead(p, today, this.state.seed).svc;
+    const now = this.scoutLine(p, today, "", false);
+    const before = from ? { est: Math.round(from.est), lo: Math.round(from.est - 1.65 * from.sd), hi: Math.round(from.est + 1.65 * from.sd) } : undefined;
+    const notes: string[] = [];
+    const move = before ? now.est - before.est : 0;
+    if (before) notes.push(move >= 2 ? `Better than we thought: up ${move} to ${now.est} (${now.lo}-${now.hi}), from ${before.est} (${before.lo}-${before.hi}).`
+      : move <= -2 ? `Not what we hoped: down ${-move} to ${now.est} (${now.lo}-${now.hi}), from ${before.est} (${before.lo}-${before.hi}).`
+      : `About what we thought: ${now.est} (${now.lo}-${now.hi}), from ${before.est} (${before.lo}-${before.hi}).`);
+    else notes.push(`We have him at ${now.est} (${now.lo}-${now.hi}).`);
+    if (svc) {
+      const gap = now.est - svc.est;
+      notes.push(gap >= 3 ? `We like him more than the service does (${now.stars}-star, No. ${now.rank}).` : gap <= -3 ? `The service (${now.stars}-star, No. ${now.rank}) has him higher than we do.` : `In line with the service (${now.stars}-star, No. ${now.rank}).`);
+    } else notes.push("The service doesn't rate him.");
+    const hs = this.hsView(p);
+    if (hs?.summary) notes.push(`${hs.year} ${hs.level === "jv" ? "JV" : "varsity"}: ${hs.summary}.`);
+    if (p.commit && p.commit.team !== me) notes.push(`Committed to ${this.team(p.commit.team).school}${p.commit.signed ? " (signed)" : ""}.`);
+    now.note = move >= 2 ? "Up" : move <= -2 ? "Down" : "Steady";
+    this.fileReport({ date: today, kind: "player", title: `Scouting report: ${p.pos} ${p.first} ${p.last}`, summary: notes.join(" "), lines: [now], before, trips });
+  }
+
+  /**
+   * Your scouts' report on a region they worked: the best prospects they saw there (sophomores and up, not
+   * committed elsewhere, not on an earlier report from there), then up to three nobody rates or the service
+   * underrates. They see most of the ones your staff knows and turn up some it didn't, the best most often;
+   * those join the prospects your staff knows.
+   */
+  private regionReport(region: Region, hours: number, today: ISODate): void {
+    const s = this.state, st = s.recruiting!, u = st.user;
+    const known = this.knownProspects(), zs = this.classZ(today), rng = new Rng(mixSeed(s.seed, today, region, "region-report"));
+    const seen: { p: Prospect; fresh: boolean }[] = [];
+    for (const p of st.prospects) {
+      if (regionOf(p.home) !== region || gradeOf(p, s.year) < 1 || p.commit?.signed) continue;
+      const r = rng.random();
+      if (known.has(p.id)) seen.push({ p, fresh: false });
+      else if (r < reportSees(hours, zs.get(p.id)!)) seen.push({ p, fresh: true });
+    }
+    const fresh = seen.filter((x) => x.fresh).map((x) => x.p.id);
+    if (fresh.length) u.found = [...(u.found ?? []), ...fresh];
+    const rows = seen.map(({ p, fresh }) => ({ p, fresh, line: this.scoutLine(p, today, "", fresh), svc: publicRead(p, today, s.seed).svc }));
+    rows.sort((a, b) => b.line.est - a.line.est || a.p.id - b.p.id);
+    const note = (x: typeof rows[number]) => [x.fresh ? "New to us" : "", !x.svc ? "Unrated" : x.line.est - x.svc.est >= 3 ? `Better than his ${x.line.stars} stars` : "",
+      x.p.commit && x.p.commit.team !== s.user_team_id ? `Committed to ${this.team(x.p.commit.team).school}` : x.p.commit ? "Committed to us" : ""].filter(Boolean).join(" · ");
+    // The ones you can still recruit (or yours already) and haven't had a report on from here yet: the best,
+    // then the ones nobody rates or the service underrates.
+    const named = new Set((u.reports ?? []).filter((r) => r.region === region).flatMap((r) => r.lines.map((x) => x.pid)));
+    const open = rows.filter((x) => (!x.p.commit || x.p.commit.team === s.user_team_id) && !named.has(x.p.id));
+    const best = open.slice(0, 6);
+    const radar = open.filter((x) => !best.includes(x) && (!x.svc || x.line.est - x.svc.est >= 3)).slice(0, 3);
+    const lines = [...best, ...radar].map((x) => ({ ...x.line, note: note(x) }));
+    const name = REGIONS[region].name;
+    const summary = !lines.length ? `${Math.round(hours)} hours in ${name}: nobody new worth a look.`
+      : `${Math.round(hours)} hours in ${name}. Best seen: ${best.slice(0, 3).map((x) => `${x.p.pos} ${x.p.first} ${x.p.last} (${x.line.est})`).join(", ")}.`
+        + (radar.length ? ` Under the radar: ${radar.map((x) => `${x.p.pos} ${x.p.first} ${x.p.last} (${x.line.est})`).join(", ")}.` : "")
+        + (fresh.length ? ` ${fresh.length} prospect${fresh.length === 1 ? "" : "s"} new to us.` : "");
+    this.fileReport({ date: today, kind: "region", region, title: `Scouting report: ${name}`, summary, lines, hours: Math.round(hours) });
   }
 
   private recruitNews(ev: RecruitEvent[], date: ISODate, rep: DayReport): void {
@@ -2123,10 +2282,32 @@ export class Season {
       if (p.commit?.team === me) p.commit = null;
     }
   }
-  setScoutTarget(pid: number, on: boolean): void {
+  /**
+   * Send your scouts to see a prospect `trips` times (then they report back), or call them off. Without a count
+   * they go every week. One already assigned keeps his place (or moves to `at`) and the read his assignment started from.
+   */
+  setScoutTarget(pid: number, on: boolean, trips?: number, at?: number): void {
+    const u = this.userRecruiting(), p = this.prospect(pid);
+    const had = u.scout.includes(pid);
+    const rest = u.scout.filter((x) => x !== pid);
+    if (on) rest.splice(at != null ? Math.max(0, Math.min(rest.length, at)) : had ? u.scout.indexOf(pid) : rest.length, 0, pid);
+    u.scout = rest;
+    const { [pid]: _l, ...left } = u.trips_left ?? {};
+    const { [pid]: _f, ...from } = u.scout_from ?? {};
+    u.trips_left = left;
+    u.scout_from = on && had && _f ? { ...from, [pid]: _f } : from;
+    if (on && trips != null) {
+      u.trips_left[pid] = Math.max(1, Math.round(trips));
+      const eye = this.myEye();
+      if (eye && !u.scout_from[pid]) { const r = schoolRead(eye, p, this.state.date, this.state.seed, looksOf(p, eye.id, u.evals[pid] ?? 0)); u.scout_from[pid] = { est: r.est, sd: r.sd }; }
+    }
+  }
+  /** Your scouts' weekly hours on a region (0 takes them off it). */
+  setRegionHours(region: Region, hours: number): void {
     const u = this.userRecruiting();
-    this.prospect(pid);
-    u.scout = on ? [...u.scout.filter((x) => x !== pid), pid] : u.scout.filter((x) => x !== pid);
+    const h = { ...u.region_hours };
+    if (hours > 0) h[region] = hours; else delete h[region];
+    u.region_hours = h;
   }
   setScoutRegion(region: Region, on: boolean): void {
     const u = this.userRecruiting();
@@ -2301,12 +2482,13 @@ export class Season {
     // FCS rosters are generated filler, with nothing true for scouts to miss; they play their ratings.
     if (!roster.length || !s.hidden_ctx || this.teamById.get(teamId)?.level === "fcs") return null;
     const lab = teamId === s.user_team_id ? s.lab : undefined;
+    const pace = lab ? this.labPace(date) : 1;
     const mood = s.team_mood?.[teamId];
-    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? JSON.stringify(lab) : ""}|${mood ? `${mood.off},${mood.def}` : ""}`;
+    const key = `${date}|${s.morale?.[teamId] ?? 0}|${lab ? `${pace}|${JSON.stringify(lab)}` : ""}|${mood ? `${mood.off},${mood.def}` : ""}`;
     const c = this.hiddenCache.get(teamId);
     if (c && c.key === key) return c.h;
     const h = hiddenTeam({ seed: s.seed, year: s.year, team_id: teamId, date, ctx: this.teamContext(teamId), roster,
-      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, mood, schemeFit: this.schemeFits(teamId) });
+      starters: this.openingStarters(teamId), morale: s.morale?.[teamId], lab, labPace: pace, mood, schemeFit: this.schemeFits(teamId) });
     this.hiddenCache.set(teamId, { key, h });
     return h;
   }
@@ -2339,6 +2521,23 @@ export class Season {
     }
   }
 
+  /** How fast your development plans work on a date: your staff's development time in season (staff.ts labPace), 1 out of season. */
+  labPace(date = this.state.date): number {
+    const st = this.state.recruiting;
+    if (!st || !this.inSeason(date)) return 1;
+    return labPace(timeSplit(st.user.time, true).develop);
+  }
+
+  /** Each morning, the work your development plans did since the last tally, at the pace the staff gave them. */
+  private tallyLab(today: ISODate): void {
+    const s = this.state;
+    if (!s.lab || !Object.keys(s.lab).length) return;
+    const pace = this.labPace(today);
+    const lab: Record<number, LabPlan> = {};
+    for (const [pid, l] of Object.entries(s.lab)) lab[Number(pid)] = today > l.from ? { ...l, work: Math.round(labWork(l, today, pace) * 1000) / 1000, upto: today } : l;
+    s.lab = lab;
+  }
+
   /** Put a player on an individual development plan (or take him off with null). */
   setLab(pid: number, area: LabArea | null): void {
     const s = this.state, me = s.user_team_id;
@@ -2348,7 +2547,7 @@ export class Season {
     if (!area) delete lab[pid];
     else {
       if (!lab[pid] && Object.keys(lab).length >= LAB_SLOTS) throw new Error(`your staff can run ${LAB_SLOTS} development plans at once`);
-      lab[pid] = { area, from: lab[pid]?.area === area ? lab[pid].from : s.date };
+      lab[pid] = lab[pid]?.area === area ? lab[pid] : { area, from: s.date };
     }
     s.lab = lab;
   }
@@ -2445,16 +2644,17 @@ export class Season {
     // Starters on offense and defense (a lineman who long-snaps is not the line's starter for that).
     const dc = this.depthChart(teamId);
     const starters = new Set([...OFFENSE_SLOTS, ...DEFENSE_SLOTS].map((k) => dc[k]?.[0]).filter((x) => x != null));
+    const pace = this.labPace(date);
     const players = this.roster(teamId).map((p) => {
       const plan = teamId === s.user_team_id ? s.lab?.[p.id] : undefined;
       const exp = hiddenPlayer(s.seed, s.year, p).expected;
       const r1 = (x: number) => Math.round(x * 10) / 10;
       const so_far = now.get(p.id) ?? 0, gained = r1(so_far - base(p.id));
       // What the staff planned for this phase: his share of a normal year's growth, plus his plan's work.
-      const target = r1((pEnd - pBase) * exp + labGain(plan, phase.end) - labGain(plan, baseDate));
-      const by_now = r1((pNow - pBase) * exp + labGain(plan, date) - labGain(plan, baseDate));
+      const target = r1((pEnd - pBase) * exp + labGain(plan, phase.end, pace) - labGain(plan, baseDate, pace));
+      const by_now = r1((pNow - pBase) * exp + labGain(plan, date, pace) - labGain(plan, baseDate, pace));
       // In season: his read now against a few Mondays ago, less what a normal week adds.
-      const trend = week && week.read[p.id] != null ? r1(so_far - week.read[p.id] - (pNow - progress(s.year, week.date)) * exp - labGain(plan, date) + labGain(plan, week.date)) : null;
+      const trend = week && week.read[p.id] != null ? r1(so_far - week.read[p.id] - (pNow - progress(s.year, week.date)) * exp - labGain(plan, date, pace) + labGain(plan, week.date, pace)) : null;
       return {
         pid: p.id, name: playerName(p), pos: p.pos, class: p.class, years: p.years, ovr: p.ovr, starter: starters.has(p.id), gp: s.player_stats?.[p.id]?.gp ?? 0,
         plan: plan ?? null, focus: devFocus(p, plan), so_far, gained, target, by_now, trend,
