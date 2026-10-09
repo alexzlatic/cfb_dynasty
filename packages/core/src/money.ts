@@ -84,6 +84,18 @@ export function eligibilityLeft(p: Pick<RatedPlayer, "years">): number {
   return Math.max(1, Math.min(4, 5 - p.years));
 }
 
+/**
+ * A player's eligibility as the rollover plays it: four seasons, and a fifth (a redshirt year) that some
+ * players stay for; under the Protect College Sports Act five seasons in five years.
+ *  year: which season in college this is (1 = first); left: seasons he can still play, this one included;
+ *  fifth: a fifth year may follow the four.
+ */
+export function eligibilityYears(years: number, pcsa: boolean): { year: number; left: number; fifth: boolean } {
+  const y = Math.max(0, Math.floor(years));
+  if (pcsa) return { year: y + 1, left: Math.max(1, 5 - y), fifth: false };
+  return { year: y + 1, left: Math.max(1, 4 - y), fifth: y < 4 };
+}
+
 
 /**
  * Football's revenue-share budget for a school this year. Every power-conference school (and Notre Dame)

@@ -1,7 +1,7 @@
 import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role,
+  Season, LiveGame, playerName, POSITIONS, AREAS, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -62,7 +62,9 @@ export type Action =
   | { type: "hire_coach"; payload: { role: Role; coach_id: number } }
   | { type: "fire_coach"; payload: { role: Role } }
   /** Take a job offer, or turn it down. */
-  | { type: "answer_offer"; payload: { team_id: number; accept: boolean } };
+  | { type: "answer_offer"; payload: { team_id: number; accept: boolean } }
+  /** Mark inbox messages read or unread (ids null = every message). */
+  | { type: "inbox_read"; payload: { ids: string[] | null; read: boolean } };
 
 export interface LoggedAction { seq: number; day: string; user: string | null; type: Action["type"]; payload: unknown; created_at: string }
 
@@ -156,6 +158,7 @@ export class League {
       events: all<CalEvent>("SELECT data FROM events WHERE season IS NULL ORDER BY date, id"),
       polls: all("SELECT data FROM polls WHERE season IS NULL ORDER BY id"),
       news: all("SELECT data FROM news WHERE season IS NULL ORDER BY rowid"),
+      inbox: all("SELECT data FROM inbox WHERE season IS NULL ORDER BY rowid"),
     };
     // Anything saved that the list above doesn't name comes back as it was.
     for (const k of META_KEYS) if (meta[k] != null && (state as unknown as Record<string, unknown>)[k] === undefined) (state as unknown as Record<string, unknown>)[k] = meta[k];
@@ -297,6 +300,11 @@ export class League {
       if (role !== "OC" && role !== "DC" && role !== "STC") throw new Error("you hire and fire coordinators (OC, DC, STC)");
       a = a.type === "hire_coach" ? { type: a.type, payload: { role, coach_id: Number(a.payload.coach_id) } } : { type: a.type, payload: { role } };
     }
+    if (a.type === "inbox_read") {
+      const ids = a.payload?.ids;
+      if (ids != null && (!Array.isArray(ids) || ids.length > 5000 || ids.some((x) => typeof x !== "string"))) throw new Error("ids must be a list of message ids");
+      a = { type: a.type, payload: { ids: ids ?? null, read: a.payload?.read !== false } };
+    }
     if (a.type === "answer_offer") a = { type: a.type, payload: { team_id: Number(a.payload?.team_id), accept: !!a.payload?.accept } };
     if (a.type === "talk_player" || a.type === "portal_pitch") a = { type: a.type, payload: { pid: Number(a.payload?.pid) } };
     if (a.type === "renewal_offer" || a.type === "portal_offer") {
@@ -375,11 +383,13 @@ export class League {
       if (a.type === "hire_coach") this.season.hireCoach(a.payload.role, a.payload.coach_id);
       if (a.type === "fire_coach") this.season.fireCoach(a.payload.role);
       if (a.type === "answer_offer") this.season.answerOffer(a.payload.team_id, a.payload.accept);
+      if (a.type === "inbox_read") this.markRead(a.payload.ids, a.payload.read);
       if (a.type === "sim") {
         // A sim after the season has ended starts the next one.
         if (this.season.done) this.nextSeason();
         reports = runSim(this.season, a.payload, (r) => this.persistDay(r));
       }
+      this.writeInbox();
       this.writeMeta();
       return l;
     });
@@ -411,6 +421,8 @@ export class League {
     db.prepare("UPDATE games SET season = ? WHERE season IS NULL").run(old.year);
     db.prepare("UPDATE polls SET season = ? WHERE season IS NULL").run(old.year);
     db.prepare("UPDATE news SET season = ? WHERE season IS NULL").run(old.year);
+    this.writeInbox();
+    db.prepare("UPDATE inbox SET season = ? WHERE season IS NULL").run(old.year);
     const keep = db.prepare("SELECT id FROM events WHERE season IS NULL").all() as { id: string }[];
     const tag = db.prepare("UPDATE events SET season = ? WHERE id = ?");
     for (const r of keep) if (!ahead.has(r.id)) tag.run(old.year, r.id);
@@ -504,6 +516,41 @@ export class League {
       }
       st.run(k, j(s[k] ?? null));
     }
+  }
+
+  /** Messages saved so far this season (the inbox is append-only within a season). */
+  private savedInbox: { season: Season; n: number } | null = null;
+
+  /** New inbox messages into the file. */
+  private writeInbox(): void {
+    const box = this.season.state.inbox ?? [];
+    if (this.savedInbox?.season !== this.season) {
+      this.savedInbox = { season: this.season, n: (this.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE season IS NULL").get() as { n: number }).n };
+    }
+    if (this.savedInbox.n >= box.length) return;
+    const st = this.db.prepare("INSERT OR IGNORE INTO inbox (id, date, category, data) VALUES (?, ?, ?, ?)");
+    for (const m of box.slice(this.savedInbox.n)) st.run(m.id, m.date, m.category, j(m));
+    this.savedInbox.n = box.length;
+  }
+
+  private markRead(ids: string[] | null, read: boolean): void {
+    this.writeInbox();
+    if (ids == null) { this.db.prepare("UPDATE inbox SET read = ?").run(read ? 1 : 0); return; }
+    const st = this.db.prepare("UPDATE inbox SET read = ? WHERE id = ?");
+    for (const id of ids) st.run(read ? 1 : 0, id);
+  }
+
+  /** Inbox messages, newest first, with whether each has been read; `year` reads a past season's. */
+  inbox(opts: { year?: number; category?: string; unread?: boolean; limit?: number } = {}): { messages: (InboxMessage & { read: boolean })[]; unread: number } {
+    this.writeInbox();
+    const s = this.season.state, past = opts.year != null && opts.year !== s.year;
+    const where = [past ? "season = ?" : "season IS NULL"], args: (string | number)[] = past ? [opts.year!] : [];
+    if (opts.category) { where.push("category = ?"); args.push(opts.category); }
+    if (opts.unread) where.push("read = 0");
+    const rows = this.db.prepare(`SELECT read, data FROM inbox WHERE ${where.join(" AND ")} ORDER BY date DESC, rowid DESC LIMIT ?`)
+      .all(...args, Math.max(1, Math.min(opts.limit ?? 500, 5000))) as { read: number; data: string }[];
+    const unread = (this.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE read = 0 AND season IS NULL").get() as { n: number }).n;
+    return { messages: rows.map((r) => ({ ...(JSON.parse(r.data) as InboxMessage), read: !!r.read })), unread };
   }
 
   private persistDay(r: DayReport): void {
