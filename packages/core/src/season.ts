@@ -11,7 +11,7 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defS
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
-import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, type Departure, type FreshModel } from "./rollover.ts";
+import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, starterMedians, type Departure, type FreshModel } from "./rollover.ts";
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
@@ -146,6 +146,8 @@ export interface SeasonState {
   requests?: { date: ISODate; area: Area; approved: boolean; reason: string }[];
   /** How generated freshmen rate (measured from the opening rosters at the first rollover), and the next new player's id. */
   fresh_model?: FreshModel;
+  /** Each position's median FBS starter in the league's first season, which rollover keeps fixed (rollover.ts). */
+  rating_anchor?: Partial<Record<Pos, number>>;
   next_player_id?: number;
   /** Every season played before this one, oldest first. */
   past?: SeasonSummary[];
@@ -431,6 +433,7 @@ export class Season {
     if (!this.done) throw new Error("the season isn't over");
     const players = this.seed.players ?? {};
     const model = s.fresh_model ?? freshModel(players);
+    const anchor = s.rating_anchor ?? starterMedians(this.teams, players);
     // Each player's development over the whole season (for teams without hidden scores, his own draw).
     const growth = (tid: number) => this.hidden(tid, `${y}-12-31`)?.growth ?? new Map(this.roster(tid).map((p) => [p.id, hiddenPlayer(s.seed, y, p).dev]));
     const gp = Object.fromEntries(Object.entries(s.player_stats ?? {}).map(([pid, st]) => [pid, st.gp]));
@@ -453,7 +456,7 @@ export class Season {
       } else if (e.status !== "committed") gone.add(e.pid);
     }
     const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
-      transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa,
+      transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa, anchor,
       rate: (tid) => devRate(s.facilities?.[tid]) * devSkillRate(staffSkill(this.staff(tid), "development")) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     // Conferences for next season (moves, folds, new deals), and conference schedules for any that changed.
@@ -492,7 +495,7 @@ export class Season {
       polls: [], news: [], power: { ...power }, preseason_power: { ...power }, poll_memory: {}, conf_champs: {}, playoff: null, champion: null,
       next_game_id: Math.max(s.next_game_id + base.schedule.length, ...schedule.map((g) => g.id + 1)), writers: s.writers, stars: {},
       player_morale: Object.fromEntries(Object.entries(s.player_morale ?? {}).filter(([pid]) => kept.has(Number(pid)))),
-      requests: s.requests, fresh_model: model, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
+      requests: s.requests, fresh_model: model, rating_anchor: anchor, next_player_id: turn.next_player_id, past: [...(s.past ?? []), this.summary()],
       // Everyone leaving for the pros or out of eligibility goes into April's draft.
       draft_pool: turn.left.filter((d) => d.reason === "nfl" || d.reason === "graduated").map((d) => ({ pid: d.pid, team_id: d.team_id, name: d.name, pos: d.pos, ovr: d.ovr,
         potential: d.potential ?? d.ovr, years: (d.years ?? 3) + 1, early: !!declared?.has(d.pid), tier: this.tierOf(d.team_id) }))
