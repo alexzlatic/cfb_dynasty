@@ -7,7 +7,7 @@ import {
 import { Caller, type UserCall } from "./calls.ts";
 import { DEFAULT_PLAN, DEFAULT_PRACTICE, PRACTICE_DAYS, PRACTICE_INJURY, addPractice, emptyPrep, freshness, planRatings, prepEdge, type GamePlan, type PracticePlan, type Prep } from "./plan.ts";
 import { ATTRS, DEFENSE_SLOTS, OFFENSE_SLOTS, POSITIONS, fromZ, playerName, z as zOf, type Pos, type RatedPlayer } from "./players.ts";
-import { AA_SLOTS, DEF_POS, OFF_POS, addLine, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
+import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defScore, kickScore, lineText, offScore, type Award, type PlayerSeason, type StatLine, type WeekLine } from "./awards.ts";
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
@@ -96,6 +96,8 @@ export interface SeasonState {
   prep?: Prep | null;
   /** Season stats by player id, the best game each player has had since the last players of the week, and every award given. */
   player_stats?: Record<number, PlayerSeason>;
+  /** Season totals by team id: its box scores and its opponents'. */
+  team_stats?: Record<number, TeamSeason>;
   award_week?: Record<number, WeekLine>;
   awards?: Award[];
   /** Your players being redshirted: each can play in up to four games and then sits. */
@@ -290,6 +292,7 @@ export class Season {
     state.depth ??= {};
     state.injuries ??= [];
     state.player_stats ??= {};
+    state.team_stats ??= {};
     state.award_week ??= {};
     state.awards ??= [];
     state.redshirts ??= [];
@@ -3137,6 +3140,8 @@ export class Season {
         costs_season: !!s.settings.pcsa && (s.moves?.[e.pid] ?? 0) >= 1,
         offers_list: e.offers.map((o) => ({ team_id: o.team_id, amount: o.team_id === me ? o.amount : null, years: o.years, date: o.date })),
         pitched_today: (e as PortalEntry & { pitched?: string }).pitched === s.date,
+        /** His stats this season (the season he's leaving). */
+        stats: s.player_stats?.[e.pid] ?? null,
       };
   }
 
@@ -3240,6 +3245,12 @@ export class Season {
   recordStats(g: Game, d: GameDetail, week = true): void {
     const s = this.state;
     const homeWon = g.home_score! > g.away_score!;
+    const ts = (s.team_stats ??= {});
+    const team = (id: number) => (ts[id] ??= { gp: 0, w: 0, l: 0, pf: 0, pa: 0, off: {}, def: {} });
+    if (d.home_box && d.away_box) {
+      addTeamGame(team(g.home_id), g.home_score!, g.away_score!, d.home_box, d.away_box);
+      addTeamGame(team(g.away_id), g.away_score!, g.home_score!, d.away_box, d.home_box);
+    }
     const lines = new Map<number, { team_id: number; line: StatLine }>();
     const get = (pid: number, team: number) => {
       let x = lines.get(pid);
@@ -3276,6 +3287,7 @@ export class Season {
   rebuildStats(details: GameDetail[]): void {
     const s = this.state;
     s.player_stats = {};
+    s.team_stats = {};
     s.award_week = {};
     const lastPoll = s.events.filter((e) => e.type === "ap_poll" && e.status === "done").map((e) => e.date).sort().pop() ?? "";
     const byId = new Map(s.games.map((g) => [g.id, g]));

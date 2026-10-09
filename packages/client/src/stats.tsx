@@ -90,6 +90,16 @@ export function statValue(col: StatCol, l: Line, perGame = false): number | null
   return perGame && col.count ? (l.gp ? x / l.gp : null) : x;
 }
 
+/** Add lines together (longest plays keep the longest). */
+export function sumLines<T extends Line>(lines: T[]): Line {
+  const o: Record<string, number> = {};
+  for (const l of lines) for (const [k, x] of Object.entries(l)) {
+    if (typeof x !== "number" || k === "team_id" || k === "year" || k === "pid") continue;
+    o[k] = k.endsWith("_long") ? Math.max(o[k] ?? 0, x) : (o[k] ?? 0) + x;
+  }
+  return o;
+}
+
 export function fmtStat(col: StatCol, x: number | null, perGame = false): string {
   if (x == null) return "-";
   const dp = perGame && col.count ? 1 : col.dp ?? 0;
@@ -130,15 +140,16 @@ export function CatTabs({ cats, cat, setCat, perGame, setPerGame }: {
  * A sortable stats table for one category: `lead` columns identify the row (player, school, stars...), then the
  * category's stats. Rows with nothing in the category drop out; the table opens sorted by the category's lead stat.
  */
-export function StatsTable<T>({ rows, line, cat, lead, rowKey, rowClass, perGame = false, limit = 200, rank = true, gp = true, empty = "No stats yet." }: {
+export function StatsTable<T>({ rows, line, cat, lead, rowKey, rowClass, perGame = false, limit = 200, rank = true, gp = true, keepOrder = false, empty = "No stats yet." }: {
   rows: T[]; line: (r: T) => Line; cat: StatCat; lead: Col<T>[]; rowKey: (r: T) => React.Key; rowClass?: (r: T) => string | undefined;
-  perGame?: boolean; limit?: number; rank?: boolean; gp?: boolean; empty?: string;
+  perGame?: boolean; limit?: number; rank?: boolean; gp?: boolean; /** keep the incoming order (a career by season) instead of leading with the best */ keepOrder?: boolean; empty?: string;
 }) {
   const [more, setMore] = useState(false);
   const leadCol = cat.cols.find((x) => x.key === cat.lead)!;
-  const shown = useMemo(() => rows.filter((x) => cat.has(line(x)))
-    .map((x) => ({ x, k: statValue(leadCol, line(x), perGame) ?? -Infinity }))
-    .sort((a, b) => b.k - a.k).map((y) => y.x), [rows, cat, perGame]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => keepOrder ? rows.filter((x) => cat.has(line(x))) : rows.filter((x) => cat.has(line(x)))
+    .map((x) => ({ x, k: statValue(leadCol, line(x), perGame) }))
+    // Best first by the lead stat (lowest first when less is better); rows without it go last.
+    .sort((a, b) => (a.k == null ? 1 : 0) - (b.k == null ? 1 : 0) || (leadCol.asc ? a.k! - b.k! : b.k! - a.k!)).map((y) => y.x), [rows, cat, perGame, keepOrder]); // eslint-disable-line react-hooks/exhaustive-deps
   const cols: Col<T>[] = [
     ...(rank ? [{ key: "_rank", label: "#", className: "num muted", cell: (_: T, i: number) => i + 1 } as Col<T>] : []),
     ...lead, ...statCols(cat, line, { perGame, gp }),
@@ -187,4 +198,114 @@ export function StatFilters({ f, set, positions, classes = ["FR", "SO", "JR", "S
       {children}
     </div>
   );
+}
+
+// ---- teams ----------------------------------------------------------------------------------------
+
+/**
+ * A team's season as one flat line: `gp`, `w`, `l`, `pf`, `pa`, its box score totals as `o_<field>` and its
+ * opponents' as `d_<field>` (so the same columns read offense or defense).
+ */
+export function teamLine(t: { gp: number; w: number; l: number; pf: number; pa: number; off: object; def: object }): Line {
+  const o: Record<string, number> = { gp: t.gp, w: t.w, l: t.l, pf: t.pf, pa: t.pa };
+  for (const [k, x] of Object.entries(t.off)) o["o_" + k] = x as number;
+  for (const [k, x] of Object.entries(t.def)) o["d_" + k] = x as number;
+  return o;
+}
+
+const yds = (l: Line, s: string) => v(l, s + "rush_yards") + v(l, s + "pass_yards") - v(l, s + "sack_yards");
+const plays = (l: Line, s: string) => v(l, s + "rush_att") + v(l, s + "pass_att") + v(l, s + "sacks_taken");
+
+/** Offense (s = "o_") or the defense, read from what opponents did (s = "d_"; less is better). */
+function sideCols(s: "o_" | "d_"): StatCol[] {
+  const def = s === "d_", lo = { asc: def };
+  return [
+    c(s + "pts", def ? "PA" : "PF", def ? "Points allowed" : "Points scored", { get: (l) => v(l, def ? "pa" : "pf"), ...lo }),
+    c(s + "plays", "Plays", "Scrimmage plays (runs, passes, sacks)", { get: (l) => plays(l, s) }),
+    c(s + "yds", "Yds", "Total yards", { get: (l) => yds(l, s), ...lo }),
+    r(s + "ypp", "Y/P", (l) => ratio(yds(l, s), plays(l, s)), "Yards per play", { dp: 2, ...lo }),
+    c(s + "rush_att", "Rush", "Rushing attempts"),
+    c(s + "rush_yards", "RYds", "Rushing yards", lo),
+    r(s + "ypc", "YPC", (l) => ratio(v(l, s + "rush_yards"), v(l, s + "rush_att")), "Yards per carry", lo),
+    c(s + "completions", "Cmp", "Completions", lo), c(s + "pass_att", "Att", "Pass attempts"),
+    r(s + "cmp_pct", "Pct", (l) => ratio(100 * v(l, s + "completions"), v(l, s + "pass_att")), "Completion percentage", lo),
+    c(s + "net_pass", "PYds", "Net passing yards (less sack yards)", { get: (l) => v(l, s + "pass_yards") - v(l, s + "sack_yards"), ...lo }),
+    r(s + "ypa", "Y/A", (l) => ratio(v(l, s + "pass_yards"), v(l, s + "pass_att")), "Yards per pass attempt", lo),
+    c(s + "first_downs", "1st", "First downs", lo),
+    r(s + "success", "Succ%", (l) => ratio(100 * v(l, s + "success"), plays(l, s)), "Success rate: plays that gain enough to stay on schedule", { pct: true, ...lo }),
+    c(s + "explosive", "Expl", "Explosive plays (runs of 12+, passes of 20+)", lo),
+    c(s + "tds", "TD", "Touchdowns", lo),
+  ];
+}
+const pctOf = (key: string, label: string, made: string, att: string, title: string, asc = false) => r(key, label, (l) => ratio(100 * v(l, made), v(l, att)), title, { pct: true, asc });
+
+export const TEAM_CATS: StatCat[] = [
+  { key: "offense", label: "Offense", lead: "o_yds", has: () => true, cols: sideCols("o_") },
+  { key: "defense", label: "Defense", lead: "d_yds", has: () => true, cols: sideCols("d_") },
+  {
+    key: "scoring", label: "Scoring", lead: "margin", has: () => true,
+    cols: [c("w", "W", "Wins", { count: false }), c("l", "L", "Losses", { asc: true, count: false }), c("pf", "PF", "Points scored"), c("pa", "PA", "Points allowed", { asc: true }),
+      c("margin", "Diff", "Point differential", { get: (l) => v(l, "pf") - v(l, "pa") }), c("o_tds", "TD", "Touchdowns"),
+      c("o_fgm", "FG", "Field goals made"), c("o_def_tds", "DefTD", "Defensive touchdowns"), c("o_return_tds", "RetTD", "Kick and punt return touchdowns"),
+      c("d_tds", "TD allowed", "Touchdowns allowed", { asc: true })],
+  },
+  {
+    key: "downs", label: "Situational", lead: "third_pct", has: () => true,
+    cols: [c("o_third_conv", "3rd", "Third downs converted"), c("o_third_att", "3rdAtt", "Third downs"),
+      pctOf("third_pct", "3rd%", "o_third_conv", "o_third_att", "Third-down conversion rate"),
+      pctOf("fourth_pct", "4th%", "o_fourth_conv", "o_fourth_att", "Fourth-down conversion rate"), c("o_fourth_att", "4thAtt", "Fourth downs gone for"),
+      c("o_red_zone_trips", "RZ", "Red zone trips"), pctOf("rz_pct", "RZ TD%", "o_red_zone_tds", "o_red_zone_trips", "Red zone trips ending in a touchdown"),
+      pctOf("d_third_pct", "Opp 3rd%", "d_third_conv", "d_third_att", "Opponents' third-down conversion rate", true),
+      pctOf("d_rz_pct", "Opp RZ TD%", "d_red_zone_tds", "d_red_zone_trips", "Opponents' red zone touchdown rate", true),
+      r("top", "TOP", (l) => ratio(v(l, "o_top_seconds") / 60, v(l, "gp") || 0), "Time of possession per game (minutes)")],
+  },
+  {
+    key: "turnovers", label: "Turnovers", lead: "to_margin", has: () => true,
+    cols: [c("o_takeaways", "Take", "Takeaways"), c("o_turnovers", "Give", "Giveaways", { asc: true }),
+      c("to_margin", "Margin", "Turnover margin", { get: (l) => v(l, "o_takeaways") - v(l, "o_turnovers") }),
+      c("o_ints_thrown", "Int", "Interceptions thrown", { asc: true }), c("d_ints_thrown", "DefInt", "Interceptions made"),
+      c("fum", "FumL", "Fumbles lost", { get: (l) => Math.max(0, v(l, "o_turnovers") - v(l, "o_ints_thrown")), asc: true }),
+      c("o_sacks", "Sacks", "Sacks made"), c("o_sacks_taken", "SacksA", "Sacks allowed", { asc: true })],
+  },
+  {
+    key: "special", label: "Special teams", lead: "fg_pct", has: () => true,
+    cols: [c("o_fgm", "FGM", "Field goals made"), c("o_fga", "FGA", "Field goals tried"), pctOf("fg_pct", "FG%", "o_fgm", "o_fga", "Field goal percentage"),
+      c("o_xpm", "XPM", "Extra points made"), pctOf("xp_pct", "XP%", "o_xpm", "o_xpa", "Extra point percentage"),
+      c("o_two_pt_made", "2PT", "Two-point conversions"), c("o_punts", "Punts", "Punts", { asc: true }),
+      r("punt_avg", "Avg", (l) => ratio(v(l, "o_punt_yards"), v(l, "o_punts")), "Yards per punt"),
+      c("o_kick_return_yards", "KR yds", "Kickoff return yards"), c("o_punt_return_yards", "PR yds", "Punt return yards"), c("o_return_tds", "RetTD", "Return touchdowns")],
+  },
+  {
+    key: "penalties", label: "Penalties", lead: "o_penalty_yards", has: () => true,
+    cols: [c("o_penalties", "Pen", "Penalties", { asc: true }), c("o_penalty_yards", "Yds", "Penalty yards", { asc: true }),
+      c("d_penalties", "Opp pen", "Opponents' penalties"), c("d_penalty_yards", "Opp yds", "Opponents' penalty yards"),
+      c("o_penalty_first_downs", "1st by pen", "First downs gained on opponents' penalties")],
+  },
+];
+export const teamCat = (key: string) => TEAM_CATS.find((x) => x.key === key) ?? TEAM_CATS[0];
+
+/** A team's national rank in a column (1 = best, by the column's direction), among `lines`. */
+export function rankIn(col: StatCol, mine: Line, lines: Line[], perGame = false): number | null {
+  const x = statValue(col, mine, perGame);
+  if (x == null) return null;
+  const better = lines.filter((l) => { const y = statValue(col, l, perGame); return y != null && (col.asc ? y < x : y > x); }).length;
+  return better + 1;
+}
+
+/** A one-glance season line for a player's position: "2,410 yds, 18 TD, 6 INT" or "54 tkl, 6.5 sacks". */
+export function statSummary(l: Line | null | undefined, pos: string): string {
+  if (!l || !l.gp) return "";
+  const n = (k: string) => v(l, k).toLocaleString();
+  const by: Record<string, string> = { QB: "passing", RB: "rushing", WR: "receiving", TE: "receiving", K: "kicking" };
+  const order = [by[pos], "passing", "rushing", "receiving", "defense", "kicking"].filter(Boolean);
+  const cat = order.map((k) => playerCat(k)).find((x) => x.has(l));
+  const g = `${l.gp} g`;
+  switch (cat?.key) {
+    case "passing": return `${n("pass_yds")} yds, ${n("pass_td")} TD, ${n("int")} INT · ${g}`;
+    case "rushing": return `${n("car")} car, ${n("rush_yds")} yds, ${n("rush_td")} TD · ${g}`;
+    case "receiving": return `${n("rec")} rec, ${n("rec_yds")} yds, ${n("rec_td")} TD · ${g}`;
+    case "defense": return `${n("tkl")} tkl${v(l, "tfl") ? `, ${n("tfl")} TFL` : ""}${v(l, "sacks") ? `, ${n("sacks")} sck` : ""}${v(l, "def_int") ? `, ${n("def_int")} INT` : ""} · ${g}`;
+    case "kicking": return `${n("fgm")}/${n("fga")} FG, long ${n("fg_long")} · ${g}`;
+    default: return g;
+  }
 }

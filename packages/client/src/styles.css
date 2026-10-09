@@ -490,3 +490,4 @@ ul.warn, p.warn { color: #c44; }
 table.stats td.lead { font-weight: 700; }
 table.stats th.lead { color: var(--ink); }
 table.stats td { white-space: nowrap; }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0 14px; align-items: start; }
