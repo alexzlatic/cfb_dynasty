@@ -164,7 +164,8 @@ describe("sync gate", () => {
     expect(game.detail.plays.length).toBeGreaterThan(100);
     expect((await get(`/api/leagues/${id}/standings`)).length).toBeGreaterThan(9);
     expect((await get(`/api/leagues/${id}/polls`))[0].ranks).toHaveLength(25);
-  });
+    // Two weeks of a full league (recruiting included) take about 4.5 s here, too close to the 5 s default.
+  }, 60_000);
 });
 
 describe("launcher support", () => {
