@@ -615,6 +615,10 @@ describe("money", () => {
     expect(plan.assignments.map((x: { id: number }) => x.id)).not.toContain(open[2].id);
     const reps = (await getR(`/api/leagues/${id}/strategy/reports`)).reports as { kind: string; lines: { pid: number }[] }[];
     expect(reps.some((r) => r.kind === "player" && r.lines[0].pid === open[2].id)).toBe(true);
+    // Each report is copied to your inbox, with a link to the prospect.
+    const mailed = lg.inbox({ category: "scouting" }).messages;
+    expect(mailed).toHaveLength(reps.length);
+    expect(mailed.some((m) => m.links?.some((l) => l.to === `prospect/${open[2].id}`))).toBe(true);
 
     const r = replay(lg, manager.seed());
     expect(r.replayed).toBe(r.original);

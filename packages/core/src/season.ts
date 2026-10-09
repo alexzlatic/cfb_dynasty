@@ -2240,6 +2240,11 @@ export class Season {
     const u = this.state.recruiting!.user, id = u.next_report ?? 1;
     u.next_report = id + 1;
     u.reports = [{ id, ...r }, ...(u.reports ?? [])].slice(0, 60);
+    // ...and a copy to your inbox: the summary and the names, with the full report a click away.
+    const lines = r.kind === "region" ? r.lines.map((x) => `${x.name}, ${x.pos} (${x.cls}${x.state ? `, ${x.state}` : ""}): ${x.stars ? `${x.stars}-star, No. ${x.rank}; ` : ""}your read ${x.lo}-${x.hi}.${x.note ? ` ${x.note}` : ""}`) : [];
+    const p = r.kind === "player" ? r.lines[0] : null;
+    this.mail({ date: r.date, category: "scouting", from: "Your scouts", subject: r.title, body: [r.summary, ...lines].join("\n"),
+      links: [{ label: "Scout reports", to: "strategy/reports" }, ...(p ? [{ label: p.name, to: `prospect/${p.pid}` }] : [])] });
   }
 
   /** Your scouts are back from their trips to see a prospect: what they saw, and how your read moved. */
