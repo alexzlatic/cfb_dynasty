@@ -27,7 +27,11 @@ end, and its real commitments start as verbals that can flip.
 Every class exists in full from the day it appears (about 4,100 prospects). The service rates about 50
 freshmen, about 500 sophomores and every junior and senior, with stars, a composite (0.80 to 1.00, from
 the real composite curve by rank: about 35 five-stars and 450 four-stars a class) and a national rank.
-Its read of each prospect is his truth plus an error that shrinks as he gets older. It publishes new
+Its read of each prospect is his truth plus an error that shrinks as he gets older, plus a miss that
+never washes out and depends on how much he's seen (his rank on its last list): about ±3 points (90%
+range) for the top 25, ±4 for the top 100, ±6 to No. 300, ±11 to No. 1,000 and ±14 below that. Below
+No. 1,000 the miss runs mostly one way: an unknown kid is far more often underrated than overrated.
+The real 2027 class keeps its real ratings, with the truth around them just as wide. It publishes new
 ratings on May 15, August 1 and December 15, so stars and ranks change on those dates.
 
 ## Finding prospects
@@ -47,7 +51,7 @@ Better prospects are found faster (the chance falls off quickly below the top 10
 with better scouting finds more, and the share of staff time on scouting scales it (half to double).
 A new league starts with what a staff would already have found. Prospects you put on your board, offer,
 scout or spend hours on stay known. AI schools recruit the prospects in play nationally: the top 50
-freshmen, top 500 sophomores and every junior and senior, so their recruiting is unchanged.
+freshmen, top 500 sophomores and every junior and senior.
 
 A prospect weighs his top schools; his page and the big board show who he is considering and his
 leader's share. Schools at the very top (whose range reaches 91) consider prospects of any level, so
@@ -55,9 +59,13 @@ the best prospects always have suitors.
 
 ## Scouting
 
-Your staff's read of a prospect is its own evaluation combined with the service's when he is rated:
+Every school's read of a prospect, yours and the AI's alike, is its own evaluation combined with his high
+school stats and with the service's read when he is rated (each weighted by how far it can be trusted):
 
-- Its own read is about ±15 points (90% range) for a freshman, ±3 for a senior, narrowing every day.
+- Its own read, before it puts any time into him, is about ±16 points (90% range) for a freshman and ±7
+  for a senior, narrowing every day.
+- Time narrows it a lot: every evaluation trip, and every 20 contact hours, is a look, and five looks
+  cut the range by more than half (a senior a staff has worked hard is read within two or three points).
 - It is 30% tighter within 300 miles or in your home state, 25% tighter in a region where you pay a
   regional scout ($95,000 a year), 15% tighter for power programs, which scout nationally.
 - Each evaluation trip narrows it further ($2,500 and 6 staff hours near home, $7,500 and 9 hours away).
@@ -65,7 +73,8 @@ Your staff's read of a prospect is its own evaluation combined with the service'
 - What the staff takes from the service follows the service's evaluators day by day, not its publishing
   dates, so your ranges never all jump on one day.
 
-Early scouting can pay off or backfire: a sophomore you love may stall and one you passed on may grow.
+So a school that works a prospect knows him far better than the service, and one that never looked
+leans on the service and his stats. Early scouting can pay off or backfire: a sophomore you love may stall and one you passed on may grow.
 Scouting costs come out of your operations budget.
 
 ## High school stats
@@ -79,9 +88,9 @@ season and up to five in the playoffs), and his stats build game by game. Code: 
   his own form), not anyone's read of him, with noise on top: his situation (competition, his team and its
   scheme, the same every year), the season itself (role, health, luck), and his age (a freshman produces less
   than the same player as a senior). Early bloomers pile up numbers young; late bloomers' numbers undersell them.
-- **Your staff's read.** Scouts give stats a little weight, trusting them less than they deserve (they know numbers
-  lie), so a sophomore's read moves about a point on average, a senior's under a tenth. Seasons count as they're
-  played, so no date moves everyone. The service's ratings ignore stats, and the AI recruits on the service.
+- **Every school's read.** Scouts give stats a little weight, trusting them less than they deserve (they know numbers
+  lie), so a sophomore's read moves about a point on average, a senior's about a third of a point. Seasons count as
+  they're played, so no date moves everyone. The service's ratings ignore stats.
 
 Sizes are a judgment call: there is no public table of high school production for college recruits, so an average
 starter in a class has a normal good varsity season and the best reach what top recruits post. Seed 7, seniors'
@@ -89,18 +98,19 @@ senior seasons (starters): median / 90th percentile / best, from `npx tsx packag
 
 | | median | 90th pct | best |
 |---|---|---|---|
-| QB passing yards, TD | 1,871, 16 | 3,020, 30 | 5,608, 51 |
-| RB rushing yards, TD | 807, 11 | 1,407, 22 | 2,288, 40 |
-| WR receiving yards | 520 | 953 | 2,121 |
-| LB tackles | 80 | 113 | 167 |
-| DE sacks | 5 | 10 | 27 |
-| CB interceptions | 3 | 5 | 13 |
+| QB passing yards, TD | 1,879, 16 | 3,342, 33 | 6,179, 59 |
+| RB rushing yards, TD | 795, 12 | 1,449, 23 | 2,359, 40 |
+| WR receiving yards | 522 | 993 | 1,890 |
+| LB tackles | 79 | 116 | 177 |
+| DE sacks | 5 | 11 | 19 |
+| CB interceptions | 3 | 5 | 11 |
 
-How much they tell you (correlation of a prospect's stats with where he truly arrives at college, against your
-staff's read): sophomores 0.43 vs 0.63, juniors 0.53 vs 0.89, seniors 0.64 vs 0.97. Outside the service's top 300,
-the sophomores whose stats run 6+ points above the service's read are truly 3+ points better three times as often
-as the rest (22% vs 7%); juniors 19% vs 15%, seniors 8% vs 6%. Stats find the most among the young and the
-unrated, where reads are wide; by senior year the scouts have mostly caught up.
+How much they tell you (correlation of a prospect's stats with where he truly arrives at college, against a
+staff's read of him before it has put any time in): sophomores 0.37 vs 0.57, juniors 0.45 vs 0.75, seniors 0.65
+vs 0.93. Outside the service's top 300, the juniors whose stats run 6+ points above the service's read are truly
+3+ points better 64% of the time, against 41% of everyone there; seniors 62% against 35%. So stats point to
+real sleepers, and a third of the time they mislead: a weak schedule, a pass-happy offense or an early growth
+spurt.
 
 The prospect list shows each one's latest season; pick a position to see and sort by every stat. A prospect's
 page has his season-by-season table, and the big board shows his latest line.
@@ -115,6 +125,12 @@ planning make it (spending the week recruiting costs you on Saturday). Developme
 at the rollover by up to 10%.
 
 ## How the AI recruits
+
+AI schools scout the way you do: each sees prospects through its own read (its staff's scouting skill,
+national scouting for power programs, and the looks its contact hours buy), decides who is in its range
+by that read, and values a target 65% by its own read and 35% by his stars (class rankings sell). The
+prospects it works hardest are the ones it reads best. Prospects judge themselves (playing time, their
+standing) by the service.
 
 Every Sunday each school works a board: everyone committed to it, about four uncommitted targets per
 open spot and a few prospects committed elsewhere it tries to flip. A school's targets are prospects in
@@ -143,21 +159,45 @@ school fills from the portal (its real style).
 checks each signing class against real ones. The 2027 class is real; from 2028 on the AI recruits.
 
 Seed 7, the first three AI-recruited classes (2028-2030), with prospect discovery and the NFL draft's
-effect on prestige in place:
+effect on prestige in place, and (last column) the first two once schools recruit on their own scouts' reads:
 
-| | real | 2028-2030 |
-|---|---|---|
-| Five-stars to top-10 classes | 70-90% | 74-83% |
-| Four-stars to power programs | nearly all (a few to top Group of Six programs is fine) | 99.6-99.8% |
-| Three-stars to power programs (of FBS signees) | 48% | 53-56% |
-| Signees within 300 miles | 45-60% | 61-62% |
-| Class size, 10th/50th/90th percentile | 12/20/29 | 11-14/20-21/25-27 |
-| Position mix | | within 2 points of real |
-| Class points, year-to-year correlation | 0.80-0.92 | 0.79-0.88 |
-| Five-stars and four-stars a class | 25-40 and 380-520 | 35 and 452 |
+| | real | 2028-2030 | own reads, 2028-2029 |
+|---|---|---|---|
+| Five-stars to top-10 classes | 70-90% | 74-83% | 63-66% |
+| Four-stars to power programs | nearly all (a few to top Group of Six programs is fine) | 99.6-99.8% | 98.4-98.9% |
+| Three-stars to power programs (of FBS signees) | 48% | 53-56% | 52.5-52.6% |
+| Signees within 300 miles | 45-60% | 61-62% | 58-59% |
+| Class size, 10th/50th/90th percentile | 12/20/29 | 11-14/20-21/25-27 | 14/21-22/27-30 |
+| Position mix | | within 2 points of real | within 1.1 points |
+| Class points, year-to-year correlation | 0.80-0.92 | 0.79-0.88 | 0.79-0.88 |
+| Five-stars and four-stars a class | 25-40 and 380-520 | 35 and 452 | 35 and 447-452 |
 
 Three-stars lean a little toward power programs and signees stay a little closer to home than real
-ones; both are within a few points.
+ones; both are within a few points. Five-stars spread a little wider than real ones: the game had already
+slipped to 63-69% before schools scouted for themselves (the carousel and the portal came after the first
+measure), and schools that read a five-star lower than the service does now pass on some of them.
+
+## Busts and sleepers
+
+How often the service is wrong is calibrated to real drafts: CFBD's 2018-2025 NFL drafts matched to the
+players' recruiting classes, against `npx tsx packages/core/scripts/draft-ranks.ts 11 7` (drafts 2032-2036,
+the first made of classes the game generated and recruited).
+
+| | real | game |
+|---|---|---|
+| First-rounders who were top-25 recruits | 21% | 16% |
+| ... No. 26-100 | 18% | 25% |
+| ... No. 101-300 | 17% | 25% |
+| ... No. 301-1,000 | 26% | 19% |
+| ... below 1,000 or unranked | 18% | 15% |
+| Top-25 recruits ever drafted | 53% | 56% |
+| Top-25 recruits drafted in the first round | 19% | 21% |
+
+The game's first round still leans a little to the top 300 (66% against 56%). The rest of the real gap is
+college development (late bloomers, walk-ons and junior college players), which the game models more
+tamely than real life. Before this, the game's rosters were filled out with generated freshmen rated like
+the school's own recruits, so elite programs' filler linemen were five-star talents who went in the first
+round by the dozen; with recruiting on, the fillers are now unranked walk-ons.
 
 ## Titles and year-to-year change
 

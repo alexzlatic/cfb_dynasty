@@ -105,7 +105,8 @@ describe("finding prospects", () => {
     // Unrated sophomores: a good share near home, few far away.
     const so = (f: (p: Prospect) => boolean) => { const all = st.prospects.filter((p) => gradeOf(p, s.state.year) === 1 && !p.svc && f(p)); return all.filter((p) => k0.has(p.id)).length / all.length; };
     expect(so(near)).toBeGreaterThan(0.2);
-    expect(so(tx)).toBeLessThan(0.05);
+    // (Some unrated sophomores are good players the service missed, and better prospects are found sooner.)
+    expect(so(tx)).toBeLessThan(0.07);
     s.setScoutRegion("texas", true);
     const tx0 = fr(k0, tx), ia0 = fr(k0, near);
     while (s.state.date < "2026-11-01") s.advanceDay();

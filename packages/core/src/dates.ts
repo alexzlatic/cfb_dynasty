@@ -16,8 +16,15 @@ export function weekday(d: ISODate): number {
 }
 
 export function daysBetween(a: ISODate, b: ISODate): number {
-  return Math.round((toDate(b).getTime() - toDate(a).getTime()) / 86_400_000);
+  return dayNumber(b) - dayNumber(a);
 }
+/** Days since 1970-01-01 (read straight from the string: recruiting asks this millions of times a season). */
+function dayNumber(d: ISODate): number {
+  let n = DAY_NUMBERS.get(d);
+  if (n === undefined) { n = Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 86_400_000; DAY_NUMBERS.set(d, n); }
+  return n;
+}
+const DAY_NUMBERS = new Map<ISODate, number>();
 
 /** The nth (1-based) given weekday of a month, e.g. nthWeekday(2026, 12, 6, 1) = first Saturday of Dec 2026. */
 export function nthWeekday(year: number, month: number, wd: number, n: number): ISODate {

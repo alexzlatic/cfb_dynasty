@@ -19,7 +19,7 @@ import {
 } from "./portal.ts";
 import {
   RERATE_DATES, RecruitWeek, SCOUT_COST, TRIP_HOURS, bandOf, classPoints, classTarget, currentOvr, earlySigning, enrollPlayer, generateClass, gradeOf, classShape,
-  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
+  rateClasses, readSd, realClass, KNOWN_WEEKS, discoverRate, isPublic, truthAt, hashGauss, arrivalOvr, yearsOut, regionOf, schoolRead, looksOf, signingDay, starsOf, type Prospect, type RecruitEvent, type RecruitingState, type Region, type School, type SchoolEye, type FrozenSchool,
 } from "./recruiting.ts";
 import { OFFSEASON_TIME, SEASON_TIME, STAFF_HOURS, coachSkills, devSkillRate, prepFactor, recruitEff, scoutWidth, staffOf, staffSkill, timeSplit, type Skill, type StaffMember, type StaffTime } from "./staff.ts";
 import { RECRUIT_FIT, ROOM, STARTERS, STYLE_MIX, miles, offerScore, persona, personaView, PERSONA_NAMES, typicalPersona, schoolValue, styleOf, type Persona, type SchoolOffer } from "./valuation.ts";
@@ -1933,7 +1933,7 @@ export class Season {
     const t = me != null ? this.team(me) : null;
     let read: { est: number; sd: number } | null = null;
     const eye = this.myEye();
-    if (t && eye) read = schoolRead(eye, p, s.date, s.seed, st.user.evals[p.id] ?? 0);
+    if (t && eye) read = schoolRead(eye, p, s.date, s.seed, looksOf(p, eye.id, st.user.evals[p.id] ?? 0));
     const ovr = currentOvr(p, s.date);
     const cap = (x: number) => Math.max(40, Math.min(99, x));
     return {
@@ -1972,7 +1972,7 @@ export class Season {
     if (eye) {
       const start = `${p.cls - 4}-08-01`;
       for (let d = s.date, i = 0; d >= start && i < 53; d = addDays(d, -7), i++) {
-        const r = schoolRead(eye, p, d, s.seed, st.user.evals[p.id] ?? 0);
+        const r = schoolRead(eye, p, d, s.seed, looksOf(p, eye.id, st.user.evals[p.id] ?? 0));
         const c = (v: number) => Math.round(Math.max(40, Math.min(99, v)) * 10) / 10;
         history.unshift({ date: d, est: c(r.est), lo: c(r.est - 1.65 * r.sd), hi: c(r.est + 1.65 * r.sd) });
       }

@@ -166,7 +166,8 @@ export function rollRosters(o: {
     // The signing class comes first; generated players fill only what's left (stand-ins for transfers until the portal).
     const fresh: RatedPlayer[] = [...(o.incoming?.[t.id] ?? [])];
     for (const p of fresh) have.set(p.pos, (have.get(p.pos) ?? 0) + 1);
-    const add = (ps: Pos) => { have.set(ps, (have.get(ps) ?? 0) + 1); fresh.push(freshman(nextId++, t, ps, model, rng, firsts, lasts)); };
+    // With recruiting on, the fillers are walk-ons and stand-ins, not a second signing class.
+    const add = (ps: Pos) => { have.set(ps, (have.get(ps) ?? 0) + 1); fresh.push(freshman(nextId++, t, ps, model, rng, firsts, lasts, o.incoming != null)); };
     // Every position at least its minimum first.
     for (const ps of POSITIONS) while ((have.get(ps) ?? 0) < MIN_AT[ps]) add(ps);
     while (keep.length + fresh.length > target) {
@@ -215,16 +216,20 @@ function develop(p: RatedPlayer, years: number, surprise: number, gp: number, ra
   };
 }
 
-/** A generated freshman at a position, rated like the team's own recent classes. */
-function freshman(id: number, t: Team, pos: Pos, model: FreshModel, rng: Rng, firsts: string[], lasts: string[]): RatedPlayer {
+/**
+ * A generated freshman at a position, rated like the team's own recent classes. A walk-on (a league with
+ * recruiting, where the signing class came first) is an unranked player below a typical freshman at his
+ * position wherever he goes; now and then one turns out.
+ */
+function freshman(id: number, t: Team, pos: Pos, model: FreshModel, rng: Rng, firsts: string[], lasts: string[], walkOn = false): RatedPlayer {
   const pm = model.pos[pos] ?? { m: -1.5, sd: 0.5 };
-  const zz = pm.m + (model.team[t.id] ?? 0) + pm.sd * rng.gauss(0, 1);
+  const zz = walkOn ? pm.m - 0.6 + 0.8 * pm.sd * rng.gauss(0, 1) : pm.m + (model.team[t.id] ?? 0) + pm.sd * rng.gauss(0, 1);
   const attrs: Record<string, number> = {};
   for (const k of ATTRS[pos]) attrs[k] = fromZ(zz + 0.47 * rng.gauss(0, 1));
   // His recruiting grade, from how he rates against freshmen at his position (about 0.45 SD a composite SD).
   const rz = (zz - pm.m) / 0.45;
   const c = 0.8684 + 0.0341 * rz;
-  const composite = c >= 0.75 ? Math.round(Math.min(1, c) * 10000) / 10000 : null;
+  const composite = !walkOn && c >= 0.75 ? Math.round(Math.min(1, c) * 10000) / 10000 : null;
   const pick = (xs: string[]) => xs[Math.floor(rng.random() * xs.length)] ?? "";
   const [h, w] = SIZE[pos];
   const lat = t.venue?.lat != null ? Math.round((t.venue.lat + 1.5 * rng.gauss(0, 1)) * 100) / 100 : null;
@@ -241,7 +246,7 @@ function freshman(id: number, t: Team, pos: Pos, model: FreshModel, rng: Rng, fi
       discipline: pos === "OL" ? attrs.discipline : fromZ(rng.gauss(0, 0.8)),
     },
     // Where he tops out: young players have the most room (as the seed's ratings do).
-    hidden: { potential: fromZ(zz + 1.4 + 0.25 * Math.max(0, rz) + 0.35 * rng.gauss(0, 1) + 0.3), work_ethic: fromZ(rng.gauss(0, 1)) },
+    hidden: { potential: fromZ(zz + (walkOn ? 1.2 + 0.6 * rng.gauss(0, 1) : 1.4 + 0.25 * Math.max(0, rz) + 0.35 * rng.gauss(0, 1) + 0.3)), work_ethic: fromZ(rng.gauss(0, 1)) },
     tend: pos === "QB" ? { scramble: Math.round(clamp(0.08 + 0.03 * rng.gauss(0, 1), 0.03, 0.25) * 1000) / 1000 } : {},
     ovr: overall(pos, attrs), basis: "prior", sample: 0,
   };

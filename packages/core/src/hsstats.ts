@@ -29,7 +29,7 @@ import { hashGauss, truthAt, type Grade, type Prospect } from "./recruiting.ts";
 const HS_MU = 75.5;
 const HS_SD = 5.5;
 /** How production depends on true ability now (per class SD), and the two noises on top (per class SD). */
-const P_TALENT = 0.7, P_SITUATION = 0.6, P_SEASON = 0.5;
+const P_TALENT = 0.7, P_SITUATION = 0.8, P_SEASON = 0.6;
 /** Regular-season games, the first game of the season (month-day) and the most playoff games (a state title run). */
 const REGULAR = 10, KICKOFF = "08-28", MAX_PLAYOFF = 5;
 /** How likely he is to be on varsity by grade (normal-CDF shift; plus 0.9 per class SD of ability now). */
@@ -146,7 +146,8 @@ function count(seed: number, p: Prospect, g: number, k: number, mu: number): num
  * his style is his school's (a passing or running team, a back who catches the ball), the same every year.
  */
 function seasonLine(seed: number, p: Prospect, g: Grade, perf: number, games: number, role: number): Record<string, number> {
-  const P = perf, n = games * role;
+  // Production saturates: the best season in a class is a state record, not a video game.
+  const P = 2.5 * Math.tanh(perf / 2.5), n = games * role;
   const lean = draw(seed, p, 99, 30), legs = draw(seed, p, 99, 31);
   const k = (i: number, mu: number) => count(seed, p, g, 40 + i, mu);
   const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
