@@ -9,11 +9,11 @@ import { Logo, heightStr, onColor, shortDate } from "../util.tsx";
 import { GameLine, Panel } from "./common.tsx";
 import { FutureTab, WatchChip } from "./Retention.tsx";
 import { PortalCard } from "./Portal.tsx";
+import { devHint } from "./Development.tsx";
 
 export const POS_ORDER: Pos[] = ["QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB", "CB", "S", "K", "P", "LS"];
 const CLASS_ORDER = ["FR", "SO", "JR", "SR"];
 const FOCUS_LABEL: Record<string, string> = { technique: "Technique", strength: "Strength and speed", film: "Film study", leadership: "Leadership" };
-const sgn = (x: number) => `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
 
 /** A rating as a colored number: 90+ elite, 80s very good, 75 a typical starter, 60s depth. */
 export const ratingTier = (v: number) => (v >= 90 ? "r-elite" : v >= 82 ? "r-great" : v >= 74 ? "r-good" : v >= 66 ? "r-ok" : "r-low");
@@ -183,12 +183,11 @@ export function PlayerPage({ pid, tab: initial }: { pid: number; tab?: string })
               <Panel title="Your staff's read" right={<a href={`#/l/${id}/development`}>Development</a>}>
                 <table className="grid tight"><tbody>
                   <tr><td>Working on</td><td>{FOCUS_LABEL[data.staff.focus.area]}{data.staff.plan ? " (his plan)" : " (staff's choice)"}{data.staff.focus.attrs.length > 0 && <div className="muted small">{data.staff.focus.attrs.map((a) => `${a.label} ${a.value}`).join(", ")}</div>}</td></tr>
-                  <tr><td>Gained this {data.staff.phase === "offseason" ? "offseason" : data.staff.phase === "camp" ? "camp" : "season"}</td><td className={"num " + (data.staff.gained! - data.staff.by_now! >= 0.5 ? "win" : data.staff.gained! - data.staff.by_now! <= -0.5 ? "loss" : "")}>{sgn(data.staff.gained!)} <span className="muted small">of {sgn(data.staff.target!)} planned</span></td></tr>
-                  <tr><td>Gained this year</td><td className="num">{sgn(data.staff.so_far!)}</td></tr>
+                  <tr><td>Development this year</td><td>{(() => { const h = devHint(data.staff.ahead, data.staff.read); return <span className={h.tone}>{h.text}</span>; })()}</td></tr>
                   <tr><td>Leadership</td><td className="num">{data.staff.leadership}</td></tr>
                   <tr><td>Adaptability</td><td className="num">{data.staff.adaptability}</td></tr>
                 </tbody></table>
-                <p className="muted small">Overall points, your staff's read. His listed rating (what scouts see) moves up at the rollover.</p>
+                <p className="muted small">Development is against a normal year for his class (and his plan). What he gains shows up in his rating at the rollover in February.</p>
               </Panel>
             )}
             {data.redshirt && <p className="small">Redshirting: {data.season?.gp ?? 0} of {data.redshirt_games} games played.</p>}
