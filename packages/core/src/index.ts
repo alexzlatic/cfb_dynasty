@@ -38,3 +38,4 @@ export * from "./carousel.ts";
 export * from "./facilities.ts";
 export * from "./inbox.ts";
 export * from "./pitch.ts";
+export * from "./room.ts";

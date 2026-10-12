@@ -8,6 +8,7 @@ import { ConsideringList } from "./Prospect.tsx";
 import { RecruitMap } from "./RecruitMap.tsx";
 import { NilTracker } from "./NilTracker.tsx";
 import { recruitStars } from "./ratings.tsx";
+import { RoomButtons, SEAT_OPTIONS, StaffRoom } from "./StaffRoom.tsx";
 
 const GRADES = ["Freshmen", "Sophomores", "Juniors", "Seniors"];
 export const POS = ["", "QB", "RB", "WR", "TE", "OL", "DE", "DT", "LB", "CB", "S", "K", "P", "LS"];
@@ -25,7 +26,7 @@ export function RecruitingScreen({ sub }: { sub: string }) {
   if (!head) return <p className="muted">Loading...</p>;
   if (!head.available) return <Panel title="Recruiting"><p className="muted">This league has no recruiting.</p></Panel>;
   const c = cls ?? head.cls;
-  const classTabs = sub !== "board" && sub !== "staff" && sub !== "nil" && (
+  const classTabs = sub !== "board" && sub !== "staff" && sub !== "nil" && sub !== "room" && (
     <div className="classtabs">
       {head.classes.map((x) => (
         <button key={x.cls} className={x.cls === c ? "on" : ""} onClick={() => setCls(x.cls)}>
@@ -44,6 +45,7 @@ export function RecruitingScreen({ sub }: { sub: string }) {
       {sub === "rankings" && <Rankings cls={c} />}
       {sub === "nil" && <NilTracker />}
       {sub === "staff" && <StaffAndScouting />}
+      {sub === "room" && <StaffRoom />}
     </div>
   );
 }
@@ -177,9 +179,16 @@ function BigBoard({ head }: { head: RecruitingView }) {
   const data = useData(() => api.board(id), [state.date]);
   const { busy, err, act } = useAct();
   const [cls, setCls] = useState<number | "all">("all");
+  const [sel, setSel] = useState<Set<number>>(new Set());
   const me = head.team_id;
   const rows = useMemo(() => (data?.rows ?? []).filter((r) => cls === "all" || r.cls === cls), [data, cls]);
   if (me == null) return <p className="muted">You need a team to keep a big board.</p>;
+  const toggle = (pid: number) => setSel((x) => { const n = new Set(x); if (n.has(pid)) n.delete(pid); else n.add(pid); return n; });
+  // Several at once: each goes under Unassigned in the staff room, or straight to one coach.
+  const sendAll = async (seat?: string) => {
+    for (const pid of sel) await act("staff_room", seat ? { op: "add", seat, kind: "contact", target: String(pid), hours: 6 } : { op: "tray", kind: "prospect", key: String(pid), on: true });
+    setSel(new Set());
+  };
   return (
     <div>
       {err && <p className="error">{err}</p>}
@@ -189,18 +198,27 @@ function BigBoard({ head }: { head: RecruitingView }) {
           <button className={cls === "all" ? "on" : ""} onClick={() => setCls("all")}>All classes</button>
           {head.classes.map((c) => <button key={c.cls} className={cls === c.cls ? "on" : ""} onClick={() => setCls(c.cls)}>{c.cls}</button>)}
         </div>
-        <span className="muted small">{head.settings.auto ? "Your staff works the board each week (turn it off in Strategy to run it yourself)." : "You run the board: set contact hours below."}</span>
+        <span className="muted small">{head.settings.room ? <>Your coaches work the prospects you give them in the <a href={`#/l/${id}/recruiting/room`}>staff room</a>; the rest of the board gets any upkeep you set there.</> : head.settings.auto ? "Your staff works the board each week (turn it off in Strategy to run it yourself)." : "You run the board: set contact hours below."}</span>
       </div>
       {!data ? <p className="muted">Loading...</p> : !rows.length ? (
         <Panel title="Nobody on your board yet"><p>Add prospects with the ☆ on the <a href={`#/l/${id}/recruiting/list`}>Prospects</a> list, a prospect's page or the <a href={`#/l/${id}/recruiting/map`}>map</a>.</p></Panel>
-      ) : (
+      ) : (<>
+        <div className={"bulkbar" + (sel.size ? " on" : "")}>
+          {sel.size ? <>
+            <b>{sel.size} selected</b>
+            <button className="primary" disabled={busy} onClick={() => sendAll()}>Send to the staff room</button>
+            <select value="" disabled={busy} aria-label="Assign the selected prospects to a coach" onChange={(e) => e.target.value && sendAll(e.target.value)}>
+              <option value="">Assign all to…</option>{SEAT_OPTIONS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+            <button className="link" onClick={() => setSel(new Set())}>Clear</button>
+          </> : <span className="small muted">Tick prospects to send several to the <a href={`#/l/${id}/recruiting/room`}>staff room</a> at once, or use Staff room on a card.</span>}
+        </div>
         <div className="board">
           {rows.map((r) => {
             const i = data.rows.indexOf(r);
             const committed = r.commit ? team(r.commit.team_id) : undefined;
             return (
               <div key={r.id} className={"bcard" + (r.commit?.team_id === me ? " mine" : r.commit ? " gone" : "")}>
-                <div className="brank">{i + 1}</div>
+                <div className="brank"><input type="checkbox" checked={sel.has(r.id)} onChange={() => toggle(r.id)} aria-label={`Select ${r.name}`} />{i + 1}</div>
                 <div className="bwho">
                   <div>{prospectLink(id, r)} <span className="pos">{r.pos}</span> {recruitStars(r.service?.stars)}</div>
                   <div className="small muted">{r.cls} · {r.home.city}{r.home.state ? `, ${r.home.state}` : ""}{r.service ? ` · No. ${r.service.rank}` : ""}</div>
@@ -217,13 +235,14 @@ function BigBoard({ head }: { head: RecruitingView }) {
                   {!r.commit?.signed && r.grade >= 1 && r.service && <a className="link" href={`#/l/${id}/pitch/${r.id}`}>Pitch</a>}
                   {!r.commit?.signed && r.grade >= 1 && <button className="link" disabled={busy} onClick={() => act("recruit_offer", { pid: r.id, on: !r.offers.includes(me) })}>{r.offers.includes(me) ? "Pull offer" : "Offer"}</button>}
                   <button className="link" disabled={busy} onClick={() => act("scout_prospect", { pid: r.id, on: !r.scouting, trips: 3 })}>{r.scouting ? "Stop scouting" : "Scout"}</button>
+                  {!r.commit?.signed && <RoomButtons kind="prospect" keyId={r.id} busy={busy} act={act} />}
                   <button className="link muted" disabled={busy} onClick={() => act("recruit_board", { pid: r.id, on: false })}>Remove</button>
                 </div>
               </div>
             );
           })}
         </div>
-      )}
+      </>)}
       <p className="small muted">Each prospect's chances are the schools he's considering and how likely he'd pick each if he chose today: what he thinks of the
         school, the relationship (contact hours) and offers. When your staff runs recruiting it works these prospects too.</p>
     </div>
@@ -248,7 +267,21 @@ function MapView({ cls, head }: { cls: number; head: RecruitingView }) {
       {data ? <RecruitMap points={data.points.filter((p) => p[3] >= min && (!hideCommitted || p[5] == null))} home={head.home} regions={head.settings.regions} regionDefs={head.regions} league={id} me={head.team_id} />
         : <p className="muted">Loading...</p>}
       <p className="small muted">Shaded: regions where you pay a scout. Click a prospect for his page.</p>
+      {head.team_id != null && <MapRegions head={head} />}
     </Panel>
+  );
+}
+
+/** Under the map: each region, to send to the staff room for a coach to work. */
+function MapRegions({ head }: { head: RecruitingView }) {
+  const { busy, err, act } = useAct();
+  return (
+    <div className="mapregions">
+      <h4>Regions</h4>
+      {err && <p className="error">{err}</p>}
+      <div className="regionchips">{Object.entries(head.regions).map(([k, r]) => (
+        <span key={k} className="regionchip"><span>{r.name}</span><RoomButtons kind="region" keyId={k} busy={busy} act={act} /></span>))}</div>
+    </div>
   );
 }
 

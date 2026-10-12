@@ -296,7 +296,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         return {
           available: true, team_id: me, year: s.year, date: s.date, cls, classes,
           total: rows.length, prospects: rows.slice(offset, offset + limit), hs_cols: pos ? HS_COLS[pos as Pos] ?? [] : null,
-          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: timeSplit(u.time, true), split: time, board: u.board ?? [] },
+          settings: { auto: u.auto, hours: u.hours, scout: u.scout, regions: u.regions, spend: u.spend, time: timeSplit(u.time, true), split: time, board: u.board ?? [], room: !!u.room },
           staff, skills, skill_names: SKILLS, hours: STAFF_HOURS, regions: REGIONS, costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS },
           home: me != null ? { lat: S.team(me).venue?.lat ?? null, lon: S.team(me).venue?.lon ?? null, state: S.team(me).venue?.state ?? null } : null,
         };
@@ -305,12 +305,12 @@ export function startServer(opts: ServerOptions, port: number): Server {
         // Every strategic call in one place: how the staff splits its week and what each share buys.
         const st = s.recruiting, me = s.user_team_id;
         if (!st || me == null) return { team_id: me ?? null, available: !!st };
-        const u = st.user, time = timeSplit(u.time, true), staff = S.staff(me);
+        const u = st.user, time = S.userSplit(true), staff = S.staff(me);
         const skills = Object.fromEntries((Object.keys(SKILLS) as Skill[]).map((k) => [k, Math.round(staffSkill(staff, k))]));
         const film = S.scoutReport(), plan = S.scoutingPlan()!;
         const week = S.recruitLedger();
         return {
-          available: true, team_id: me, date: s.date, in_season: S.inSeason(s.date), staff_hours: STAFF_HOURS, time, offseason: timeSplit(u.time, false), usual: SEASON_TIME,
+          available: true, team_id: me, date: s.date, in_season: S.inSeason(s.date), staff_hours: STAFF_HOURS, time, offseason: S.userSplit(false), usual: SEASON_TIME, room: !!u.room,
           staff, skills, skill_names: SKILLS,
           recruiting: { auto: u.auto, board: (u.board ?? []).length, contact_hours: Math.round(week.contact), hours_set: week.board, week,
             commits: st.prospects.filter((p) => p.commit?.team === me && p.cls === s.year + 1).length },
@@ -322,6 +322,7 @@ export function startServer(opts: ServerOptions, port: number): Server {
         };
       }
       case route === "strategy/scouting": return S.scoutingPlan() ?? { available: false };
+      case route === "recruiting/room": return S.roomView();
       case route === "strategy/reports": return { reports: s.recruiting?.user.reports ?? [], regions: REGIONS };
       case route === "recruiting/prospect": {
         if (!s.recruiting) return null;

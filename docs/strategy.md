@@ -20,6 +20,40 @@ recruiting and scouting only. A split saved before development had its own share
 usual 10% out of practice, so old leagues play exactly as before. Plans keep a running tally of their work
 (`LabPlan.work`, updated each morning), so a change to the week only changes the pace from that day on.
 
+## The staff room
+
+Recruiting > Staff room lays the same week out coach by coach (core `room.ts`). Each coach (head coach,
+coordinators, special teams) holds his 40 flexible hours (24 at FCS schools), and your recruiting staffers
+share one desk at 16 hours each. Every hour is a line on someone's card:
+
+| Line | Who | Hours |
+| --- | --- | --- |
+| Recruit a prospect | anyone | you set them (6 to start); 10 a week on one prospect at most, all lines together |
+| Upkeep on a group | anyone | spread evenly over the group: your commits, one class of commits, or the rest of your big board (prospects without their own line). New commits join on their own |
+| Official visit | a coach hosts | 6 on the host and 2 on the head coach (8 if he hosts), that week only |
+| Home visit | head coach | 6 near, 10 far, that week only |
+| Scout a player | coaches | the trip's hours while trips are left |
+| Work a region / General scouting | anyone | you set them |
+| Practice, Opponent film, Development | coaches | in season only |
+
+Each line runs all year, in season, out of season, or this week only (the chip on the line cycles through
+them). A coach can't take a line past his hours; one over his week (a job left open) gives what he has in
+proportion, and an open job gives nothing. The split on the Overview is the sum of the lines, and each
+area's hours are worth the skill of the coaches giving them (recruiting with your recruiting coaches'
+recruiting skill, and so on).
+
+A prospect's lead recruiter is the coach with the most contact hours on him. When that coach leaves
+(fired, or hired away in the carousel) the prospect keeps three quarters of his interest in you
+(`LEAD_KEEP`) and you get a mail. Prospects and regions sent from the big board, a prospect's page or the
+map wait in Unassigned until you drag or assign them to a coach; "Fill open hours" gives each coach's free
+hours to the best prospects on your board, his own side of the ball first.
+
+Opening the room is one-way for a league: it starts from the week you had (the same split and the same
+contact and region hours), the staff no longer runs the board for you, and the Overview's share sliders
+become a read-out. Pitch-page hours, scouting trips and region hours keep working and go through the
+room. Action: `staff_room` (`open`, `add`, `set`, `when`, `move`, `remove`, `tray`, `fill`); API
+`GET /api/leagues/:id/recruiting/room`.
+
 ## Scouting
 
 Your scouting hours each week (the scouting share of the week) go first to trips, in list order, then to

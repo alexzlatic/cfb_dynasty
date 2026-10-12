@@ -6,6 +6,7 @@ import { RECRUIT_FIT, STARTERS, choose, miles, offerScore, persona, type Persona
 import type { StaffTime } from "./staff.ts";
 import { statRead } from "./hsstats.ts";
 import type { Pitch } from "./pitch.ts";
+import type { StaffRoom } from "./room.ts";
 
 /**
  * High school recruiting (M3 step 3). Four classes are live at once: in August 2026 the 2027 class are
@@ -542,6 +543,8 @@ export interface UserRecruiting {
   next_report?: number;
   /** Your pitch to each prospect (pitch.ts), by prospect id. */
   pitches?: Record<string, Pitch>;
+  /** Your staff room (room.ts): each coach's week, line by line. Absent until you open it; then it sets the hours above. */
+  room?: StaffRoom;
 }
 
 /** A prospect in a scouting report, as your staff read him that day. */

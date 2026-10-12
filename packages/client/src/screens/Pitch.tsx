@@ -121,7 +121,7 @@ export function PitchPage({ pid }: { pid: number }) {
                 <div className="visit">
                   <h4>Official visit</h4>
                   {d.visits.official ? <p>He visited campus {shortDate(d.visits.official)}.</p>
-                    : <button disabled={busy || !d.visits.can_official || wk.hc.left < d.visits.official_hc || wk.contact < d.visits.official_hours} onClick={() => act("recruit_visit", { pid, kind: "official" })}>Bring him to campus · {d.visits.official_hours} h · {money(d.visits.official_cost)}</button>}
+                    : <button disabled={busy || !d.visits.can_official || wk.hc.left < d.visits.official_hc || (wk.room ? wk.host_free < d.visits.official_hours - d.visits.official_hc : wk.contact < d.visits.official_hours)} onClick={() => act("recruit_visit", { pid, kind: "official" })}>Bring him to campus · {d.visits.official_hours} h · {money(d.visits.official_cost)}</button>}
                   <p className="small muted">{d.visits.can_official ? `Your campus is worth ${signedPts(shift(share, d.visits.official_worth) - share)} with him right after, fading over the months. Once per recruit. Your staff runs the weekend: ${d.visits.official_hours} hours, ${d.visits.official_hc} of them the head coach's.` : "Juniors and seniors only."}</p>
                 </div>
                 <div className="visit">
@@ -195,8 +195,8 @@ function WeekHours({ wk }: { wk: Week }) {
       <div><span className="muted small">Staff recruiting this week</span><b>{h(wk.total)}</b>
         <small className="muted">coaches {h(wk.coaches)}{wk.staffers ? ` + ${wk.staffers} recruiting staffer${wk.staffers === 1 ? "" : "s"} ${h(wk.staffer_hours)}` : ""}</small></div>
       <div><span className="muted small">Visits</span><b>{h(wk.visits)}</b><small className="muted">{wk.officials} official · {wk.homes} home</small></div>
-      <div><span className="muted small">Left for contact</span><b className={over ? "bad" : ""}>{h(wk.contact)}</b><small className={over ? "bad" : "muted"}>{h(wk.board)} set on your board{over ? ", spread thinner" : ""}</small></div>
-      <div><span className="muted small">Head coach</span><b>{h(wk.hc.left)} left</b><small className="muted">{h(wk.hc.recruiting)} of his {wk.hc.week} for recruiting</small></div>
+      <div><span className="muted small">{wk.room ? "Contact (staff room)" : "Left for contact"}</span><b className={over ? "bad" : ""}>{h(wk.contact)}</b><small className={over ? "bad" : "muted"}>{h(wk.board)} set on your board{over ? ", spread thinner" : ""}</small></div>
+      <div><span className="muted small">Head coach</span><b>{h(wk.hc.left)} left</b><small className="muted">{wk.room ? `of his ${wk.hc.week}; visits take his free hours` : `${h(wk.hc.recruiting)} of his ${wk.hc.week} for recruiting`}</small></div>
     </div>
   );
 }

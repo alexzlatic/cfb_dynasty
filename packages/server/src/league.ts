@@ -2,6 +2,7 @@ import { createHash, randomInt } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   Season, LiveGame, playerName, POSITIONS, AREAS, SCOPES, FINANCING, type Scope, type Financing, REGIONS, type Region, type StaffTime, type Area, type Pos, runSim, checkPlan, type CareerStart, type Coach, LAB_AREAS, type LabArea, type GameDetail, checkPractice, type GamePlan, type GameSub, type PracticePlan, records, SLOT_POS, packPlayer, unpackPlayers, isDefCall, isOffCall, isClockPlay, TEMPOS, type ClockEvent, type LiveMode, type LiveView, type UserCall, type Player, type CalEvent, type DepthChart, type Slot, type DayReport, type Game, type SeasonState, type SeedBundle, type Settings, type SimCommand, type Team, type RenewalRule, type ConferenceSetup, type Role, type InboxMessage, SELLING_POINTS, type SellingPoint, MAX_CONTACT,
+  SEATS, TASKS, type RoomOp, type Seat, type TaskKind, type When,
 } from "@cfb/core";
 import type { TeamRatings, Tempo } from "@cfb/engine";
 import { openDb, tx } from "./db.ts";
@@ -50,7 +51,9 @@ export type Action =
   | { type: "recruit_board"; payload: { pid: number; on: boolean; at?: number } }
   /** Your pitch to a prospect: its selling points (at most three), a visit (official, or your head coach in his home), an NIL offer for when he enrolls (0 takes it back). */
   | { type: "recruit_pitch"; payload: { pid: number; points: SellingPoint[] } }
-  | { type: "recruit_visit"; payload: { pid: number; kind: "official" | "coach" } }
+  | { type: "recruit_visit"; payload: { pid: number; kind: "official" | "coach"; host?: Seat } }
+  /** Your staff room: open it, add, change, move or remove a coach's line, send a prospect or region to wait for a coach, or fill the open hours. */
+  | { type: "staff_room"; payload: RoomOp }
   | { type: "recruit_nil"; payload: { pid: number; amount: number; years: number } }
   /** Hire a regional scout (or let one go). */
   | { type: "scout_region"; payload: { region: Region; on: boolean } }
@@ -328,8 +331,11 @@ export class League {
     }
     if (a.type === "recruit_visit") {
       if (a.payload?.kind !== "official" && a.payload?.kind !== "coach") throw new Error("a visit is official or the head coach's");
-      a = { type: a.type, payload: { pid: Number(a.payload?.pid), kind: a.payload.kind } };
+      const host = a.payload?.host;
+      if (host != null && !SEATS.includes(host)) throw new Error(`unknown seat ${host}`);
+      a = { type: a.type, payload: { pid: Number(a.payload?.pid), kind: a.payload.kind, ...(host != null ? { host } : {}) } };
     }
+    if (a.type === "staff_room") a = { type: a.type, payload: roomOp(a.payload) };
     if (a.type === "recruit_nil") {
       const amount = Math.round(Number(a.payload?.amount)), years = Math.round(Number(a.payload?.years ?? 1));
       if (!Number.isFinite(amount) || amount < 0) throw new Error("an NIL offer is dollars a year");
@@ -429,7 +435,8 @@ export class League {
       if (a.type === "recruit_board") this.season.setBoard(a.payload.pid, a.payload.on, a.payload.at);
       if (a.type === "scout_region") this.season.setScoutRegion(a.payload.region, a.payload.on);
       if (a.type === "recruit_pitch") this.season.setPitchPoints(a.payload.pid, a.payload.points);
-      if (a.type === "recruit_visit") this.season.pitchVisit(a.payload.pid, a.payload.kind);
+      if (a.type === "recruit_visit") this.season.pitchVisit(a.payload.pid, a.payload.kind, a.payload.host);
+      if (a.type === "staff_room") this.season.roomAction(a.payload);
       if (a.type === "recruit_nil") this.season.pitchNil(a.payload.pid, a.payload.amount, a.payload.years);
       if (a.type === "staff_time") this.season.setStaffTime(a.payload);
       if (a.type === "talk_player") this.season.talkTo(a.payload.pid);
@@ -702,5 +709,32 @@ function checkClock(clock: unknown): void {
     if (e.tempo != null && !TEMPOS.some((t) => t.id === e.tempo)) throw new Error(`unknown tempo ${String(e.tempo)}`);
     if (e.manual_timeouts != null && typeof e.manual_timeouts !== "boolean") throw new Error("bad clock event");
     if (e.timeout != null && e.timeout !== true) throw new Error("bad clock event");
+  }
+}
+
+const WHENS: When[] = ["all", "in", "off", "week"];
+/** A staff room change as the log keeps it: only the fields its op takes, checked. */
+function roomOp(o: any): RoomOp {
+  const seat = (x: unknown): Seat => { if (!SEATS.includes(x as Seat)) throw new Error(`unknown seat ${x}`); return x as Seat; };
+  const id = (x: unknown) => { const n = Number(x); if (!Number.isInteger(n) || n < 1) throw new Error("no such line"); return n; };
+  const hours = (x: unknown) => { const n = Math.round(Number(x) * 10) / 10; if (!Number.isFinite(n) || n < 0 || n > 60) throw new Error("a line is 0 to 60 hours a week"); return n; };
+  const when = (x: unknown): When => { if (!WHENS.includes(x as When)) throw new Error("a line runs all year, in season, out of season or this week"); return x as When; };
+  switch (o?.op) {
+    case "open": case "fill": return { op: o.op };
+    case "add": {
+      if (!Object.hasOwn(TASKS, o.kind)) throw new Error(`unknown kind of work ${o.kind}`);
+      const trips = o.trips == null ? undefined : Math.round(Number(o.trips));
+      if (trips != null && (!Number.isFinite(trips) || trips < 1 || trips > 10)) throw new Error("an assignment is 1 to 10 trips");
+      return { op: "add", seat: seat(o.seat), kind: o.kind as TaskKind, ...(o.target != null ? { target: String(o.target) } : {}), ...(o.hours != null ? { hours: hours(o.hours) } : {}),
+        ...(o.when != null ? { when: when(o.when) } : {}), ...(trips != null ? { trips } : {}) };
+    }
+    case "set": return { op: "set", id: id(o.id), hours: hours(o.hours) };
+    case "when": return { op: "when", id: id(o.id), when: when(o.when) };
+    case "move": return { op: "move", id: id(o.id), seat: seat(o.seat) };
+    case "remove": return { op: "remove", id: id(o.id) };
+    case "tray":
+      if (o.kind !== "prospect" && o.kind !== "region") throw new Error("send a prospect or a region");
+      return { op: "tray", kind: o.kind, key: String(o.key), on: !!o.on };
+    default: throw new Error(`unknown staff room change ${o?.op}`);
   }
 }
