@@ -272,7 +272,9 @@ prospects you want (up to 10 a week on one prospect; your recruiting share of st
 recruiting staff and this week's visits set the total, and a board set past it is spread thinner), offer,
 and send scouts.
 Actions: `recruit_auto`, `recruit_hours`, `recruit_offer`, `recruit_board` (your ordered big board),
-`scout_prospect`, `scout_region`, `staff_time`. API: `GET /api/leagues/:id/recruiting` (a class as your
+`scout_prospect`, `scout_region`, `staff_time`, `staff_room`. Once you open the staff room
+(docs/strategy.md) every contact hour sits on a coach's line and the coach with the most hours on a
+prospect is his lead recruiter. API: `GET /api/leagues/:id/recruiting` (a class as your
 staff sees it, with filters `cls`, `pos`, `region`, `q`, `stars`, `status`, `sort` and `view` = known,
 rated, found, board, mine or committed), `GET .../recruiting/prospect?pid=` (his page: who he's
 considering, your read over time, projected ratings), `GET .../recruiting/board`,

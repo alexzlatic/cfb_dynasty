@@ -629,7 +629,21 @@ describe("money", () => {
     lg.apply({ type: "sim", payload: { kind: "date", date: "2026-09-29" } });
     expect(JSON.stringify(again.season.state.recruiting)).toBe(JSON.stringify(lg.season.state.recruiting));
     again.close();
-  }, 180_000);
+
+    // The staff room: opened, filled and changed through the action log, served, and replayed.
+    expect((await act("staff_room", { op: "open" })).ok).toBe(true);
+    expect((await act("staff_room", { op: "add", seat: "staff", kind: "practice" })).error).toMatch(/staffers can't/);
+    expect((await act("staff_room", { op: "add", seat: "nobody", kind: "contact" })).error).toBeTruthy();
+    expect((await act("staff_room", { op: "tray", kind: "region", key: "florida", on: true })).ok).toBe(true);
+    const room = await getR(`/api/leagues/${id}/recruiting/room`);
+    expect(room.open).toBe(true);
+    expect(room.seats.map((x: { seat: string }) => x.seat)).toEqual(["HC", "OC", "DC", "STC", "staff"]);
+    expect(room.tray.some((x: { kind: string; key: string }) => x.kind === "region" && x.key === "florida")).toBe(true);
+    expect((await getR(`/api/leagues/${id}/strategy`)).room).toBe(true);
+    lg.apply({ type: "sim", payload: { kind: "date", date: "2026-10-06" } });
+    const r2 = replay(lg, manager.seed());
+    expect(r2.replayed).toBe(r2.original);
+  }, 240_000);
 
   it("a league saved before recruiting starts its classes when opened", async () => {
     const lg = manager.create({ name: "Pre-recruiting save", user_team_id: 2509, seed: 5 });

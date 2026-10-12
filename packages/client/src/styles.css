@@ -358,7 +358,7 @@ span.offered .logo { outline: 2px solid #e0b43a; border-radius: 50%; }
 .boardhead h2 { margin: 0; text-transform: uppercase; }
 .boardhead .seg { margin: 0; }
 .board { display: flex; flex-direction: column; gap: 8px; }
-.bcard { display: grid; grid-template-columns: 44px minmax(200px, 1.3fr) 190px 90px minmax(200px, 260px) 120px 150px; align-items: center; gap: 12px; background: var(--panel);
+.bcard { display: grid; grid-template-columns: 44px minmax(200px, 1.3fr) 190px 90px minmax(200px, 260px) 120px 170px; align-items: center; gap: 12px; background: var(--panel);
   border: 1px solid var(--line); border-left: 5px solid var(--team); border-radius: 12px; padding: 8px 12px; box-shadow: var(--shadow); }
 .bcard.mine { border-left-color: #1d8a3a; background: color-mix(in srgb, #1d8a3a 6%, var(--panel)); }
 .bcard.gone { opacity: .7; border-left-color: var(--muted); }
@@ -660,3 +660,65 @@ table.pitchparts tr.total td { font-weight: 700; border-top: 2px solid var(--lin
 .niloffer input { width: 64px; }
 .nilword.agreed { color: var(--up); font-weight: 600; } .nilword.done, .nilword.pulled { color: var(--down); }
 @media (max-width: 700px) { .visits { grid-template-columns: 1fr; } .pitchodds { display: none; } }
+
+/* The staff room: each coach's week, line by line. */
+.room .roomtotals { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.roomtotal { background: var(--head); border-radius: 8px; padding: 7px 10px; display: grid; gap: 2px; }
+.roomtotal .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+.roomtotal .k i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.roomtotal b { font-family: var(--display); font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+.roomtotal b.warnv { color: var(--down); }
+.roomtotal small { color: var(--muted); font-size: 11px; }
+.room .tray { display: grid; gap: 8px; }
+.room .trow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.room .trow > b { font-family: var(--display); text-transform: uppercase; letter-spacing: .05em; width: 90px; flex: none; }
+.titem { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 4px 3px 8px; font-size: 13px; cursor: grab; box-shadow: var(--shadow); }
+.titem select { font-size: 12px; padding: 1px 4px; }
+.seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; align-items: start; margin: 14px 0; }
+.seat { background: var(--panel); border-radius: 10px; padding: 12px; box-shadow: var(--shadow); display: grid; gap: 8px; border: 2px solid transparent; min-width: 0; }
+.seat.over { border-color: var(--down); }
+.seat.drag { border-color: var(--accent); border-style: dashed; }
+.seat.empty { opacity: .8; }
+.seat .who { display: flex; align-items: center; gap: 10px; }
+.seat .av { width: 38px; height: 38px; border-radius: 50%; background: var(--team); color: var(--team2); font-family: var(--display); font-weight: 800; display: grid; place-items: center; font-size: 16px; flex: none; }
+.seat .role { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.seat .left { margin-left: auto; text-align: right; display: grid; }
+.seat .left b { font-family: var(--display); font-size: 26px; line-height: 1; font-variant-numeric: tabular-nums; }
+.seat .left b.bad, .seat b.bad { color: var(--down); }
+.seat .left small { font-size: 11px; color: var(--muted); }
+.skillchips { display: flex; flex-wrap: wrap; gap: 4px; }
+.skillchips span { font-size: 11px; background: var(--head); border-radius: 99px; padding: 1px 8px; color: var(--muted); }
+.skillchips b { color: var(--ink); }
+.seat .meter { height: 10px; border-radius: 5px; background: var(--head); overflow: hidden; display: flex; border: 1px solid var(--line); }
+.seat .meter span { height: 100%; }
+.seat .lines { display: grid; gap: 4px; }
+.rline { display: grid; gap: 3px; padding: 5px 8px; border: 1px solid var(--line); border-left: 3px solid; border-radius: 6px; background: var(--head); font-size: 13px; min-width: 0; }
+.rline.idle { opacity: .5; }
+.rline .top, .rline .bot { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rline .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); flex: none; }
+.rline .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.rline .bot small { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rline .when { font-size: 10px; padding: 1px 7px; border-radius: 99px; flex: none; }
+.rline .hrs { font-variant-numeric: tabular-nums; font-weight: 600; flex: none; }
+.rline .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; flex: none; }
+.rline .stepper button { border: 0; border-radius: 0; padding: 0 7px; background: var(--panel); }
+.rline .stepper input { width: 36px; border: 0; border-radius: 0; padding: 2px 0; text-align: center; font-variant-numeric: tabular-nums; }
+.rline .x { border: 0; background: none; color: var(--muted); padding: 0 2px; flex: none; margin-left: auto; }
+.addbar { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; }
+.addbar .on { font-weight: 700; text-decoration: underline; }
+.addline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; background: var(--head); border-radius: 6px; padding: 8px; }
+.addline select { max-width: 100%; }
+.addline input.hrs { width: 48px; }
+.addline small { flex-basis: 100%; }
+.bulkbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 4px 10px; }
+.bulkbar.on { background: var(--mine); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.brank input[type=checkbox] { margin: 0 6px 0 0; vertical-align: middle; }
+.roombtns { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; max-width: 100%; }
+.roombtns button.link { white-space: nowrap; }
+.roombtns select { font-size: 12px; padding: 1px 4px; max-width: 120px; }
+.mapregions { margin-top: 10px; }
+.regionchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.regionchip { display: inline-flex; gap: 8px; align-items: center; background: var(--head); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+.roomnote { background: var(--mine); border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
+.sharebar { display: inline-block; width: 120px; height: 8px; border-radius: 4px; background: var(--head); border: 1px solid var(--line); overflow: hidden; vertical-align: middle; }
+.sharebar span { display: block; height: 100%; background: var(--accent); }

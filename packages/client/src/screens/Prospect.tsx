@@ -7,6 +7,7 @@ import { Logo, heightStr, shortDate } from "../util.tsx";
 import { Panel } from "./common.tsx";
 import { Dial, DualBar, recruitStars } from "./ratings.tsx";
 import { PersonaPanel } from "./Players.tsx";
+import { RoomButtons } from "./StaffRoom.tsx";
 
 const GRADE = ["Freshman", "Sophomore", "Junior", "Senior"];
 
@@ -59,6 +60,7 @@ export function ProspectPage({ pid }: { pid: number }) {
           <button disabled={busy} title="Three evaluation trips, then your scouts report back (Strategy, Scout reports)" onClick={() => act("scout_prospect", { pid: p.id, on: !p.scouting, trips: 3 })}>{p.scouting ? "Call off the scouts" : "Send scouts (3 trips)"}</button>
           {!signed && <span className="hours">Contact <input value={hours ?? String(p.hours || "")} onChange={(e) => setHours(e.target.value)} /> h/week
             <button disabled={busy || hours == null} onClick={async () => { await act("recruit_hours", { pid: p.id, hours: Number(hours) || 0 }); setHours(null); }}>Set</button></span>}
+          {!signed && <RoomButtons kind="prospect" keyId={p.id} busy={busy} act={act} />}
           <span className="muted small">{p.evals} evaluation{p.evals === 1 ? "" : "s"} · {Math.round(p.interest)} contact hours so far</span>
         </div>
       )}

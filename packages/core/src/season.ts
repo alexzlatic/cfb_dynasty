@@ -51,6 +51,7 @@ import {
   type Settings, type Team, type TeamPlayers,
 } from "./types.ts";
 import { newsToInbox, URGENT_NEWS, type InboxMessage, type InboxPost } from "./inbox.ts";
+import { COACH_SEATS, LEAD_KEEP, SEATS, TASKS, emptyRoom, inPeriod, isUpkeepGroup, positionSeat, roomSkill, roomWeek, runs, seatCap, upkeepGroupName, type RoomOp, type RoomTask, type RoomWeek, type Seat, type StaffRoom, type TaskKind, type TrayItem, type When } from "./room.ts";
 import { HEARD_HOURS, KNOW_HOURS, MAX_COACH_VISITS, MAX_POINTS, SELLING_POINTS, VISIT_COST, VISIT_HOURS, coachWorth, moneyPull, nilAnswer, nilWalk, officialWorth, pitchPull, pointEffect, pointStrengths, recruitValue, type NilTalk, type Pitch, type SellingPoint } from "./pitch.ts";
 
 export interface Seeded { seed: number; team_id: number }
@@ -1990,7 +1991,7 @@ export class Season {
     if (me == null || !st) return null;
     const t = this.team(me);
     return { id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null, regions: st.user.regions,
-      national: isPower(t), width: scoutWidth(staffSkill(this.staff(t.id), "scouting")) };
+      national: isPower(t), width: scoutWidth(this.workSkill("scouting", ["trip", "region", "scout"])) };
   }
 
   /** What your staff already knows when it starts looking: the weeks of looking behind it (KNOWN_WEEKS) at once. */
@@ -1999,7 +2000,7 @@ export class Season {
     if (!eye) return;
     this.recruitRev++;
     const zs = this.classZ(s.date), rng = new Rng(mixSeed(s.seed, s.year, eye.id, "found"));
-    const effort = Math.sqrt(timeSplit(st.user.time, this.inSeason(s.date)).scouting / 0.1);
+    const effort = Math.sqrt(this.userSplit(this.inSeason(s.date)).scouting / 0.1);
     const found: number[] = [];
     for (const p of st.prospects) {
       const u = rng.random();
@@ -2038,6 +2039,8 @@ export class Season {
     const frozen = st.frozen?.year === s.year ? st.frozen.schools : this.freezeSchools();
     // Each head coach's seasons at his school (a recruit hears about a stable program).
     const since = new Map((s.coaching?.coaches ?? []).filter((c) => c.role === "HC" && c.team_id != null && !c.gone).map((c) => [c.team_id!, c.since]));
+    // Your own coaches' skills as your staff room puts them to work.
+    const mine = me != null && st.user.room ? { width: scoutWidth(this.workSkill("scouting", ["trip", "region", "scout"], date)), eff: recruitEff(this.workSkill("recruiting", ["contact", "upkeep"], date)) } : null;
     return this.teams.map((t): School => {
       const staff = this.staff(t.id);
       const fbs = t.level === "fbs", power = isPower(t);
@@ -2046,9 +2049,9 @@ export class Season {
       const hours = t.id === me ? this.recruitLedger(date).contact : recruitHours(t.level, time.recruiting, usualStaffers(power));
       return {
         id: t.id, lat: t.venue?.lat ?? 39, lon: t.venue?.lon ?? -95, state: t.venue?.state ?? null,
-        regions: t.id === me ? st.user.regions : [], national: power, width: scoutWidth(staffSkill(staff, "scouting")),
+        regions: t.id === me ? st.user.regions : [], national: power, width: t.id === me && mine ? mine.width : scoutWidth(staffSkill(staff, "scouting")),
         level: fbs ? "fbs" : "fcs", power, ...frozen[t.id],
-        hours, eff: recruitEff(staffSkill(staff, "recruiting")),
+        hours, eff: t.id === me && mine ? mine.eff : recruitEff(staffSkill(staff, "recruiting")),
         manual: t.id === me && !st.user.auto,
         ...(since.has(t.id) ? { tenure: Math.max(0, s.year - since.get(t.id)!) } : {}),
       };
@@ -2097,6 +2100,11 @@ export class Season {
       st.rerate = Math.min(3, k);
       rateClasses(st.prospects, s.year, today, st.rerate, s.seed, this.seed.recruiting!.curve);
     }
+    // Your staff room: Monday drops last week's one-time lines; Sunday checks on lead recruiters and sets the week's hours.
+    if (st.user.room && weekday(today) <= 1) {
+      if (weekday(today) === 0) this.leadCheck(today, rep);
+      this.syncRoom(today);
+    }
     if (weekday(today) !== 0) return;
     this.scoutingWeek(today);
     const schools = this.schools(today);
@@ -2142,7 +2150,10 @@ export class Season {
   /** Your scouting hours this week (or on a date): the scouting share of the staff's week. */
   scoutHours(date = this.state.date): number {
     const st = this.state.recruiting;
-    return st ? Math.round(STAFF_HOURS * timeSplit(st.user.time, this.inSeason(date)).scouting * 10) / 10 : 0;
+    if (!st) return 0;
+    // With a staff room, the hours its trip and region lines give.
+    if (st.user.room) return this.roomWeekAt(date)!.fieldwork;
+    return Math.round(STAFF_HOURS * timeSplit(st.user.time, this.inSeason(date)).scouting * 10) / 10;
   }
 
   /**
@@ -2157,7 +2168,7 @@ export class Season {
     u.spend += Math.round(u.regions.length * SCOUT_COST.region / 52);
     // Recruiting staff beyond your program's usual are paid out of the same operations budget.
     u.spend += Math.round(Math.max(0, this.staffers() - this.usualStaffers()) * STAFFER_PAY / 52);
-    let hours = STAFF_HOURS * timeSplit(u.time, this.inSeason(today)).scouting;
+    let hours = u.room ? this.scoutHours(today) : STAFF_HOURS * timeSplit(u.time, this.inSeason(today)).scouting;
     const byId = new Map(st.prospects.map((p) => [p.id, p]));
     const done: Prospect[] = [];
     for (const pid of u.scout) {
@@ -2190,7 +2201,7 @@ export class Season {
     }
     // Your coaches come across prospects they didn't know: most near home, more where you pay a scout or put hours.
     const eye = this.myEye()!, zs = this.classZ(today), rng = new Rng(mixSeed(s.seed, today, "found"));
-    const effort = Math.sqrt(timeSplit(u.time, this.inSeason(today)).scouting / 0.1);
+    const effort = Math.sqrt(this.userSplit(this.inSeason(today)).scouting / 0.1);
     const have = new Set(u.found ?? []), found = [...have];
     for (const p of st.prospects) {
       const r = rng.random();
@@ -2231,7 +2242,8 @@ export class Season {
     }));
     return {
       hours: this.scoutHours(), in_season: this.inSeason(s.date),
-      season_hours: Math.round(STAFF_HOURS * timeSplit(u.time, true).scouting * 10) / 10, offseason_hours: Math.round(STAFF_HOURS * timeSplit(u.time, false).scouting * 10) / 10,
+      season_hours: u.room ? this.roomWeekAt(s.date, true)!.fieldwork : Math.round(STAFF_HOURS * timeSplit(u.time, true).scouting * 10) / 10,
+      offseason_hours: u.room ? this.roomWeekAt(s.date, false)!.fieldwork : Math.round(STAFF_HOURS * timeSplit(u.time, false).scouting * 10) / 10, room: !!u.room,
       trips: assignments.reduce((a, x) => a + x.trip_hours, 0), region_hours: regions.reduce((a, r) => a + r.hours, 0),
       assignments, regions, report_hours: REGION_REPORT_HOURS, default_trips: DEFAULT_TRIPS, spend: u.spend,
       costs: { ...SCOUT_COST, trip_hours: TRIP_HOURS }, reports: (u.reports ?? []).length, last_report: u.reports?.[0]?.id ?? 0,
@@ -2525,10 +2537,15 @@ export class Season {
   }
 
   // Your recruiting and scouting choices (actions).
-  setRecruitAuto(on: boolean): void { this.userRecruiting().auto = on; }
+  setRecruitAuto(on: boolean): void {
+    const u = this.userRecruiting();
+    if (on && u.room) throw new Error("with the staff room your coaches work the prospects you give them; Fill open hours puts the rest on your board");
+    u.auto = on;
+  }
   setRecruitHours(pid: number, hours: number): void {
     const u = this.userRecruiting();
     this.prospect(pid);
+    if (u.room) return this.roomContact(pid, hours);
     const h = { ...u.hours };
     if (hours > 0) h[pid] = hours; else delete h[pid];
     u.hours = h;
@@ -2549,6 +2566,23 @@ export class Season {
    * they go every week. One already assigned keeps his place (or moves to `at`) and the read his assignment started from.
    */
   setScoutTarget(pid: number, on: boolean, trips?: number, at?: number): void {
+    const room = this.userRecruiting().room;
+    if (room) {
+      const line = SEATS.flatMap((x) => room.tasks[x]).find((t) => t.kind === "trip" && Number(t.target) === pid);
+      if (!on) { if (line) return this.roomAction({ op: "remove", id: line.id }); return this.scoutTargetRaw(pid, false); }
+      if (!line) {
+        // A new assignment goes to the coach with the most hours left this week.
+        const h = this.tripNear(this.prospect(pid)) ? TRIP_HOURS.near : TRIP_HOURS.far;
+        const seat = COACH_SEATS.reduce((a, b) => (this.seatLeft(b) > this.seatLeft(a) ? b : a));
+        if (this.seatLeft(seat) < h) throw new Error(`no coach has ${h} hours left this week for a scouting trip; free some in the staff room`);
+        this.roomAction({ op: "add", seat, kind: "trip", target: String(pid), trips: trips ?? DEFAULT_TRIPS });
+        if (at != null) this.scoutTargetRaw(pid, true, trips ?? DEFAULT_TRIPS, at);
+        return;
+      }
+    }
+    this.scoutTargetRaw(pid, on, trips, at);
+  }
+  private scoutTargetRaw(pid: number, on: boolean, trips?: number, at?: number): void {
     const u = this.userRecruiting(), p = this.prospect(pid);
     const had = u.scout.includes(pid);
     const rest = u.scout.filter((x) => x !== pid);
@@ -2567,6 +2601,7 @@ export class Season {
   /** Your scouts' weekly hours on a region (0 takes them off it). */
   setRegionHours(region: Region, hours: number): void {
     const u = this.userRecruiting();
+    if (u.room) return this.roomRegion(region, hours);
     const h = { ...u.region_hours };
     if (hours > 0) h[region] = hours; else delete h[region];
     u.region_hours = h;
@@ -2575,7 +2610,40 @@ export class Season {
     const u = this.userRecruiting();
     u.regions = on ? [...new Set([...u.regions, region])].sort() : u.regions.filter((r) => r !== region);
   }
-  setStaffTime(t: StaffTime): void { this.userRecruiting().time = timeSplit(t, true); }
+  setStaffTime(t: StaffTime): void {
+    const u = this.userRecruiting();
+    if (u.room) throw new Error("your staff's week is set coach by coach in the staff room");
+    u.time = timeSplit(t, true);
+  }
+  /**
+   * Contact hours on a prospect from outside the staff room (his pitch page): the line of the coach who
+   * already recruits him changes (other lines on him stay), or a new one goes to the coach for his position,
+   * then whoever has hours left. 0 takes every line on him off.
+   */
+  private roomContact(pid: number, hours: number): void {
+    const room = this.ensureRoom(), key = String(pid);
+    const mine = SEATS.flatMap((seat) => room.tasks[seat].filter((t) => t.kind === "contact" && t.target === key).map((t) => ({ seat, t })));
+    if (hours <= 0) { for (const { t } of mine) this.roomAction({ op: "remove", id: t.id }); return; }
+    const others = mine.slice(1).reduce((a, x) => a + x.t.hours, 0);
+    if (mine.length) return this.roomAction({ op: "set", id: mine[0].t.id, hours: Math.max(1, hours - others) });
+    const pos = positionSeat(this.prospect(pid).pos);
+    const order: Seat[] = [pos, ...COACH_SEATS.filter((x) => x !== pos), "staff"];
+    const seat = order.find((x) => this.seatLeft(x) >= hours);
+    if (!seat) throw new Error(`nobody on your staff has ${hours} hours left this week; free some in the staff room`);
+    this.roomAction({ op: "add", seat, kind: "contact", target: key, hours });
+  }
+  /** Region hours from outside the staff room (the scouting screen): the first line there changes, or a new one goes to whoever has hours. */
+  private roomRegion(region: Region, hours: number): void {
+    const room = this.ensureRoom();
+    const lines = SEATS.flatMap((seat) => room.tasks[seat].filter((t) => t.kind === "region" && t.target === region));
+    if (hours <= 0) { for (const t of lines) this.roomAction({ op: "remove", id: t.id }); return; }
+    const others = lines.slice(1).reduce((a, t) => a + t.hours, 0);
+    if (lines.length) return this.roomAction({ op: "set", id: lines[0].id, hours: Math.max(1, hours - others) });
+    const order: Seat[] = ["staff", "STC", "DC", "OC", "HC"];
+    const seat = order.find((x) => this.seatLeft(x) >= hours);
+    if (!seat) throw new Error(`nobody on your staff has ${hours} hours left this week; free some in the staff room`);
+    this.roomAction({ op: "add", seat, kind: "region", target: region, hours });
+  }
   /** Put a prospect on your big board (at `at`, or the end) or take him off. */
   setBoard(pid: number, on: boolean, at?: number): void {
     const u = this.userRecruiting();
@@ -2628,7 +2696,7 @@ export class Season {
     const i = cons.findIndex((c) => c.team === me);
     const others = cons.filter((c) => c.team !== me).slice(0, 10).map((c) => byId.get(c.team)!).filter(Boolean);
     return { mine: byId.get(me)!, others, cons, place: i >= 0 ? i + 1 : null, share: i >= 0 ? cons[i].share : 0,
-      hours: p.interest[me] ?? 0, coachSkill: staffSkill(this.staff(me), "recruiting"), weekly: st.user.hours[p.id] ?? 0 };
+      hours: p.interest[me] ?? 0, coachSkill: this.workSkill("recruiting", ["contact", "upkeep"]), weekly: st.user.hours[p.id] ?? 0 };
   }
 
   /** Work out what your pitch adds to how he sees your school (stored on him for the weekly recruiting). */
@@ -2670,6 +2738,400 @@ export class Season {
     this.userRecruiting().staffers = n;
   }
 
+  // ---- your staff room (room.ts) ------------------------------------------------------------------
+  /** Your staff room, once you've opened it. */
+  roomOf(): StaffRoom | null { return this.state.recruiting?.user.room ?? null; }
+  private mondayOf(date: ISODate): ISODate { return addDays(date, -((weekday(date) + 6) % 7)); }
+  /** Each seat's week: a coach's flexible hours (nothing while the job is open), the recruiting staff's 16 each. */
+  private roomCaps(): Record<Seat, number> {
+    const me = this.state.user_team_id!, level = this.team(me).level, n = this.staffers(), staff = this.staff(me);
+    return Object.fromEntries(SEATS.map((x) => [x, x === "staff" || staff.some((m) => m.role === x) ? seatCap(x, level, n) : 0])) as Record<Seat, number>;
+  }
+  /** The prospects in an upkeep group: your uncommitted big board (recruitable, not signed), or your commits (all, or a class). */
+  private roomGroup(key: string): number[] {
+    const s = this.state, st = s.recruiting!, me = s.user_team_id!;
+    if (key === "board") {
+      const byId = new Map(st.prospects.map((p) => [p.id, p]));
+      return (st.user.board ?? []).filter((pid) => { const p = byId.get(pid); return !!p && !p.commit?.signed && p.commit?.team !== me && gradeOf(p, s.year) >= 1; });
+    }
+    const cls = key.startsWith("commits:") ? Number(key.slice(8)) : null;
+    return st.prospects.filter((p) => p.commit?.team === me && !p.commit.signed && (cls == null || p.cls === cls)).map((p) => p.id);
+  }
+  /** The week your room's lines make (in season or out, the week of `date`). */
+  roomWeekAt(date = this.state.date, inSeason = this.inSeason(date)): RoomWeek | null {
+    const room = this.roomOf();
+    if (!room) return null;
+    const memo = new Map<string, number[]>();
+    const group = (k: string) => { let g = memo.get(k); if (!g) memo.set(k, (g = this.roomGroup(k))); return g; };
+    return roomWeek(room, { inSeason, monday: this.mondayOf(date), caps: this.roomCaps(), group });
+  }
+  /** How your staff splits its week: your room's hours against the coaches' week, or your shares when you have no room. */
+  userSplit(inSeason: boolean, date = this.state.date): Required<StaffTime> {
+    const u = this.state.recruiting!.user;
+    if (!u.room) return timeSplit(u.time, inSeason);
+    const w = this.roomWeekAt(date, inSeason)!, a = w.area, week = staffHours(this.team(this.state.user_team_id!).level);
+    // Recruiting is the coaches' share (the recruiting staff's hours come on top, as they always have).
+    return { recruiting: w.coachRecruiting / week, scouting: a.scouting / week, prep: a.prep / week, opponent: a.opponent / week, develop: a.develop / week };
+  }
+  /** A skill as your staff puts it to work: each coach's own, weighed by his hours on these lines (the staff as a whole without a room). */
+  private workSkill(skill: Skill, kinds: TaskKind[], date = this.state.date): number {
+    const me = this.state.user_team_id!, staff = this.staff(me), team = staffSkill(staff, skill), room = this.roomOf();
+    if (!room) return team;
+    const by = new Map(staff.map((m) => [m.role as Seat, m.skills[skill]]));
+    return roomSkill(room, this.roomWeekAt(date)!, kinds, skill, (seat) => (seat === "staff" ? null : by.get(seat) ?? null), team);
+  }
+  /** Who sits in each seat: your coaches (with their ids when the league tracks coaches) and your recruiting staff. */
+  private roomSeats() {
+    const s = this.state, me = s.user_team_id!, co = s.coaching;
+    const recs = co ? staffRecs(co, me) : [], staff = this.staff(me);
+    return SEATS.map((seat) => {
+      if (seat === "staff") { const n = this.staffers(); return { seat, name: n ? `Recruiting staff (${n})` : "Recruiting staff", role: "Calls, upkeep and region work", coach_id: null as number | null, skills: null as Record<Skill, number> | null }; }
+      const m = staff.find((x) => x.role === seat), rec = recs.find((x) => x.role === seat);
+      return { seat, name: m ? `${m.first} ${m.last}` : `No ${ROLE_NAMES[seat as Role].toLowerCase()}`, role: ROLE_NAMES[seat as Role], coach_id: rec?.id ?? null, skills: m ? { ...m.skills } : null };
+    });
+  }
+  private seatName(seat: Seat): string { return seat === "staff" ? "Your recruiting staff" : this.roomSeats().find((x) => x.seat === seat)!.name; }
+  /** The coach with the most contact hours on a prospect this week. */
+  private leadSeat(pid: number): Seat | null {
+    const room = this.roomOf(), w = this.roomWeekAt();
+    if (!room || !w) return null;
+    let best: Seat | null = null, h = 0;
+    for (const seat of COACH_SEATS) for (const t of room.tasks[seat]) {
+      const g = t.kind === "contact" && Number(t.target) === pid ? w.given.get(t.id) ?? 0 : 0;
+      if (g > h) { h = g; best = seat; }
+    }
+    return best;
+  }
+  /** A seat's hours left in the period (in season or out) the lines would run in. */
+  private seatLeft(seat: Seat, inSeason = this.inSeason(this.state.date), without?: number): number {
+    const room = this.roomOf()!, s = this.state, monday = this.mondayOf(s.date), now = this.inSeason(s.date);
+    const used = room.tasks[seat].filter((t) => t.id !== without && inPeriod(t, inSeason, monday, now)).reduce((a, t) => a + t.hours, 0);
+    return this.roomCaps()[seat] - used;
+  }
+  /** Throws unless a line fits its seat's week in every period it runs in. */
+  private roomFits(seat: Seat, t: RoomTask, without?: number): void {
+    const s = this.state, monday = this.mondayOf(s.date), now = this.inSeason(s.date);
+    for (const period of [now, !now]) {
+      if (!inPeriod(t, period, monday, now)) continue;
+      const left = this.seatLeft(seat, period, without);
+      if (t.hours > left + 1e-9) {
+        if (seat === "staff" && this.roomCaps().staff === 0) throw new Error("you have no recruiting staff: hire some on the Strategy screen");
+        throw new Error(`${this.seatName(seat)} has ${Math.max(0, Math.round(left * 10) / 10)} hours left ${period ? "in season" : "out of season"}; that takes ${t.hours}`);
+      }
+    }
+  }
+
+  /**
+   * Open your staff room from the week you have now: each coach's share of practice, film, development,
+   * scouting and recruiting, your scouting trips and region hours, the prospects you put contact hours on
+   * (with the coach who recruits their position, while he has hours) and upkeep lines for the rest of your
+   * board and your commits, so the staff gives the same hours it did before.
+   */
+  private ensureRoom(): StaffRoom {
+    const u = this.userRecruiting();
+    if (u.room) return u.room;
+    const room = emptyRoom(), caps = this.roomCaps(), cap = caps.HC, on = timeSplit(u.time, true), off = timeSplit(u.time, false);
+    const add = (seat: Seat, kind: TaskKind, hours: number, when: When = "all", target?: string | number) => {
+      if (hours > 0) room.tasks[seat].push({ id: room.next++, kind, hours: Math.round(hours * 10) / 10, when, ...(target != null ? { target: String(target) } : {}) });
+    };
+    const scout = {} as Record<Seat, number>, rec = {} as Record<Seat, number>, recIn = {} as Record<Seat, number>;
+    for (const seat of COACH_SEATS) {
+      const prep = Math.round(on.prep * cap), film = Math.round(on.opponent * cap), dev = Math.round(on.develop * cap);
+      add(seat, "practice", prep, "in"); add(seat, "film", film, "in"); add(seat, "develop", dev, "in");
+      scout[seat] = Math.round(on.scouting * cap);
+      rec[seat] = recIn[seat] = cap - prep - film - dev - scout[seat];
+    }
+    const most = (m: Record<Seat, number>) => COACH_SEATS.reduce((a, b) => (m[b] > m[a] ? b : a));
+    // Scouting: trips and regions first, from whoever has the most scouting time left; the rest looks around.
+    for (const pid of u.scout) { const seat = most(scout), h = this.tripNear(this.prospect(pid)) ? TRIP_HOURS.near : TRIP_HOURS.far; add(seat, "trip", h, "all", pid); scout[seat] -= h; }
+    for (const [r, h] of Object.entries(u.region_hours ?? {}) as [Region, number][]) { if (!h) continue; const seat = most(scout); add(seat, "region", h, "all", r); scout[seat] -= h; }
+    // Trips and regions past a coach's scouting time come out of his recruiting time.
+    for (const seat of COACH_SEATS) if (scout[seat] < 0) { rec[seat] += scout[seat]; scout[seat] = 0; }
+    const offScout = Math.round(off.scouting * cap), offRec = cap - offScout;
+    for (const seat of COACH_SEATS) {
+      add(seat, "scout", Math.max(0, scout[seat]));
+      add(seat, "scout", offScout - Math.round(on.scouting * cap), "off");
+    }
+    // Recruiting: your contact hours by position coach, then whoever has time, then the recruiting staff.
+    let staff = caps.staff;
+    for (const [pid, h] of Object.entries(u.hours).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))) {
+      const p = this.prospect(Number(pid)), want = Math.min(MAX_CONTACT, h), pos = positionSeat(p.pos);
+      const seat: Seat = rec[pos] >= want ? pos : rec[most(rec)] >= want ? most(rec) : staff >= want ? "staff" : most(rec);
+      add(seat, "contact", want, "all", pid);
+      if (seat === "staff") staff -= want; else rec[seat] -= want;
+    }
+    for (const seat of COACH_SEATS) {
+      // When your staff ran the board, the coaches take its best prospects (roomFill, below); otherwise upkeep on the rest of it.
+      if (!u.auto) { add(seat, "upkeep", Math.max(0, rec[seat]), "all", "board"); add(seat, "upkeep", offRec - recIn[seat], "off", "board"); }
+    }
+    if (staff > 0 && !u.auto) { add("staff", "upkeep", Math.round(staff / 2), "all", "commits"); add("staff", "upkeep", staff - Math.round(staff / 2), "all", "board"); }
+    u.room = room;
+    // The room is your staff's plan, line by line: the weekly recruiting reads its contact hours, not the staff's own picks.
+    if (u.auto) { u.auto = false; this.roomFill("all"); this.roomFill("off"); }
+    return room;
+  }
+
+  /** Turn your room's lines into the contact and region hours the week runs on; drop what's done (past weeks, signed recruits, finished trips). */
+  syncRoom(date = this.state.date): void {
+    const s = this.state, st = s.recruiting, room = st?.user.room;
+    if (!st || !room) return;
+    const u = st.user, monday = this.mondayOf(date), byId = new Map(st.prospects.map((p) => [p.id, p])), scout = new Set(u.scout);
+    for (const seat of SEATS) room.tasks[seat] = room.tasks[seat].filter((t) => {
+      if (t.when === "week" && (t.week ?? "") < monday) return false;
+      if (TASKS[t.kind].target === "prospect") {
+        const p = byId.get(Number(t.target));
+        if (!p || (p.commit?.signed && (t.kind === "contact" || t.kind === "official" || t.kind === "home"))) return false;
+      }
+      return t.kind !== "trip" || scout.has(Number(t.target));
+    });
+    room.tray = room.tray.filter((i) => i.kind === "region" || byId.has(Number(i.key)));
+    const w = this.roomWeekAt(date)!;
+    u.hours = Object.fromEntries([...w.contact].filter(([, h]) => h > 0));
+    u.region_hours = Object.fromEntries([...w.regions].filter(([, h]) => h > 0));
+    // Lead recruiters: the coach with the most contact hours on each prospect.
+    const co = s.coaching;
+    if (co) {
+      const ids = new Map(staffRecs(co, s.user_team_id!).map((c) => [c.role as Seat, c.id])), best = new Map<number, [number, number]>();
+      for (const seat of COACH_SEATS) for (const t of room.tasks[seat]) {
+        const g = t.kind === "contact" ? w.given.get(t.id) ?? 0 : 0, id = ids.get(seat), pid = Number(t.target);
+        if (g > 0 && id != null && g > (best.get(pid)?.[0] ?? 0)) best.set(pid, [g, id]);
+      }
+      room.lead = Object.fromEntries([...best].map(([pid, [, id]]) => [pid, id]));
+    }
+  }
+
+  /** Sunday: recruits whose lead recruiter has left your staff feel it (LEAD_KEEP of the relationship stays). */
+  private leadCheck(today: ISODate, rep: DayReport): void {
+    const s = this.state, st = s.recruiting!, room = st.user.room, co = s.coaching, me = s.user_team_id!;
+    if (!room?.lead || !co) return;
+    const mine = new Set(staffRecs(co, me).map((c) => c.id)), byId = new Map(st.prospects.map((p) => [p.id, p]));
+    const lost = new Map<number, Prospect[]>();
+    for (const [pid, id] of Object.entries(room.lead)) {
+      if (mine.has(id)) continue;
+      const p = byId.get(Number(pid));
+      delete room.lead[pid];
+      if (!p || p.commit?.signed) continue;
+      p.interest[me] = Math.round((p.interest[me] ?? 0) * LEAD_KEEP * 100) / 100;
+      lost.set(id, [...(lost.get(id) ?? []), p]);
+    }
+    for (const [id, ps] of lost) {
+      const c = co.coaches.find((x) => x.id === id), who = c ? `${c.first} ${c.last}` : "A coach";
+      this.mail({ date: today, category: "recruiting", from: "Your staff", subject: `${who} is gone, and ${ps.length === 1 ? "a recruit he led feels it" : `${ps.length} recruits he led feel it`}`,
+        body: [`${who} was the lead recruiter for ${ps.map((p) => `${p.pos} ${p.first} ${p.last}`).join(", ")}. They lose a quarter of the relationship your staff built; put another coach on them in the staff room.`].join("\n"),
+        links: [{ label: "Staff room", to: "recruiting/room" }] }, rep);
+    }
+  }
+
+  /** A change in your staff room. */
+  roomAction(o: RoomOp): void {
+    if (o.op === "open") { this.ensureRoom(); this.syncRoom(); return; }
+    const room = this.ensureRoom(), s = this.state, u = s.recruiting!.user;
+    const find = (id: number) => {
+      for (const seat of SEATS) { const t = room.tasks[seat].find((x) => x.id === id); if (t) return { seat, t }; }
+      throw new Error(`no line ${id} in your staff room`);
+    };
+    const toTray = (kind: TrayItem["kind"], key: string) => { if (!room.tray.some((i) => i.kind === kind && i.key === key)) room.tray = [...room.tray, { kind, key }]; };
+    const offTray = (kind: TrayItem["kind"], key: string) => { room.tray = room.tray.filter((i) => !(i.kind === kind && i.key === key)); };
+    const contactOn = (pid: string, without?: number) => SEATS.reduce((a, x) => a + room.tasks[x].filter((t) => t.kind === "contact" && t.target === pid && t.id !== without).reduce((b, t) => b + t.hours, 0), 0);
+    if (o.op === "tray") {
+      if (o.kind === "region" ? !Object.hasOwn(REGIONS, o.key) : !this.knownProspects().has(Number(o.key))) throw new Error(o.kind === "region" ? `unknown region ${o.key}` : "your staff doesn't know that prospect");
+      if (o.on) toTray(o.kind, o.key); else offTray(o.kind, o.key);
+    }
+    if (o.op === "add") {
+      const info = TASKS[o.kind], seat = o.seat;
+      if (seat === "staff" && !info.staff) throw new Error(`recruiting staffers can't take ${info.name.toLowerCase()}`);
+      if (info.hc && seat !== "HC") throw new Error(`${info.name.toLowerCase()}s are the head coach's`);
+      // A new line runs in the part of the year you're in (in season or out); make it all year when both weeks have room.
+      let when: When = o.when ?? (info.season || this.inSeason(s.date) ? "in" : "off");
+      if (info.season && when !== "in" && when !== "week") throw new Error(`${info.name.toLowerCase()} is in-season work`);
+      const target = o.target != null ? String(o.target) : undefined;
+      if (info.target === "prospect") {
+        const p = this.prospect(Number(target));
+        if (!this.knownProspects().has(p.id)) throw new Error("your staff doesn't know that prospect");
+      }
+      if (info.target === "region" && !Object.hasOwn(REGIONS, target ?? "")) throw new Error(`unknown region ${target}`);
+      if (info.target === "group" && !isUpkeepGroup(target ?? "")) throw new Error(`unknown group ${target}`);
+      if (o.kind === "official" || o.kind === "home") {
+        this.pitchVisit(Number(target), o.kind === "official" ? "official" : "coach", seat);
+        offTray("prospect", target!);
+        this.syncRoom();
+        return;
+      }
+      let hours = Math.round(Number(o.hours ?? info.def) * 10) / 10;
+      if (o.kind === "trip") {
+        if (u.scout.includes(Number(target))) throw new Error("your scouts already have him on their list");
+        hours = this.tripNear(this.prospect(Number(target))) ? TRIP_HOURS.near : TRIP_HOURS.far;
+        if (when === "week") when = this.inSeason(s.date) ? "in" : "off";
+      }
+      if (!Number.isFinite(hours) || hours <= 0) throw new Error("a line takes some hours");
+      if (o.kind === "contact" && contactOn(target!) + hours > MAX_CONTACT) throw new Error(`up to ${MAX_CONTACT} contact hours a week on one prospect (${contactOn(target!)} set)`);
+      const week = when === "week" ? this.mondayOf(s.date) : undefined;
+      const same = o.kind === "trip" ? undefined : room.tasks[seat].find((t) => t.kind === o.kind && t.target === target && t.when === when && t.week === week);
+      const line: RoomTask = same ? { ...same, hours: same.hours + hours } : { id: room.next, kind: o.kind, hours, when, ...(target != null ? { target } : {}), ...(week ? { week } : {}) };
+      this.roomFits(seat, line, same?.id);
+      if (o.kind === "trip") this.scoutTargetRaw(Number(target), true, o.trips ?? DEFAULT_TRIPS);
+      if (same) same.hours = line.hours; else { room.tasks[seat] = [...room.tasks[seat], line]; room.next++; }
+      if (target != null && info.target !== "group") offTray(info.target === "region" ? "region" : "prospect", target);
+    }
+    if (o.op === "set") {
+      const { seat, t } = find(o.id), info = TASKS[t.kind];
+      if (info.fixed) throw new Error(`a ${info.short.toLowerCase()} takes what it takes`);
+      const hours = Math.round(o.hours * 10) / 10;
+      if (hours <= 0) return this.roomAction({ op: "remove", id: o.id });
+      if (t.kind === "contact" && contactOn(t.target!, t.id) + hours > MAX_CONTACT) throw new Error(`up to ${MAX_CONTACT} contact hours a week on one prospect`);
+      this.roomFits(seat, { ...t, hours }, t.id);
+      t.hours = hours;
+    }
+    if (o.op === "when") {
+      const { seat, t } = find(o.id), info = TASKS[t.kind];
+      if (info.fixed) throw new Error(`a ${info.short.toLowerCase()} runs when it's booked`);
+      if (info.season && o.when !== "in" && o.when !== "week") throw new Error(`${info.name.toLowerCase()} is in-season work`);
+      const next: RoomTask = { ...t, when: o.when, ...(o.when === "week" ? { week: this.mondayOf(s.date) } : {}) };
+      if (o.when !== "week") delete next.week;
+      this.roomFits(seat, next, t.id);
+      Object.assign(t, next);
+      if (o.when !== "week") delete t.week;
+    }
+    if (o.op === "move") {
+      const { seat, t } = find(o.id), info = TASKS[t.kind];
+      if (o.seat === seat) return;
+      if (info.fixed && t.kind !== "trip") throw new Error("a visit stays with the coach who made it");
+      if (o.seat === "staff" && !info.staff) throw new Error(`recruiting staffers can't take ${info.name.toLowerCase()}`);
+      if (info.hc && o.seat !== "HC") throw new Error(`${info.name.toLowerCase()}s are the head coach's`);
+      this.roomFits(o.seat, t);
+      room.tasks[seat] = room.tasks[seat].filter((x) => x !== t);
+      room.tasks[o.seat] = [...room.tasks[o.seat], t];
+    }
+    if (o.op === "remove") {
+      const { seat, t } = find(o.id);
+      if (t.kind === "official" || t.kind === "home") throw new Error("the visit is booked");
+      room.tasks[seat] = room.tasks[seat].filter((x) => x !== t);
+      if (t.kind === "trip") this.scoutTargetRaw(Number(t.target), false);
+      // A prospect or region with no line left goes back to wait for a coach.
+      if (t.kind === "contact" && !contactOn(t.target!)) toTray("prospect", t.target!);
+      if (t.kind === "region" && !SEATS.some((x) => room.tasks[x].some((y) => y.kind === "region" && y.target === t.target))) toTray("region", t.target!);
+    }
+    if (o.op === "fill") this.roomFill();
+    this.syncRoom();
+  }
+
+  /**
+   * Your staff's default for the hours you haven't placed this week: coaches take the prospects on your board
+   * who have no line yet, then the ones your staff has been working (the head coach any position,
+   * coordinators their side of the ball), six hours each, then upkeep on the rest of the board; the
+   * recruiting staff takes upkeep on your commits.
+   */
+  private roomFill(when?: When): void {
+    const room = this.roomOf()!, s = this.state, st = s.recruiting!, me = s.user_team_id!;
+    const w: When = when ?? (this.inSeason(s.date) ? "in" : "off");
+    // The period whose free hours the new lines take (an all-year line, this one).
+    const now = w === "in" ? true : w === "off" ? false : this.inSeason(s.date);
+    const byId = new Map(st.prospects.map((p) => [p.id, p]));
+    const lined = new Set(SEATS.flatMap((x) => room.tasks[x].filter((t) => t.kind === "contact").map((t) => Number(t.target))));
+    const ok = (p: Prospect | undefined): p is Prospect => !!p && !lined.has(p.id) && !p.commit?.signed && p.commit?.team !== me && gradeOf(p, s.year) >= 1;
+    // Your board first, in your order; then the uncommitted prospects your staff has been working, closest relationships first.
+    const open = (st.user.board ?? []).map((pid) => byId.get(pid)).filter(ok);
+    const onBoard = new Set(open.map((p) => p.id));
+    open.push(...st.prospects.filter((p) => ok(p) && !onBoard.has(p.id) && !p.commit && (p.interest[me] ?? 0) > 0)
+      .sort((a, b) => (b.interest[me] ?? 0) - (a.interest[me] ?? 0) || a.id - b.id));
+    const bump = (seat: Seat, kind: TaskKind, target: string, h: number) => {
+      const same = room.tasks[seat].find((t) => t.kind === kind && t.target === target && t.when === w);
+      if (same) same.hours = Math.round((same.hours + h) * 10) / 10;
+      else room.tasks[seat] = [...room.tasks[seat], { id: room.next++, kind, target, hours: Math.round(h * 10) / 10, when: w }];
+    };
+    const commits = this.roomGroup("commits").length;
+    for (const seat of SEATS) {
+      let left = Math.floor(this.seatLeft(seat, now) * 10) / 10;
+      if (left <= 0) continue;
+      // The recruiting staff keeps up with your commits (two hours a week each) before it takes new prospects.
+      if (seat === "staff" && commits) {
+        const have = room.tasks.staff.filter((t) => t.kind === "upkeep" && t.target === "commits" && runs(t, now, this.mondayOf(s.date))).reduce((a, t) => a + t.hours, 0);
+        const h = Math.min(left, Math.max(0, 2 * commits - have));
+        if (h > 0) { bump(seat, "upkeep", "commits", h); left = Math.round((left - h) * 10) / 10; }
+      }
+      while (left >= 2) {
+        // His side of the ball first (the head coach and the recruiting staff take anyone), then anyone.
+        let i = open.findIndex((p) => seat === "HC" || seat === "staff" || positionSeat(p.pos) === seat);
+        if (i < 0) i = open.length ? 0 : -1;
+        if (i < 0) break;
+        const h = Math.min(6, left);
+        bump(seat, "contact", String(open[i].id), h);
+        open.splice(i, 1);
+        left = Math.round((left - h) * 10) / 10;
+      }
+      if (left > 0) bump(seat, "upkeep", seat === "staff" && commits ? "commits" : "board", left);
+    }
+  }
+
+  /** Your staff room as the screen shows it: each seat's lines and hours, what's waiting, and what each area buys this week. */
+  roomView() {
+    const s = this.state, st = s.recruiting, me = s.user_team_id;
+    if (!st || me == null) return { available: false as const };
+    const u = st.user, room = u.room ?? null, now = this.inSeason(s.date), monday = this.mondayOf(s.date);
+    const byId = new Map(st.prospects.map((p) => [p.id, p]));
+    const caps = this.roomCaps(), seats = this.roomSeats();
+    const pinfo = (pid: number) => {
+      const p = byId.get(pid);
+      if (!p) return null;
+      return { id: p.id, name: `${p.first} ${p.last}`, pos: p.pos, cls: p.cls, grade: gradeOf(p, s.year), stars: p.svc ? starsOf(p.svc.r) : null, home: p.home.city ? `${p.home.city}${p.home.state ? `, ${p.home.state}` : ""}` : p.home.state,
+        commit: p.commit ? (p.commit.team === me ? "mine" : this.team(p.commit.team).school) : null, signed: !!p.commit?.signed, near: this.tripNear(p),
+        board: (u.board ?? []).includes(p.id), offered: p.offers.includes(me), lead: positionSeat(p.pos),
+        can_official: gradeOf(p, s.year) >= 2 && !u.pitches?.[p.id]?.visit, homes: (u.pitches?.[p.id]?.coach ?? []).length };
+    };
+    const regionName = (k: string) => REGIONS[k as Region]?.name ?? k;
+    const mine = this.team(me), home = regionOf({ state: mine.venue?.state ?? null, lat: mine.venue?.lat ?? 39 });
+    const base = {
+      available: true as const, open: !!room, date: s.date, in_season: now, monday, auto: u.auto, staffers: this.staffers(), usual_staffers: this.usualStaffers(), max_staffers: MAX_STAFFERS,
+      max_contact: MAX_CONTACT, trip_hours: TRIP_HOURS, visit_hours: VISIT_HOURS, default_trips: DEFAULT_TRIPS, home_region: home,
+      tasks: TASKS, regions: Object.fromEntries((Object.keys(REGIONS) as Region[]).map((k) => [k, REGIONS[k].name])),
+    };
+    if (!room) return { ...base, seats: seats.map((x) => ({ ...x, cap: caps[x.seat], used: 0, used_in: 0, used_off: 0, lines: [] })), tray: [], areas: null, groups: [], prospects: [] };
+    const w = this.roomWeekAt()!;
+    const groupCount = new Map<string, number>();
+    const label = (t: RoomTask) => {
+      const info = TASKS[t.kind];
+      if (info.target === "prospect") { const p = pinfo(Number(t.target)); return p ? `${p.name}` : `Prospect ${t.target}`; }
+      if (info.target === "region") return regionName(t.target!) + (t.target === home ? " (home)" : "");
+      if (info.target === "group") return upkeepGroupName(t.target!);
+      return info.name;
+    };
+    const ref = new Set<number>(u.board ?? []);
+    const lines = (seat: Seat) => room.tasks[seat].map((t) => {
+      const info = TASKS[t.kind];
+      let sub = "";
+      if (info.target === "prospect") { ref.add(Number(t.target)); const p = pinfo(Number(t.target)); if (p) sub = `${p.pos} · ${p.cls}${p.commit ? ` · ${p.commit === "mine" ? "committed to you" : `committed to ${p.commit}`}` : ""}`; }
+      if (t.kind === "trip") { const left = u.trips_left?.[t.target!]; sub += left != null ? ` · ${left} trip${left === 1 ? "" : "s"} left` : " · every week"; }
+      if (t.kind === "upkeep") {
+        const n = groupCount.get(t.target!) ?? this.roomGroup(t.target!).length;
+        groupCount.set(t.target!, n);
+        sub = n ? `${n} recruit${n === 1 ? "" : "s"}${t.target === "board" ? " without a line of their own" : ""}` : "nobody in it yet";
+      }
+      return { ...t, label: label(t), sub, given: Math.round((w.given.get(t.id) ?? 0) * 10) / 10, live: runs(t, now, monday) };
+    });
+    const out = seats.map((x) => {
+      const used = (period: boolean) => room.tasks[x.seat].filter((t) => inPeriod(t, period, monday, now)).reduce((a, t) => a + t.hours, 0);
+      return { ...x, cap: caps[x.seat], used: Math.round(w.used[x.seat] * 10) / 10, used_in: Math.round(used(true) * 10) / 10, used_off: Math.round(used(false) * 10) / 10, lines: lines(x.seat) };
+    });
+    for (const i of room.tray) if (i.kind === "prospect") ref.add(Number(i.key));
+    const contact = [...w.contact.values()].reduce((a, h) => a + h, 0);
+    const split = this.userSplit(now);
+    const commitClasses = [...new Set(st.prospects.filter((p) => p.commit?.team === me && !p.commit.signed).map((p) => p.cls))].sort();
+    return {
+      ...base, seats: out,
+      tray: room.tray.map((i) => i.kind === "prospect" ? { ...i, label: pinfo(Number(i.key))?.name ?? i.key, prospect: pinfo(Number(i.key)) } : { ...i, label: regionName(i.key), prospect: null }),
+      areas: {
+        recruiting: { hours: Math.round(w.area.recruiting * 10) / 10, contact: Math.round(contact * 10) / 10, prospects: w.contact.size, skill: Math.round(this.workSkill("recruiting", ["contact", "upkeep"])) },
+        scouting: { hours: Math.round(w.area.scouting * 10) / 10, fieldwork: w.fieldwork, skill: Math.round(this.workSkill("scouting", ["trip", "region", "scout"])) },
+        prep: { hours: Math.round(w.area.prep * 10) / 10, factor: this.prepFactor(), skill: Math.round(this.workSkill("game_planning", ["practice"])) },
+        opponent: { hours: Math.round(w.area.opponent * 10) / 10, skill: Math.round(this.workSkill("scouting", ["film"])) },
+        develop: { hours: Math.round(w.area.develop * 10) / 10, pace: labPace(split.develop) },
+      },
+      groups: [{ key: "commits", label: upkeepGroupName("commits"), count: this.roomGroup("commits").length }, ...commitClasses.map((c) => ({ key: `commits:${c}`, label: upkeepGroupName(`commits:${c}`), count: this.roomGroup(`commits:${c}`).length })),
+        { key: "board", label: upkeepGroupName("board"), count: this.roomGroup("board").length }],
+      prospects: [...ref].map(pinfo).filter((p): p is NonNullable<ReturnType<typeof pinfo>> => !!p && !p.signed),
+    };
+  }
+
   /**
    * Your recruiting week (Monday to Sunday, the week of `date`): the coaches' recruiting share plus the
    * recruiting staff, less the visits made so far; and the head coach's own hours, which visits draw on.
@@ -2685,21 +3147,63 @@ export class Season {
       const n = (x.coach ?? []).filter((d) => d >= monday && d <= date).length;
       if (n) { const h = n * (this.tripNear(this.prospect(Number(pid))) ? VISIT_HOURS.coach_near : VISIT_HOURS.coach_far); homes += n; visits += h; hc += h; }
     }
-    const coaches = staffHours(t.level) * share, total = recruitHours(t.level, share, staffers);
     const board = Object.values(st.user.hours).reduce((a, h) => a + Math.min(MAX_CONTACT, Math.max(0, h)), 0);
     const r = (x: number) => Math.round(x * 10) / 10;
+    const room = st.user.room;
+    if (room) {
+      // With a staff room the week is what its lines give: contact and upkeep from the coaches and the
+      // recruiting staff, with visits on the coaches who make them (not out of the contact hours).
+      const w = this.roomWeekAt(date)!, now = this.inSeason(date);
+      const rec = (seats: Seat[], kinds: TaskKind[]) => seats.reduce((a, x) => a + room.tasks[x].reduce((b, y) => b + (kinds.includes(y.kind) ? w.given.get(y.id) ?? 0 : 0), 0), 0);
+      const coaches = rec(COACH_SEATS, ["contact", "upkeep"]), staff = rec(["staff"], ["contact", "upkeep"]);
+      const left = (x: Seat) => Math.max(0, this.seatLeft(x, now));
+      return {
+        share: coaches / staffHours(t.level), coaches: r(coaches), staffers, usual_staffers: this.usualStaffers(), staffer_hours: r(staff), total: r(coaches + staff + visits),
+        visits: r(visits), officials, homes, contact: r(coaches + staff), board: r(board), max_contact: MAX_CONTACT,
+        hc: { week: this.roomCaps().HC, recruiting: r(rec(["HC"], ["contact", "upkeep", "official", "home"])), used: hc, left: r(left("HC")) },
+        room: true, host_free: r(Math.max(...COACH_SEATS.map(left))),
+      };
+    }
+    const coaches = staffHours(t.level) * share, total = recruitHours(t.level, share, staffers);
     return {
       share, coaches: r(coaches), staffers, usual_staffers: this.usualStaffers(), staffer_hours: STAFFER_HOURS * staffers, total: r(total),
       visits: r(visits), officials, homes, contact: r(Math.max(0, total - visits)), board, max_contact: MAX_CONTACT,
       hc: { week: HC_HOURS, recruiting: r(HC_HOURS * share), used: hc, left: r(Math.max(0, HC_HOURS * share - hc)) },
+      room: false, host_free: r(Math.max(0, total - visits)),
     };
   }
 
-  /** Bring him in for an official visit (juniors and seniors, once each), or send your head coach to his home (twice at most). */
-  pitchVisit(pid: number, kind: "official" | "coach"): void {
+  /**
+   * Bring him in for an official visit (juniors and seniors, once each), or send your head coach to his home
+   * (twice at most). With a staff room a coach hosts the visit (`host`, by default his lead recruiter): the
+   * weekend takes 6 of his hours and 2 of the head coach's, and the visit stays on their week as a line.
+   */
+  pitchVisit(pid: number, kind: "official" | "coach", host?: Seat): void {
     const s = this.state, p = this.prospect(pid);
     this.pitchable(p);
     const pitch = this.pitchOf(pid), near = this.tripNear(p);
+    const room = this.roomOf();
+    if (room) {
+      const seat: Seat = kind === "coach" ? "HC" : host ?? this.leadSeat(pid) ?? "HC";
+      if (kind === "coach" && host && host !== "HC") throw new Error("home visits are the head coach's");
+      if (seat === "staff") throw new Error("recruiting staffers can't host a visit");
+      if (kind === "official") {
+        if (gradeOf(p, s.year) < 2) throw new Error("official visits are for juniors and seniors");
+        if (pitch.visit) throw new Error(`he made his official visit on ${pitch.visit}`);
+      } else if ((pitch.coach ?? []).length >= MAX_COACH_VISITS) throw new Error(`your head coach has visited him ${MAX_COACH_VISITS} times`);
+      const week = this.mondayOf(s.date), hcPart = kind === "coach" ? (near ? VISIT_HOURS.coach_near : VISIT_HOURS.coach_far) : VISIT_HOURS.official_hc;
+      const hostPart = kind === "official" ? VISIT_HOURS.official - VISIT_HOURS.official_hc : 0;
+      const lines: [Seat, number][] = seat === "HC" ? [["HC", hcPart + hostPart]] : [[seat, hostPart], ["HC", hcPart]];
+      for (const [x, h] of lines) {
+        const left = this.seatLeft(x);
+        if (left + 1e-9 < h) throw new Error(`${this.seatName(x)} has ${Math.max(0, Math.round(left * 10) / 10)} hours left this week; ${kind === "official" ? (x === "HC" && seat !== "HC" ? "hosting an official visit takes 2 of the head coach's" : "an official visit takes " + h) : `a home visit ${near ? "near home" : "this far away"} takes ${h}`}`);
+      }
+      this.userRecruiting().spend += kind === "official" ? (near ? VISIT_COST.official_near : VISIT_COST.official_far) : near ? VISIT_COST.coach_near : VISIT_COST.coach_far;
+      this.savePitch(pid, kind === "official" ? { ...pitch, visit: s.date } : { ...pitch, coach: [...(pitch.coach ?? []), s.date] });
+      for (const [x, h] of lines) room.tasks[x] = [...room.tasks[x], { id: room.next++, kind: kind === "official" ? "official" : "home", target: String(pid), hours: h, when: "week", week }];
+      room.tray = room.tray.filter((i) => !(i.kind === "prospect" && i.key === String(pid)));
+      return;
+    }
     if (kind === "official") {
       if (gradeOf(p, s.year) < 2) throw new Error("official visits are for juniors and seniors");
       if (pitch.visit) throw new Error(`he made his official visit on ${pitch.visit}`);
@@ -2873,7 +3377,7 @@ export class Season {
   prepFactor(): number {
     const s = this.state, me = s.user_team_id;
     if (me == null || !s.recruiting) return 1;
-    return prepFactor(timeSplit(s.recruiting.user.time, true).prep, staffSkill(this.staff(me), "game_planning"));
+    return prepFactor(this.userSplit(true).prep, this.workSkill("game_planning", ["practice"]));
   }
 
   // ---- true vs scouted ratings ------------------------------------------------------------------
@@ -3062,7 +3566,7 @@ export class Season {
   labPace(date = this.state.date): number {
     const st = this.state.recruiting;
     if (!st || !this.inSeason(date)) return 1;
-    return labPace(timeSplit(st.user.time, true).develop);
+    return labPace(this.userSplit(true, date).develop);
   }
 
   /** Each morning, the work your development plans did since the last tally, at the pace the staff gave them. */
@@ -4473,8 +4977,8 @@ export class Season {
     const g = this.nextUserGame();
     if (!g || g.date <= today || daysBetween(today, g.date) > 6) return;
     if (!s.film || s.film.game_id !== g.id) s.film = { game_id: g.id, hours: 0 };
-    const share = timeSplit(s.recruiting.user.time, true).opponent;
-    s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(staffSkill(this.staff(me), "scouting"))) * 10) / 10;
+    const share = this.userSplit(true, today).opponent;
+    s.film.hours = Math.round((s.film.hours + STAFF_HOURS / 6 * share * filmEff(this.workSkill("scouting", ["film"], today))) * 10) / 10;
     // The night before the game, the staff's opponent report reaches your inbox.
     if (daysBetween(today, g.date) === 1) this.opponentMail(today);
   }

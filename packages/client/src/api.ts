@@ -200,6 +200,11 @@ export type BoardRow = ProspectRow & { considering: Considering[]; you: { place:
 /** Your pitch to one recruit (Season.pitchView) and NIL at a glance (Season.nilView). */
 export type PitchData = ReturnType<Season["pitchView"]>;
 export type NilData = Extract<ReturnType<Season["nilView"]>, { available: true }>;
+/** Your staff room (Season.roomView): each coach's lines, what's waiting for a coach and what each area buys. */
+export type RoomData = Extract<ReturnType<Season["roomView"]>, { available: true }>;
+export type RoomSeat = RoomData["seats"][number];
+export type RoomLine = RoomSeat["lines"][number];
+export type RoomProspect = RoomData["prospects"][number];
 /** A map point: id, lat, lon, stars, your estimate, committed to, on your board (1/0), position, name. */
 export type MapPoint = [number, number, number, number, number, number | null, number, string, string];
 export interface StaffTimeSplit { recruiting: number; scouting: number; prep: number; opponent?: number; develop?: number }
@@ -208,6 +213,8 @@ export type StaffShare = "recruiting" | "scouting" | "develop" | "prep" | "oppon
 // ---- strategy: the staff's week and the scouts ----
 export interface StrategyView {
   available: boolean; team_id: number | null; date: string; in_season: boolean; staff_hours: number;
+  /** The split comes from your staff room's lines. */
+  room?: boolean;
   /** The in-season split (shares add up to 1), the same split out of season, and the usual week. */
   time: Required<StaffTimeSplit>; offseason: Required<StaffTimeSplit>; usual: Required<StaffTimeSplit>;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
@@ -238,7 +245,7 @@ export interface RecruitingView {
   total: number; prospects: ProspectRow[];
   /** The high school stat columns for the position filtered on (null for all positions). */
   hs_cols?: HsCol[] | null;
-  settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit; board: number[] };
+  settings: { auto: boolean; hours: Record<string, number>; scout: number[]; regions: string[]; spend: number; time: StaffTimeSplit; split: StaffTimeSplit; board: number[]; room?: boolean };
   home: { lat: number | null; lon: number | null; state: string | null } | null;
   staff: { role: string; first: string; last: string; skills: Record<string, number> }[]; skills: Record<string, number>; skill_names: Record<string, string>;
   hours: number; regions: Record<string, { name: string; states: string[] }>; costs: { region: number; trip_near: number; trip_far: number; trip_hours: { near: number; far: number } };
@@ -355,6 +362,7 @@ export const api = {
   board: (id: string) => req<{ rows: BoardRow[] }>(`/api/leagues/${id}/recruiting/board`),
   pitch: (id: string, pid: number) => req<PitchData>(`/api/leagues/${id}/recruiting/pitch?pid=${pid}`),
   nil: (id: string) => req<NilData | { available: false }>(`/api/leagues/${id}/recruiting/nil`),
+  room: (id: string) => req<RoomData | { available: false }>(`/api/leagues/${id}/recruiting/room`),
   recruitMap: (id: string, cls: number, pos = "") => req<{ cls: number; points: MapPoint[] }>(`/api/leagues/${id}/recruiting/map?cls=${cls}${pos ? `&pos=${pos}` : ""}`),
   classRanks: (id: string, cls: number) => req<ClassRank[]>(`/api/leagues/${id}/recruiting/rankings?cls=${cls}&limit=25`),
   liveLeave: (id: string) => req<{ ok: boolean }>(`/api/leagues/${id}/live/leave`, { method: "POST" }),

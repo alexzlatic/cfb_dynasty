@@ -53,7 +53,9 @@ function Overview() {
   if (!data) return <p className="muted">Loading...</p>;
   if (!data.available || data.team_id == null) return <Panel title="Strategy"><p className="muted">{data.available ? "You need a team." : "This league has no recruiting, so there's no staff week to plan."}</p></Panel>;
   const t = draft ?? data.time;
-  const sum = SHARES.reduce((a, s) => a + t[s.key], 0) || 1;
+  // With a staff room the split is what the coaches' lines add up to (hours you leave unplaced count for nothing).
+  const room = data.room;
+  const sum = room ? 1 : SHARES.reduce((a, s) => a + t[s.key], 0) || 1;
   const share = (k: StaffShare) => t[k] / sum;
   const hours = (k: StaffShare) => Math.round(data.staff_hours * share(k));
   const ratio = (k: StaffShare) => (data.time[k] > 0 ? share(k) / data.time[k] : 1);
@@ -82,17 +84,20 @@ function Overview() {
       <div className="pagehead"><h2>Strategy</h2><span className="muted">Where your staff's {data.staff_hours} hours a week go, and what each share buys. Each line has a screen to fine-tune it.</span></div>
       {err && <p className="error">{err}</p>}
       <Panel title="Your staff's week" right={<span className="small muted">{data.in_season ? "In season now" : "Out of season now: recruiting and scouting only"}</span>}>
+        {room ? <p className="roomnote">Your staff's week is set coach by coach in the <a href={`#/l/${id}/recruiting/room`}>staff room ›</a> This is what their lines add up to.</p>
+          : <p className="small muted">Want to give each coach his own week, line by line? Set up the <a href={`#/l/${id}/recruiting/room`}>staff room ›</a></p>}
         <table className="grid strategy"><thead><tr><th>Area</th><th>Share</th><th className="num">Hours</th><th>What it buys</th><th /></tr></thead><tbody>
           {SHARES.map((s) => <tr key={s.key}>
             <td title={s.what}><b>{s.label}</b><div className="muted small">{s.what}</div></td>
-            <td className="nowrap"><input type="range" min={0} max={100} value={Math.round(100 * share(s.key))} onChange={(e) => set(s.key, Number(e.target.value) / 100)} /> <b>{pct(share(s.key))}</b>
+            <td className="nowrap">{room ? <span className="sharebar"><span style={{ width: `${Math.min(100, 100 * share(s.key))}%` }} /></span>
+              : <input type="range" min={0} max={100} value={Math.round(100 * share(s.key))} onChange={(e) => set(s.key, Number(e.target.value) / 100)} />} <b>{pct(share(s.key))}</b>
               {Math.abs(share(s.key) - data.usual[s.key]) >= 0.005 && <span className="muted small"> usual {pct(data.usual[s.key])}</span>}</td>
             <td className="num">{hours(s.key)}</td>
             <td>{buys[s.key].text}</td>
             <td className="nowrap"><a href={buys[s.key].href}>{buys[s.key].link} ›</a></td>
           </tr>)}
         </tbody></table>
-        <p>
+        {!room && <><p>
           {draft && <><button className="primary" disabled={busy} onClick={async () => { await act("staff_time", draft); setDraft(null); }}>Save the week</button> <button className="link" onClick={() => setDraft(null)}>Cancel</button> </>}
           {!draft && Object.keys(data.usual).some((k) => Math.abs(data.time[k as StaffShare] - data.usual[k as StaffShare]) >= 0.005) && <button className="link" disabled={busy} onClick={() => act("staff_time", data.usual)}>Back to the usual week</button>}
         </p>
@@ -100,7 +105,7 @@ function Overview() {
           {" "}{pct(off.recruiting)} recruiting and {pct(off.scouting)} scouting ({Math.round(data.staff_hours * off.scouting)} scouting hours a week).
           Less practice costs you on the field; less development slows every plan; less recruiting means fewer contact hours with the prospects on your board.</p>
         <p><label className="check"><input type="checkbox" checked={data.recruiting.auto} disabled={busy} onChange={(e) => act("recruit_auto", { on: e.target.checked })} /> Let the staff run the recruiting board</label>
-          <span className="muted small"> {data.recruiting.board} on your board · {data.recruiting.commits} committed for {state.year + 1}</span></p>
+          <span className="muted small"> {data.recruiting.board} on your board · {data.recruiting.commits} committed for {state.year + 1}</span></p></>}
       </Panel>
       <div className="cols even">
         <Panel title="Scouting" right={<a className="small" href={`#/l/${id}/strategy/scouting`}>Assignments ›</a>}>

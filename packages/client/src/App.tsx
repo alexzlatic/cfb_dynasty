@@ -88,7 +88,7 @@ const NAV: NavSection[] = [
   // Every call about where the staff's time and money go, each with its own screen.
   { key: "strategy", label: "Strategy", pages: [page("Overview", "strategy/overview", ["strategy"], true), page("Scouting", "strategy/scouting", ["strategy"], true),
     page("Scout reports", "strategy/reports", ["strategy"], true), page("Development", "development", ["development"], true), page("Game plan", "plan", ["plan"], true), page("Staff", "staff", ["staff"], true)] },
-  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]), page("NIL tracker", "recruiting/nil", ["recruiting"], true),
+  { key: "recruiting", label: "Recruiting", pages: [page("Big board", "recruiting/board", ["recruiting"], true), page("Staff room", "recruiting/room", ["recruiting"], true), page("Transfer portal", "portal"), page("Prospects", "recruiting/list", ["recruiting"]), page("NIL tracker", "recruiting/nil", ["recruiting"], true),
     page("Map", "recruiting/map", ["recruiting"]), page("Class rankings", "recruiting/rankings", ["recruiting"])] },
   { key: "money", label: "Money", pages: [page("Front office", "front", ["front"], true), page("Payroll", "payroll", ["payroll"], true), page("Collective", "collective", ["collective"], true), page("Budget", "budget", ["budget"], true)] },
   { key: "stats", label: "Stats", pages: [page("Players", "stats/players", ["stats"]), page("Teams", "stats/teams", ["stats"]), page("Leaders", "stats/leaders", ["stats"]), page("History", "stats/history", ["stats"])] },
