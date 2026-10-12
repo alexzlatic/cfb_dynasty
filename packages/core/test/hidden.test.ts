@@ -96,7 +96,7 @@ describe("hidden development, scheme fit and chemistry", () => {
     runSim(s, { kind: "end_of_season" });
     const was = new Map(s.roster(2509).map((p) => [p.id, p.ovr]));
     const { next } = s.nextSeason(seed.coaches);
-    const m = next.state.inbox.find((x) => /New ratings are in/.test(x.subject))!;
+    const m = next.state.inbox!.find((x) => /New ratings are in/.test(x.subject))!;
     expect(m.category).toBe("staff");
     const back = next.roster(2509).filter((p) => was.has(p.id));
     const up = back.filter((p) => p.ovr > was.get(p.id)!).length;
