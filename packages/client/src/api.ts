@@ -48,14 +48,17 @@ export type UnitRead = { development: number; fit: number; chemistry: number };
 export interface DevPlayer {
   pid: number; name: string; pos: string; class: string; years: number; ovr: number; starter: boolean; gp: number; plan: LabPlan | null;
   focus: { area: LabArea; by: "plan" | "staff"; attrs: { key: string; label: string; value: number }[] };
-  /** Gained this year so far; gained this phase, what the staff planned for the whole phase and by today; trend against a normal pace over the last few weeks, and change since last Monday (in season). */
-  so_far: number; gained: number; target: number; by_now: number; trend: number | null; last_week: number | null;
+  /** Gained this year so far; gained this phase, what the staff planned for the whole phase and by today; this year against a
+   * normal year for his class plus his plan; trend against a normal pace over the last few weeks, and change since last Monday (in season).
+   * The screens show only hints of these: ratings themselves move at the rollover. */
+  so_far: number; gained: number; target: number; by_now: number; ahead: number; trend: number | null; last_week: number | null;
   leadership: number | null; adaptability: number | null;
 }
 export interface DevelopmentView {
   team_id: number | null; date: string; lab: Record<number, LabPlan>; slots: number; areas: Record<LabArea, string>; context: TeamContext;
   staff: { known: number; units: Record<"off" | "def", UnitRead> } | null;
-  phase: DevPhase; since: string; done: boolean; weeks: number; trend_since: string | null;
+  /** How far into the development year (0 to 1). */
+  phase: DevPhase; since: string; done: boolean; read: number; weeks: number; trend_since: string | null;
   players: DevPlayer[]; depth: DepthChart;
 }
 
@@ -330,7 +333,7 @@ export const api = {
   depth: (id: string, tid: number) => req<{ depth: DepthChart; custom: boolean; auto: DepthChart; players: RatedPlayer[]; injuries: Injury[];
     gp: Record<number, number>; redshirts: number[]; redshirt_games: number; fit: Record<number, number> }>(`/api/leagues/${id}/teams/${tid}/depth`),
   player: (id: string, pid: number) => req<{ player: RatedPlayer; team: Team; slots: string[]; log: { game: GameRow; line: PlayerLine; snaps: number }[]; injury: Injury | null; injuries: Injury[];
-    season: PlayerSeason | null; career: (PlayerSeason & { year: number })[]; awards: Award[]; redshirt: boolean; redshirt_games: number; eligibility: Eligibility; staff: (Partial<Pick<DevPlayer, "focus" | "so_far" | "gained" | "target" | "by_now" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"] }) | null;
+    season: PlayerSeason | null; career: (PlayerSeason & { year: number })[]; awards: Award[]; redshirt: boolean; redshirt_games: number; eligibility: Eligibility; staff: (Partial<Pick<DevPlayer, "focus" | "ahead" | "leadership" | "adaptability">> & { plan: LabPlan | null; phase: DevPhase["kind"]; read: number }) | null;
     potential: { est: number; lo: number; hi: number }; future: FutureData | null; portal: PortalRow | null; persona: PersonaView }>(`/api/leagues/${id}/players/${pid}`),
   retention: (id: string) => req<RetentionData | null>(`/api/leagues/${id}/retention`),
   portal: (id: string) => req<PortalData>(`/api/leagues/${id}/portal`),
