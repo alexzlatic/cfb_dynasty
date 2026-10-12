@@ -564,6 +564,7 @@ export class Season {
         start: Math.round(c.hired && !this.securityTrail().length ? c.start : this.security() ?? c.start), meetings: [], hired: undefined };
     }
     next.turnoverNews(turn.left, turn.added);
+    if (me != null) next.ratingsMail(new Map((players[me]?.players ?? []).map((p) => [p.id, p.ovr])));
     return { next, left: turn.left, added: turn.added };
   }
 
@@ -619,6 +620,29 @@ export class Season {
   }
 
   /** News of who left and who arrived: your team in full, the rest of the country in brief. */
+  /**
+   * The year's development lands in the ratings at the rollover: your staff tells you how each of your
+   * returning players' overall moved (`before`: last season's overall by player id).
+   */
+  private ratingsMail(before: Map<number, number>): void {
+    const me = this.state.user_team_id;
+    if (me == null) return;
+    const moves = this.roster(me).filter((p) => before.has(p.id)).map((p) => ({ p, was: before.get(p.id)!, d: p.ovr - before.get(p.id)! }))
+      .sort((a, b) => b.d - a.d || b.p.ovr - a.p.ovr || a.p.id - b.p.id);
+    if (!moves.length) return;
+    const line = (m: (typeof moves)[number]) => `${m.p.pos} ${playerName(m.p)}: ${m.was} to ${m.p.ovr} (${m.d > 0 ? "+" : ""}${m.d})`;
+    const up = moves.filter((m) => m.d > 0), down = moves.filter((m) => m.d < 0).reverse();
+    const avg = moves.reduce((a, m) => a + m.d, 0) / moves.length;
+    const body = [
+      `Last year's development is in the ratings now. Of ${moves.length} returning players, ${up.length} moved up, ${moves.length - up.length - down.length} held steady and ${down.length} slipped (average ${avg >= 0 ? "+" : ""}${avg.toFixed(1)}).`,
+      up.length ? `Biggest gains:\n${up.slice(0, 8).map(line).join("\n")}` : "",
+      down.length ? `Slipped:\n${down.slice(0, 5).map(line).join("\n")}` : "",
+      "Our reads on this year's development start with spring practice on March 1.",
+    ].filter(Boolean).join("\n\n");
+    this.mail({ category: "staff", from: "Your staff", subject: `New ratings are in: ${up.length} players improved`, body,
+      links: [{ label: "Roster", to: `team/${me}` }, { label: "Development", to: "development" }] });
+  }
+
   private turnoverNews(left: Departure[], added: RatedPlayer[]): void {
     const s = this.state, me = s.user_team_id;
     const pros = left.filter((d) => d.reason === "nfl").sort((a, b) => b.ovr - a.ovr || a.pid - b.pid);
@@ -3190,16 +3214,18 @@ export class Season {
       // What the staff planned for this phase: his share of a normal year's growth, plus his plan's work.
       const target = r1((pEnd - pBase) * exp + labGain(plan, phase.end, pace) - labGain(plan, baseDate, pace));
       const by_now = r1((pNow - pBase) * exp + labGain(plan, date, pace) - labGain(plan, baseDate, pace));
+      // This year so far against a normal year for his class plus his plan (the screen shows only a hint of it).
+      const ahead = r1(so_far - pNow * exp - labGain(plan, date, pace));
       // In season: his read now against a few Mondays ago, less what a normal week adds.
       const trend = week && week.read[p.id] != null ? r1(so_far - week.read[p.id] - (pNow - progress(s.year, week.date)) * exp - labGain(plan, date, pace) + labGain(plan, week.date, pace)) : null;
       return {
         pid: p.id, name: playerName(p), pos: p.pos, class: p.class, years: p.years, ovr: p.ovr, starter: starters.has(p.id), gp: s.player_stats?.[p.id]?.gp ?? 0,
-        plan: plan ?? null, focus: devFocus(p, plan), so_far, gained, target, by_now, trend,
+        plan: plan ?? null, focus: devFocus(p, plan), so_far, gained, target, by_now, ahead, trend,
         last_week: last && last.read[p.id] != null ? r1(so_far - last.read[p.id]) : null,
         leadership: trait.get(p.id)?.leadership ?? null, adaptability: trait.get(p.id)?.adaptability ?? null,
       };
     });
-    return { phase, since: baseDate, done: pNow >= 1, weeks: t?.weeks.length ?? 0, trend_since: week?.date ?? null, players };
+    return { phase, since: baseDate, done: pNow >= 1, read: pNow, weeks: t?.weeks.length ?? 0, trend_since: week?.date ?? null, players };
   }
 
   /** The staff's camp and midseason reports on your team. */

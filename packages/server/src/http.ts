@@ -524,8 +524,8 @@ export function startServer(opts: ServerOptions, port: number): Server {
           // Your staff's read on your own players (development so far, traits, his plan).
           staff: pl.team_id === s.user_team_id ? (() => {
             const t = S.staffView(pl.team_id)?.players.find((x) => x.pid === pl.id), r = S.developmentReport(pl.team_id), d = r.players.find((x) => x.pid === pl.id);
-            return { leadership: t?.leadership, adaptability: t?.adaptability, plan: s.lab?.[pl.id] ?? null, phase: r.phase.kind,
-              ...(d ? { focus: d.focus, so_far: d.so_far, gained: d.gained, target: d.target, by_now: d.by_now } : {}) };
+            return { leadership: t?.leadership, adaptability: t?.adaptability, plan: s.lab?.[pl.id] ?? null, phase: r.phase.kind, read: r.read,
+              ...(d ? { focus: d.focus, ahead: d.ahead } : {}) };
           })() : null,
           // His future: your players' portal watch, talks and comparables; anyone's portal entry.
           future: pl.team_id === s.user_team_id ? S.futureView(pl.id) : null,

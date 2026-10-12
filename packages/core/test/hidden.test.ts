@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { averageTeam } from "@cfb/engine";
-import { MOMENTUM, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, loadSeed, progress, Season } from "../src/index.ts";
+import { MOMENTUM, POINTS_PER_UNIT, applyHidden, devFocus, devPhase, hiddenPlayer, loadSeed, progress, runSim, Season } from "../src/index.ts";
 
 const sd = (a: number[]) => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length); };
 
@@ -85,6 +85,25 @@ describe("hidden development, scheme fit and chemistry", () => {
     expect(r.phase.kind).toBe("season");
     expect(r.players.find((x) => x.pos === "QB")!.target).toBeGreaterThan(0);
     expect(r.players.some((x) => x.trend != null)).toBe(true);
+    // The hint: this year against a normal year for his class, centered near zero across the roster.
+    const ahead = r.players.map((x) => x.ahead);
+    expect(Math.abs(ahead.reduce((x, y) => x + y, 0) / ahead.length)).toBeLessThan(1);
+    expect(sd(ahead)).toBeGreaterThan(0.3);
+  });
+
+  it("sends your staff's note on the new ratings at the rollover", () => {
+    const s = Season.create(seed, { seed: 9, user_team_id: 2509 });
+    runSim(s, { kind: "end_of_season" });
+    const was = new Map(s.roster(2509).map((p) => [p.id, p.ovr]));
+    const { next } = s.nextSeason(seed.coaches);
+    const m = next.state.inbox.find((x) => /New ratings are in/.test(x.subject))!;
+    expect(m.category).toBe("staff");
+    const back = next.roster(2509).filter((p) => was.has(p.id));
+    const up = back.filter((p) => p.ovr > was.get(p.id)!).length;
+    expect(m.subject).toBe(`New ratings are in: ${up} players improved`);
+    expect(m.body).toContain(`Of ${back.length} returning players`);
+    const best = back.sort((a, b) => (b.ovr - was.get(b.id)!) - (a.ovr - was.get(a.id)!))[0];
+    expect(m.body).toContain(`${was.get(best.id)} to ${best.ovr}`);
   });
 });
 
