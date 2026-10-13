@@ -11,7 +11,7 @@ import { AA_SLOTS, DEF_POS, OFF_POS, addLine, addTeamGame, type TeamSeason, defS
 import { expectations, meetingText, newCareer, securityTrail, winChance, type Career, type CareerStart, type Meeting } from "./career.ts";
 import { addDays, daysBetween, nthWeekday, weekday, type ISODate } from "./dates.ts";
 import { postseasonEvents, seasonEvents, sortEvents } from "./calendar.ts";
-import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, nextPower, nextSchedule, rollRosters, starterMedians, type Departure, type FreshModel } from "./rollover.ts";
+import { ROSTER_LIMIT, YEAR_GAIN, devRate, freshModel, yearGain, nextPower, nextSchedule, rollRosters, starterMedians, type Departure, type FreshModel } from "./rollover.ts";
 import {
   DEFAULT_RULE, PITCHES_PER_DAY, COMMIT, REASON_WORDS, STATUS_WORDS, TALKS_PER_WEEK, WATCH_WORDS, answerDays, transferHazard, openingAsk, patienceOf, payFor, reasonsOf, respond, roundPay, stayScore, watchOf,
   type PortalEntry, type PortalState, type RenewalRule, type StayContext, type Talk, type TalkStatus,
@@ -379,6 +379,42 @@ export class Season {
     return c.r;
   }
 
+  /** A program's development rate: its facilities and its development coach. */
+  devRateOf(teamId: number): number {
+    return devRate(this.facilityGrades(teamId)) * devSkillRate(staffSkill(this.staff(teamId), "development"));
+  }
+
+  /**
+   * A team's players as they play on a date: their listed attributes (what everyone sees; they move at the
+   * rollover) plus the usual growth of this development year so far against the league's, which builds
+   * through spring practice and fall camp and is done by mid-November. Ratings are on the league's scale, and
+   * everyone grows, so what plays is growing faster or slower than the league: a young roster or a program that
+   * develops well gets better through the year, a veteran one falls back a little. His development surprise
+   * plays through the team's hidden scores. The listed overall stays as is, so nothing shown changes.
+   */
+  playingPlayers(teamId: number, tp: TeamPlayers, date = this.state.date): TeamPlayers {
+    const phi = progress(this.state.year, date);
+    if (phi <= 0) return tp;
+    const rate = this.devRateOf(teamId), norm = this.leagueGain();
+    return { ...tp, players: tp.players.map((p) => {
+      const g = phi * (yearGain(p, rate) - norm);
+      if (!g) return p;
+      const attrs: Record<string, number> = {};
+      for (const [k, v] of Object.entries(p.attrs)) attrs[k] = Math.max(20, Math.min(99, v + g));
+      return { ...p, attrs };
+    }) };
+  }
+
+  /** The league's average usual growth over this development year (overall points), from the rosters it began with. */
+  private leagueGain(): number {
+    if (this.gainNorm?.year === this.state.year) return this.gainNorm.gain;
+    let sum = 0, n = 0;
+    for (const t of this.teams) for (const p of this.seed.players?.[t.id]?.players ?? []) { sum += yearGain(p, this.devRateOf(t.id)); n++; }
+    this.gainNorm = { year: this.state.year, gain: n ? sum / n : 0 };
+    return this.gainNorm.gain;
+  }
+  private gainNorm: { year: number; gain: number } | null = null;
+
   private sideSetup(teamId: number, gameId?: number): SideSetup | null {
     let base = this.ratings.get(teamId);
     const tp = this.seed.players?.[teamId];
@@ -389,7 +425,7 @@ export class Season {
     const out = new Set(this.injured(teamId).map((i) => i.pid));
     if (mine) for (const pid of this.redshirtsSitting()) out.add(pid);
     const h = this.hidden(teamId);
-    return { team_id: teamId, base, players: tp, depth: this.depthChart(teamId), out, fresh, hidden: h ? { fit: h.fit, chem: h.chem, dev: h.dev } : undefined };
+    return { team_id: teamId, base, players: this.playingPlayers(teamId, tp), depth: this.depthChart(teamId), out, fresh, hidden: h ? { fit: h.fit, chem: h.chem, dev: h.dev } : undefined };
   }
 
   /** A new league on the seed's start date. */
@@ -477,7 +513,7 @@ export class Season {
     }
     const turn = rollRosters({ seed: s.seed, year: y, teams: this.teams, players, model, next_player_id: nextId, growth, gp, incoming, declared,
       transfers, gone, lostSeason, fiveYears: !!s.settings.pcsa, anchor,
-      rate: (tid) => devRate(this.facilityGrades(tid)) * devSkillRate(staffSkill(this.staff(tid), "development")) });
+      rate: (tid) => this.devRateOf(tid) });
     const opening = s.events.find((e) => e.type === "dynasty_start")?.date ?? this.seed.start_date;
     // Conferences for next season (moves, folds, new deals), and conference schedules for any that changed.
     const rl = this.realignNext();

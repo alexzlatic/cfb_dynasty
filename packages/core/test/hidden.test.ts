@@ -91,6 +91,22 @@ describe("hidden development, scheme fit and chemistry", () => {
     expect(sd(ahead)).toBeGreaterThan(0.3);
   });
 
+  it("plays each player's usual growth against the league's as the year brings it, while his listed ratings stay put", () => {
+    const s = Season.create(seed, { seed: 9, user_team_id: 2509 });
+    const tp = s.teamPlayers(2509)!;
+    const at = (pid: number, date: string) => s.playingPlayers(2509, tp, date).players.find((x) => x.id === pid)!;
+    const gain = (p: (typeof tp.players)[number], date: string) => { const k = Object.keys(p.attrs).find((a) => p.attrs[a] > 30 && p.attrs[a] < 90)!; return at(p.id, date).attrs[k] - p.attrs[k]; };
+    const fr = tp.players.filter((x) => x.years < 1), sr = tp.players.filter((x) => x.years >= 3);
+    for (const p of [fr[0], sr[0]]) {
+      expect(at(p.id, "2026-02-15")).toBe(p);
+      expect(gain(p, "2026-08-24")).toBeCloseTo(0.85 * gain(p, "2026-11-20"), 5);
+      expect(at(p.id, "2026-11-20").ovr).toBe(p.ovr);
+    }
+    // Freshmen gain on the league; seniors, on average, fall back a little.
+    const avg = (ps: typeof tp.players) => ps.reduce((a, p) => a + gain(p, "2026-11-20"), 0) / ps.length;
+    expect(avg(fr)).toBeGreaterThan(avg(sr));
+  });
+
   it("sends your staff's note on the new ratings at the rollover", () => {
     const s = Season.create(seed, { seed: 9, user_team_id: 2509 });
     runSim(s, { kind: "end_of_season" });
