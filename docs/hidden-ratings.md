@@ -12,6 +12,13 @@ models this directly instead of moving ratings after results.
   Perception changes with results through the existing power updates and polls.
 - **True ratings** are what the sim plays: the scouted ratings plus three hidden scores per unit (offense and
   defense), in points of margin. They are never updated from results.
+- **Growth plays as it happens.** In games each player plays his listed attributes plus the usual growth for
+  his class that the development year has brought so far (`Season.playingPlayers`, `yearGain` in
+  rollover.ts: the same gain the rollover adds, at his program's development rate and slowed past his
+  potential), on the calendar below: 40% by the end of spring practice, 85% by the opener, all of it by
+  mid-November. His surprise beyond that plays through the development score. Listed ratings, and
+  everything shown, move only at the rollover, when they catch up to the truth and your staff's inbox
+  message lists who moved.
 
 `packages/core/src/hidden.ts` holds the model; `Season.hidden`, `hiddenStrength` and `staffView` expose it.
 `applyHidden` turns points into small log-odds shifts of completion rate, yards per completion, sack and
@@ -79,9 +86,8 @@ margin one hidden point is worth (`POINTS_PER_UNIT`).
 
 - **Your staff knows first.** The Development screen shows your staff's read of your team's development,
   fit and chemistry by unit (in words), and for each player what he is working on (his plan's area, or
-  the area of his weakest important rating) and his progress this phase in overall points: what he has
-  gained since the phase began against what the staff planned for it (his class's normal share of the
-  year's growth plus his plan). The view changes with the time of year (`devPhase`): the offseason (to
+  the area of his weakest important rating) and a hint, never a number, of how he is developing this year
+  against a normal year for his class plus his plan (well ahead, ahead, on track, behind, well behind). The view changes with the time of year (`devPhase`): the offseason (to
   the first Monday of August) shows the biggest gainers, fall camp (to your opener) shows position
   battles, and in season shows who is trending up or down week to week. The day sim snapshots the
   read when each phase begins and every Monday in season (`dev_track`, saved in the league meta; a

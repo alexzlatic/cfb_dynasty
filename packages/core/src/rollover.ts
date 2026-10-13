@@ -253,11 +253,18 @@ function rescale(p: RatedPlayer, d: number): RatedPlayer {
 }
 
 /** A returning player one year on: what he was expected to gain, plus his hidden development, up to about his potential. */
-function develop(p: RatedPlayer, years: number, surprise: number, gp: number, rate: number, rng: Rng): RatedPlayer {
-  let gain = rate * YEAR_GAIN[clamp(Math.floor(p.years), 0, YEAR_GAIN.length - 1)] + surprise;
-  // Past his potential, growth comes slowly.
+/**
+ * A player's growth over a development year in overall points: the usual gain for his class at his program's
+ * development rate, plus his surprise. Past his potential, growth comes slowly.
+ */
+export function yearGain(p: RatedPlayer, rate = 1, surprise = 0): number {
+  const gain = rate * YEAR_GAIN[clamp(Math.floor(p.years), 0, YEAR_GAIN.length - 1)] + surprise;
   const room = p.hidden.potential - p.ovr;
-  if (gain > 0 && gain > room) gain = Math.max(0, room) + 0.3 * (gain - Math.max(0, room));
+  return gain > 0 && gain > room ? Math.max(0, room) + 0.3 * (gain - Math.max(0, room)) : gain;
+}
+
+function develop(p: RatedPlayer, years: number, surprise: number, gp: number, rate: number, rng: Rng): RatedPlayer {
+  const gain = yearGain(p, rate, surprise);
   const attrs: Record<string, number> = {};
   for (const k of ATTRS[p.pos]) attrs[k] = clamp(Math.round(p.attrs[k] + gain + rng.gauss(0, 1)), 20, 99);
   // Playing time makes him a known quantity (and counts as experience on the depth chart).
